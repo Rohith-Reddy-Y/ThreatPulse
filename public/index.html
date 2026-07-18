@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ThreatPulse — Cyber Threat Intelligence Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/styles.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#10151f">
+  <script>
+    // Apply saved theme before first paint to avoid a flash
+    (function () {
+      try {
+        var t = localStorage.getItem('tp_theme') || 'dark';
+        document.documentElement.setAttribute('data-theme', t);
+      } catch (e) {}
+    })();
+  </script>
+</head>
+<body>
+
+  <!-- ═══════════════════ LOGIN OVERLAY ═══════════════════ -->
+  <div id="auth-overlay" class="auth-overlay">
+    <div class="auth-card">
+      <div class="auth-logo">
+        <span class="logo-icon">🛡️</span>
+        <h1>Threat<span class="logo-accent">Pulse</span></h1>
+        <p class="auth-subtitle">Cyber Threat Intelligence Platform</p>
+      </div>
+      
+      <!-- Login Form -->
+      <form id="login-form" class="auth-form">
+        <div class="form-group">
+          <label for="login-username">Username</label>
+          <input type="text" id="login-username" placeholder="Enter username" required autocomplete="username">
+        </div>
+        <div class="form-group">
+          <label for="login-password">Password</label>
+          <div class="password-field">
+            <input type="password" id="login-password" placeholder="Enter password" required autocomplete="current-password">
+            <button type="button" class="eye-toggle" data-target="login-password">👁️</button>
+          </div>
+        </div>
+        <div id="login-error" class="auth-error hidden"></div>
+        <button type="submit" class="btn btn-primary btn-full" id="login-btn">
+          🔐 Sign In
+        </button>
+        <div style="text-align:center;margin-top:10px;">
+          <button type="button" class="btn btn-ghost" id="forgot-password-btn" style="font-size:12px;opacity:0.7;">🔑 Forgot Password?</button>
+        </div>
+      </form>
+
+      <!-- Forgot Password Form -->
+      <form id="forgot-password-form" class="auth-form hidden">
+        <div class="form-group">
+          <label for="forgot-email">Email Address</label>
+          <input type="email" id="forgot-email" placeholder="Enter your registered email" required>
+        </div>
+        <div id="forgot-error" class="auth-error hidden"></div>
+        <div id="forgot-success" class="auth-success hidden"></div>
+        <button type="submit" class="btn btn-primary btn-full" id="forgot-btn">
+          📧 Send Reset Link
+        </button>
+        <div style="text-align:center;margin-top:10px;">
+          <button type="button" class="btn btn-ghost" id="back-to-login-btn" style="font-size:12px;">← Back to Login</button>
+        </div>
+      </form>
+
+      <!-- Reset Password Form -->
+      <form id="reset-password-form" class="auth-form hidden">
+        <div class="form-group">
+          <label for="reset-password">New Password</label>
+          <div class="password-field">
+            <input type="password" id="reset-password" placeholder="Min 8 chars, uppercase, lowercase, number" required minlength="8">
+            <button type="button" class="eye-toggle" data-target="reset-password">👁️</button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="reset-confirm">Confirm Password</label>
+          <div class="password-field">
+            <input type="password" id="reset-confirm" placeholder="Re-enter new password" required minlength="8">
+            <button type="button" class="eye-toggle" data-target="reset-confirm">👁️</button>
+          </div>
+        </div>
+        <div id="reset-error" class="auth-error hidden"></div>
+        <div id="reset-success" class="auth-success hidden"></div>
+        <button type="submit" class="btn btn-primary btn-full" id="reset-btn">
+          🔐 Reset Password
+        </button>
+      </form>
+
+      <!-- Register Form -->
+      <form id="register-form" class="auth-form hidden">
+        <div class="form-group">
+          <label for="reg-username">Username</label>
+          <input type="text" id="reg-username" placeholder="Choose a username" required minlength="3" maxlength="32">
+        </div>
+        <div class="form-group">
+          <label for="reg-display">Display Name</label>
+          <input type="text" id="reg-display" placeholder="Your full name" required minlength="2" maxlength="64">
+        </div>
+        <div class="form-group">
+          <label for="reg-password">Password</label>
+          <div class="password-field">
+            <input type="password" id="reg-password" placeholder="Min 8 chars, uppercase, lowercase, number" required minlength="8">
+            <button type="button" class="eye-toggle" data-target="reg-password">👁️</button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="reg-email">Email Address</label>
+          <input type="email" id="reg-email" placeholder="your@email.com" required>
+        </div>
+        <div class="form-group">
+          <label for="reg-invite">Invite Code</label>
+          <input type="text" id="reg-invite" placeholder="Enter invite code from admin" required>
+        </div>
+        <div id="register-error" class="auth-error hidden"></div>
+        <button type="submit" class="btn btn-primary btn-full" id="register-btn">
+          📝 Create Account
+        </button>
+      </form>
+
+      <div class="auth-toggle">
+        <span id="auth-toggle-text">Don't have an account?</span>
+        <button type="button" class="btn btn-ghost" id="auth-toggle-btn">Register</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════ TOAST CONTAINER ═══════════════════ -->
+  <div id="toast-container"></div>
+
+  <!-- ═══════════════════ MAIN APP (hidden until logged in) ═══════════════════ -->
+  <div id="app-container" class="hidden">
+
+  <!-- ═══════════════════ HEADER ═══════════════════ -->
+  <header class="header">
+    <div class="header-left">
+      <div class="logo">
+        <span class="logo-icon">🛡️</span>
+        <h1 class="logo-text">Threat<span class="logo-accent">Pulse</span></h1>
+      </div>
+      <span class="header-tagline">Real-Time Threat Intelligence</span>
+    </div>
+    <div class="header-right">
+      <div class="header-meta">
+        <div class="live-clock" id="live-clock">
+          <span class="clock-icon">🕐</span>
+          <span class="clock-time" id="clock-time">--:--:--</span>
+        </div>
+        <div class="last-updated" id="last-updated">
+          <span class="pulse-dot"></span>
+          <span>Last Updated: <span id="last-updated-time">—</span></span>
+        </div>
+        <div class="sources-active">
+          <span class="source-icon">📡</span>
+          <span><span id="total-sources-count">0</span> Sources Active</span>
+        </div>
+      </div>
+      <button class="theme-toggle" id="theme-toggle" title="Toggle light / dark theme" aria-label="Toggle theme">🌙</button>
+      <!-- User Menu -->
+      <div class="user-menu" id="user-menu">
+        <button class="user-menu-btn" id="user-menu-btn">
+          <span class="user-avatar" id="user-avatar">A</span>
+          <span class="user-name" id="user-display-name">User</span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <div class="user-dropdown hidden" id="user-dropdown">
+          <div class="user-dropdown-info">
+            <span class="user-dropdown-name" id="dropdown-name">User</span>
+            <span class="user-dropdown-role" id="dropdown-role">analyst</span>
+          </div>
+          <hr class="dropdown-divider">
+          <a href="/admin" class="user-dropdown-item admin-link hidden" id="admin-link">🔧 Admin Panel</a>
+          <button class="user-dropdown-item" id="change-email-btn">✉️ Change Email</button>
+          <button class="user-dropdown-item" id="change-password-btn">🔑 Change Password</button>
+          <button class="user-dropdown-item danger" id="logout-btn">🚪 Logout</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- ═══════════════════ STATS BAR ═══════════════════ -->
+  <section class="stats-bar">
+    <div class="stat-card" data-stat="threats">
+      <div class="stat-icon threats-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      </div>
+      <div class="stat-content">
+        <span class="stat-value" id="stat-threats" data-target="0">0</span>
+        <span class="stat-label">Threats Today</span>
+      </div>
+      <span class="stat-trend up" id="stat-threats-trend">↑ 0%</span>
+    </div>
+    <div class="stat-card" data-stat="critical">
+      <div class="stat-icon critical-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+      </div>
+      <div class="stat-content">
+        <span class="stat-value" id="stat-critical" data-target="0">0</span>
+        <span class="stat-label">Critical Vulns</span>
+      </div>
+      <span class="stat-trend danger" id="stat-critical-trend">⚠ 0</span>
+    </div>
+    <div class="stat-card" data-stat="pocs">
+      <div class="stat-icon pocs-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+      </div>
+      <div class="stat-content">
+        <span class="stat-value" id="stat-pocs" data-target="0">0</span>
+        <span class="stat-label">POCs Detected</span>
+      </div>
+      <span class="stat-trend warning" id="stat-pocs-trend">⚡ 0</span>
+    </div>
+    <div class="stat-card" data-stat="sources">
+      <div class="stat-icon sources-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+      </div>
+      <div class="stat-content">
+        <span class="stat-value" id="stat-sources" data-target="0">0</span>
+        <span class="stat-label">Active Sources</span>
+      </div>
+      <span class="stat-trend neutral" id="stat-sources-trend">● Online</span>
+    </div>
+  </section>
+
+  <!-- ═══════════════════ FILTER / SEARCH BAR ═══════════════════ -->
+  <section class="filter-bar">
+    <div class="search-box">
+      <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="text" id="search-input" placeholder="Search threats, CVEs, keywords..." autocomplete="off">
+      <kbd class="search-kbd">Ctrl+K</kbd>
+    </div>
+    <div class="filter-group">
+      <div class="filter-pills" id="category-filters">
+        <button class="pill active" data-category="">All</button>
+        <button class="pill" data-category="vulnerability">🔓 Vulnerabilities</button>
+        <button class="pill" data-category="malware">🦠 Malware</button>
+        <button class="pill" data-category="breach">💥 Breaches</button>
+        <button class="pill" data-category="advisory">📋 Advisories</button>
+        <button class="pill" data-category="darkweb">🕸️ Dark Web</button>
+        <button class="pill" data-category="news">📰 News</button>
+      </div>
+    </div>
+    <div class="filter-actions">
+      <div class="filter-select-group">
+        <select id="severity-filter" class="filter-select">
+          <option value="">All Severities</option>
+          <option value="critical">🔴 Critical</option>
+          <option value="high">🟠 High</option>
+          <option value="medium">🟡 Medium</option>
+          <option value="low">🟢 Low</option>
+        </select>
+        <select id="source-type-filter" class="filter-select">
+          <option value="">All Source Types</option>
+          <option value="rss">RSS Feed</option>
+          <option value="api">API</option>
+          <option value="darkweb">Dark Web</option>
+        </select>
+        <select id="sector-filter" class="filter-select">
+          <option value="">All Sectors</option>
+          <option value="financial">🏦 Financial</option>
+          <option value="healthcare">🏥 Healthcare</option>
+          <option value="government">🏛️ Government</option>
+          <option value="technology">💻 Technology</option>
+        </select>
+        <select id="threat-actor-filter" class="filter-select">
+          <option value="">All Threat Actors</option>
+          <option value="Scattered Spider">🕷️ Scattered Spider</option>
+          <option value="Lazarus Group">Lazarus Group</option>
+          <option value="APT28">APT28 / Fancy Bear</option>
+          <option value="APT29">APT29 / Cozy Bear</option>
+          <option value="Midnight Blizzard">Midnight Blizzard</option>
+          <option value="Volt Typhoon">Volt Typhoon</option>
+          <option value="Salt Typhoon">Salt Typhoon</option>
+          <option value="Sandworm">Sandworm</option>
+          <option value="FIN7">FIN7</option>
+          <option value="Kimsuky">Kimsuky</option>
+          <option value="LockBit">LockBit</option>
+          <option value="BlackCat">BlackCat / ALPHV</option>
+          <option value="Cl0p">Cl0p</option>
+          <option value="Black Basta">Black Basta</option>
+          <option value="Akira">Akira</option>
+          <option value="Play">Play</option>
+          <option value="Qilin">Qilin</option>
+          <option value="RansomHub">RansomHub</option>
+          <option value="Medusa">Medusa</option>
+        </select>
+        <select id="patch-filter" class="filter-select">
+          <option value="">All Patch Status</option>
+          <option value="1">✅ Patched</option>
+          <option value="0">❌ Unpatched</option>
+        </select>
+      </div>
+      <div class="detect-toggles">
+        <button class="pill toggle-pill" id="filter-poc" data-filter="has_poc" title="Show only items with a public proof-of-concept">⚡ PoC Available</button>
+        <button class="pill toggle-pill" id="filter-mitre" data-filter="has_mitre" title="Show only items mapped to MITRE ATT&CK techniques">🎯 MITRE Mapped</button>
+      </div>
+      <button class="btn btn-primary fetch-now-btn" id="fetch-now-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+        Fetch Now
+      </button>
+      <button class="btn btn-ghost export-btn" id="export-btn" title="Export as JSON">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      </button>
+    </div>
+  </section>
+
+  <!-- ═══════════════════ MAIN CONTENT ═══════════════════ -->
+  <main class="main-content">
+    <!-- ─────── FEED ─────── -->
+    <section class="feed" id="feed">
+      <div class="skeleton-group" id="loading-skeletons">
+        <div class="skeleton-card"><div class="skeleton-header"><div class="skeleton-badge"></div><div class="skeleton-badge"></div></div><div class="skeleton-title"></div><div class="skeleton-text"></div><div class="skeleton-text short"></div><div class="skeleton-meta"><div class="skeleton-tag"></div><div class="skeleton-tag"></div><div class="skeleton-tag"></div></div></div>
+        <div class="skeleton-card"><div class="skeleton-header"><div class="skeleton-badge"></div><div class="skeleton-badge"></div></div><div class="skeleton-title"></div><div class="skeleton-text"></div><div class="skeleton-text short"></div><div class="skeleton-meta"><div class="skeleton-tag"></div><div class="skeleton-tag"></div><div class="skeleton-tag"></div></div></div>
+        <div class="skeleton-card"><div class="skeleton-header"><div class="skeleton-badge"></div><div class="skeleton-badge"></div></div><div class="skeleton-title"></div><div class="skeleton-text"></div><div class="skeleton-text short"></div><div class="skeleton-meta"><div class="skeleton-tag"></div><div class="skeleton-tag"></div><div class="skeleton-tag"></div></div></div>
+      </div>
+      <div class="empty-state hidden" id="empty-state">
+        <div class="empty-icon">🔍</div>
+        <h3>No threats found</h3>
+        <p>Try adjusting your filters or search query.</p>
+      </div>
+      <div id="articles-container"></div>
+      <div class="load-more-container hidden" id="load-more-container">
+        <button class="btn btn-secondary" id="load-more-btn">Load More Articles</button>
+      </div>
+    </section>
+
+    <!-- ─────── SIDEBAR ─────── -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-card">
+        <h3 class="sidebar-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+          Add Source
+        </h3>
+        <form id="add-source-form" class="source-form">
+          <div class="form-group">
+            <label for="source-url">Feed URL</label>
+            <input type="url" id="source-url" placeholder="https://example.com/rss" required>
+          </div>
+          <div class="form-group">
+            <label for="source-name">Source Name</label>
+            <input type="text" id="source-name" placeholder="e.g., My Security Blog" required>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="source-type">Type</label>
+              <select id="source-type" class="form-select">
+                <option value="rss">RSS Feed</option>
+                <option value="blog">Blog/Website</option>
+                <option value="api">API</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="source-category">Category</label>
+              <select id="source-category" class="form-select">
+                <option value="general">General</option>
+                <option value="vulnerability">Vulnerabilities</option>
+                <option value="malware">Malware</option>
+                <option value="breach">Breaches</option>
+                <option value="advisory">Advisories</option>
+                <option value="news">News</option>
+              </select>
+            </div>
+          </div>
+          <button type="submit" class="btn btn-primary btn-full">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Add Source
+          </button>
+        </form>
+      </div>
+
+      <div class="sidebar-card">
+        <h3 class="sidebar-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+          My Sources
+        </h3>
+        <div class="sources-toolbar">
+          <label class="select-all-label"><input type="checkbox" id="dash-select-all"> Select all</label>
+          <span class="sources-count" id="dash-sources-total"></span>
+        </div>
+        <div class="sources-bulk-bar hidden" id="dashboard-bulk-bar">
+          <span id="dash-selected-count">0</span>
+          <button class="btn btn-ghost" id="dash-edit-btn" style="font-size:11px;padding:3px 8px;">✏️ Edit URL</button>
+          <button class="btn btn-danger" id="dash-delete-btn" style="font-size:11px;padding:3px 8px;">🗑 Delete</button>
+        </div>
+        <div id="my-sources-list" class="sources-list">
+          <p class="empty-sources">No sources yet. Add your first source above to start tracking threats!</p>
+        </div>
+      </div>
+
+      <div class="sidebar-card">
+        <h3 class="sidebar-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+          Notifications
+        </h3>
+        <form id="notification-form" class="notification-form">
+
+          <!-- Email -->
+          <div class="notif-channel">
+            <div class="notif-channel-head">
+              <span class="notif-channel-title">✉️ Email</span>
+              <label class="toggle-switch"><input type="checkbox" id="notif-email-enabled"><span class="toggle-slider"></span></label>
+            </div>
+            <div class="form-group">
+              <input type="email" id="notif-email" placeholder="you@company.com">
+            </div>
+            <button type="button" class="btn btn-ghost notif-test" data-test="email">Test Email</button>
+          </div>
+
+          <!-- Telegram -->
+          <div class="notif-channel">
+            <div class="notif-channel-head">
+              <span class="notif-channel-title">📨 Telegram</span>
+              <label class="toggle-switch"><input type="checkbox" id="notif-telegram-enabled"><span class="toggle-slider"></span></label>
+            </div>
+            <div class="form-group">
+              <input type="text" id="notif-telegram" placeholder="Chat ID (e.g., 123456789)">
+            </div>
+            <div class="form-group">
+              <input type="text" id="notif-telegram-token" placeholder="Bot token (e.g., 123456:ABC-DEF...)">
+            </div>
+            <button type="button" class="btn btn-ghost notif-test" data-test="telegram">Test Telegram</button>
+          </div>
+
+          <!-- Microsoft Teams -->
+          <div class="notif-channel">
+            <div class="notif-channel-head">
+              <span class="notif-channel-title">👥 Microsoft Teams</span>
+              <label class="toggle-switch"><input type="checkbox" id="notif-teams-enabled"><span class="toggle-slider"></span></label>
+            </div>
+            <div class="form-group">
+              <input type="text" id="notif-teams-webhook" placeholder="Teams incoming webhook URL">
+            </div>
+            <button type="button" class="btn btn-ghost notif-test" data-test="teams">Test Teams</button>
+          </div>
+
+          <!-- WhatsApp -->
+          <div class="notif-channel">
+            <div class="notif-channel-head">
+              <span class="notif-channel-title">🟢 WhatsApp</span>
+              <label class="toggle-switch"><input type="checkbox" id="notif-whatsapp-enabled"><span class="toggle-slider"></span></label>
+            </div>
+            <div class="form-group">
+              <input type="text" id="notif-whatsapp-number" placeholder="Number w/ country code (e.g., 14155551234)">
+            </div>
+            <div class="form-group">
+              <input type="text" id="notif-whatsapp-apikey" placeholder="CallMeBot API key">
+            </div>
+            <p class="notif-hint">One-time setup: message <b>+34 644 51 95 23</b> on WhatsApp with “I allow callmebot to send me messages” to get your API key.</p>
+            <button type="button" class="btn btn-ghost notif-test" data-test="whatsapp">Test WhatsApp</button>
+          </div>
+
+          <hr class="notif-divider">
+
+          <div class="form-group">
+            <label for="notif-severity">Severity Threshold</label>
+            <select id="notif-severity" class="form-select">
+              <option value="critical">Critical Only</option>
+              <option value="high">High & Above</option>
+              <option value="medium">Medium & Above</option>
+              <option value="low">All Severities</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="notif-keywords">Keyword Filters</label>
+            <input type="text" id="notif-keywords" placeholder="e.g., RCE, zero-day, ransomware, T1059">
+          </div>
+          <div class="notif-buttons">
+            <button type="submit" class="btn btn-primary btn-full">Save Notification Settings</button>
+          </div>
+        </form>
+      </div>
+    </aside>
+  </main>
+
+  <!-- ═══════════════════ FOOTER ═══════════════════ -->
+  <footer class="footer">
+    <div class="footer-left">
+      <div class="refresh-indicator" id="refresh-indicator">
+        <svg class="refresh-spinner hidden" id="refresh-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+        <span id="refresh-status">Auto-refresh in <span id="refresh-countdown">60</span>s</span>
+      </div>
+    </div>
+    <div class="footer-center">
+      <span class="footer-brand">⚡ Powered by <strong>ThreatPulse v2</strong> — Multi-User Threat Intelligence</span>
+    </div>
+    <div class="footer-right">
+      <div class="data-status">
+        <span class="status-dot active" id="data-status-dot"></span>
+        <span id="data-status-text">Connected</span>
+      </div>
+    </div>
+  </footer>
+
+  </div><!-- end #app-container -->
+
+  <!-- ═══════════════════ CHANGE EMAIL MODAL ═══════════════════ -->
+  <div id="email-modal" class="modal-overlay hidden">
+    <div class="auth-card" style="max-width: 400px;">
+      <h2 style="color: var(--cyan); margin-bottom: 1rem;">✉️ Change Email</h2>
+      <form id="email-form">
+        <div class="form-group">
+          <label for="account-email">Email Address</label>
+          <input type="email" id="account-email" placeholder="you@company.com" required>
+        </div>
+        <div id="email-error" class="auth-error hidden"></div>
+        <div style="display: flex; gap: 8px;">
+          <button type="submit" class="btn btn-primary" style="flex:1;">Save</button>
+          <button type="button" class="btn btn-ghost" id="cancel-email-btn">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ═══════════════════ CHANGE PASSWORD MODAL ═══════════════════ -->
+  <div id="password-modal" class="modal-overlay hidden">
+    <div class="auth-card" style="max-width: 400px;">
+      <h2 style="color: var(--cyan); margin-bottom: 1rem;">🔑 Change Password</h2>
+      <div id="password-forced-notice" class="auth-error hidden" style="margin-bottom:1rem;">
+        🔒 For security, you must set a new password before continuing.
+      </div>
+      <form id="password-form">
+        <div class="form-group">
+          <label for="current-password">Current Password</label>
+          <input type="password" id="current-password" required>
+        </div>
+        <div class="form-group">
+          <label for="new-password">New Password</label>
+          <input type="password" id="new-password" required minlength="8">
+        </div>
+        <div id="password-error" class="auth-error hidden"></div>
+        <div style="display: flex; gap: 8px;">
+          <button type="submit" class="btn btn-primary" style="flex:1;">Save</button>
+          <button type="button" class="btn btn-ghost" id="cancel-password-btn">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="/js/app.js"></script>
+</body>
+</html>

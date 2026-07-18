@@ -1,0 +1,37 @@
+# ThreatPulse — Fly.io deployment config
+# Single always-on machine with a persistent volume (SQLite lives on /data).
+# Rename "app" to something globally unique before deploying (or let `fly launch` set it).
+
+app = "threatpulse"
+primary_region = "iad"   # pick the region closest to your team
+
+[build]
+
+[env]
+  NODE_ENV = "production"
+  PORT = "3000"
+  DB_PATH = "/data/threatpulse.db"
+
+# Persistent volume — survives restarts and redeploys. Create it once (see DEPLOYMENT.md).
+[mounts]
+  source = "threatpulse_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  # SQLite = single writer, so keep exactly one machine running.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "15s"
+    method = "get"
+    path = "/healthz"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

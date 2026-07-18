@@ -1,0 +1,7 @@
+node_modules/
+.env
+threatpulse.db
+threatpulse.db-wal
+threatpulse.db-shm
+*.log
+.jwt_secret_for_session.txt
