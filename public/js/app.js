@@ -556,11 +556,11 @@
           setUser(result.token, result.user);
           initDashboard();
         } else {
-          errEl.textContent = result.error || 'Login failed';
+          errEl.textContent = '❌ ' + (result.error || 'Invalid username/email or password');
           errEl.classList.remove('hidden');
         }
       } catch (err) {
-        errEl.textContent = 'Connection error';
+        errEl.textContent = '⚠️ Connection error — could not reach the server';
         errEl.classList.remove('hidden');
       }
     });
@@ -570,6 +570,16 @@
       e.preventDefault();
       const errEl = $('#register-error');
       errEl.classList.add('hidden');
+
+      // Confirm-password check before hitting the server
+      const pw = $('#reg-password').value;
+      const confirmPw = $('#reg-confirm').value;
+      if (pw !== confirmPw) {
+        errEl.textContent = '❌ Passwords do not match';
+        errEl.classList.remove('hidden');
+        return;
+      }
+
       try {
         const result = await fetch('/api/auth/register', {
           method: 'POST',
@@ -577,7 +587,7 @@
           body: JSON.stringify({
             username: $('#reg-username').value.trim(),
             displayName: $('#reg-display').value.trim(),
-            password: $('#reg-password').value,
+            password: pw,
             email: $('#reg-email').value.trim(),
             inviteCode: $('#reg-invite').value.trim()
           })

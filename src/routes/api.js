@@ -20,15 +20,14 @@ router.post('/auth/login', (req, res) => {
   try {
     const { username, password } = req.body;
     const ip = req.ip || req.connection?.remoteAddress;
-    const result = auth.loginUser(
-      auth.sanitizeString(username, 32),
-      password
-    );
+    // Accept a username OR an email as the identifier (emails can be up to 255 chars)
+    const identifier = auth.sanitizeString(username, 255);
+    const result = auth.loginUser(identifier, password);
 
     if (result.success) {
       db.logAudit(result.user.id, 'login', 'Successful login', ip);
     } else {
-      db.logAudit(null, 'login_failed', `Failed login for: ${auth.sanitizeString(username, 32)}`, ip);
+      db.logAudit(null, 'login_failed', `Failed login for: ${identifier}`, ip);
     }
 
     res.json(result);

@@ -242,14 +242,18 @@ function registerUser(username, displayName, password, inviteCode, email = null)
   };
 }
 
-function loginUser(username, password) {
-  if (!username || !password) {
-    return { success: false, error: 'Username and password required' };
+function loginUser(identifier, password) {
+  if (!identifier || !password) {
+    return { success: false, error: 'Username/email and password are required' };
   }
 
-  const user = db.getUserByUsername(username);
+  // Allow logging in with either a username or an email address
+  let user = db.getUserByUsername(identifier);
+  if (!user && identifier.includes('@')) {
+    user = db.getUserByEmail(identifier);
+  }
   if (!user) {
-    return { success: false, error: 'Invalid username or password' };
+    return { success: false, error: 'Invalid username/email or password' };
   }
 
   // Check account lockout
@@ -280,7 +284,7 @@ function loginUser(username, password) {
       return { success: false, error: `Too many failed attempts. Account locked for ${LOCKOUT_DURATION_MINUTES} minutes.` };
     }
 
-    return { success: false, error: 'Invalid username or password' };
+    return { success: false, error: 'Invalid username/email or password' };
   }
 
   // Success — reset failed attempts and update last login
