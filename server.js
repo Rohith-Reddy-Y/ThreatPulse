@@ -113,8 +113,16 @@ app.get('/healthz', (req, res) => {
   res.json({ status: 'ok', uptime: process.uptime(), timestamp: new Date().toISOString() });
 });
 
-// Serve static files
-app.use(express.static(path.join(__dirname, 'public')));
+// Serve static files. HTML/JS/CSS use "no-cache" so browsers always revalidate
+// (via ETag) — this guarantees a redeploy reaches users immediately instead of
+// serving a stale cached bundle.
+app.use(express.static(path.join(__dirname, 'public'), {
+  setHeaders: (res, filePath) => {
+    if (/\.(html|js|css)$/i.test(filePath)) {
+      res.setHeader('Cache-Control', 'no-cache');
+    }
+  }
+}));
 
 // ============================================
 // API ROUTES
