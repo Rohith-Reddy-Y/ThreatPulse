@@ -9,7 +9,15 @@
   //  AUTH STATE
   // ═══════════════════════════════════════════════════════════
   let authToken = localStorage.getItem('tp_token');
-  let currentUser = JSON.parse(localStorage.getItem('tp_user') || 'null');
+  // Guard against a corrupt localStorage value crashing the whole app on load
+  let currentUser = null;
+  try {
+    currentUser = JSON.parse(localStorage.getItem('tp_user') || 'null');
+  } catch (e) {
+    currentUser = null;
+    localStorage.removeItem('tp_user');
+    localStorage.removeItem('tp_token');
+  }
 
   // ═══════════════════════════════════════════════════════════
   //  STATE
@@ -606,6 +614,70 @@
       }
     });
 
+    // Auth: Forgot password — show the request form
+    $('#forgot-password-btn')?.addEventListener('click', () => {
+      $('#login-form').classList.add('hidden');
+      $('#forgot-password-form').classList.remove('hidden');
+      $('#forgot-error').classList.add('hidden');
+      $('#forgot-success').classList.add('hidden');
+    });
+    $('#back-to-login-btn')?.addEventListener('click', () => {
+      $('#forgot-password-form').classList.add('hidden');
+      $('#login-form').classList.remove('hidden');
+    });
+    $('#forgot-password-form')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errEl = $('#forgot-error'), okEl = $('#forgot-success');
+      errEl.classList.add('hidden'); okEl.classList.add('hidden');
+      try {
+        const result = await fetch('/api/auth/forgot-password', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: $('#forgot-email').value.trim() })
+        }).then(r => r.json());
+        if (result.success) {
+          okEl.textContent = '✅ ' + (result.message || 'If that email exists, a reset link has been sent.');
+          okEl.classList.remove('hidden');
+        } else {
+          errEl.textContent = '❌ ' + (result.error || 'Request failed');
+          errEl.classList.remove('hidden');
+        }
+      } catch (err) {
+        errEl.textContent = '⚠️ Connection error — could not reach the server';
+        errEl.classList.remove('hidden');
+      }
+    });
+
+    // Auth: Reset password (token comes from the ?reset= link in the email)
+    $('#reset-password-form')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errEl = $('#reset-error'), okEl = $('#reset-success');
+      errEl.classList.add('hidden'); okEl.classList.add('hidden');
+      const pw = $('#reset-password').value, confirmPw = $('#reset-confirm').value;
+      if (pw !== confirmPw) {
+        errEl.textContent = '❌ Passwords do not match';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      const token = new URLSearchParams(window.location.search).get('reset');
+      try {
+        const result = await fetch('/api/auth/reset-password', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token, newPassword: pw })
+        }).then(r => r.json());
+        if (result.success) {
+          okEl.textContent = '✅ Password reset! Redirecting to sign in…';
+          okEl.classList.remove('hidden');
+          setTimeout(() => { window.location.href = '/'; }, 1600);
+        } else {
+          errEl.textContent = '❌ ' + (result.error || 'Reset failed');
+          errEl.classList.remove('hidden');
+        }
+      } catch (err) {
+        errEl.textContent = '⚠️ Connection error — could not reach the server';
+        errEl.classList.remove('hidden');
+      }
+    });
+
     // Auth: Toggle login/register
     $('#auth-toggle-btn').addEventListener('click', () => {
       const loginForm = $('#login-form');
@@ -970,8 +1042,18 @@
   }
 
   function init() {
-    bindEvents();
-    initTheme();
+    // Wrap so a single binding error can never leave the login button dead.
+    try { bindEvents(); } catch (e) { console.error('[init] bindEvents error:', e); }
+    try { initTheme(); } catch (e) { console.error('[init] theme error:', e); }
+
+    // Arriving from a password-reset email link? Show the reset form.
+    const resetToken = new URLSearchParams(window.location.search).get('reset');
+    if (resetToken) {
+      showAuth();
+      $('#login-form')?.classList.add('hidden');
+      $('#reset-password-form')?.classList.remove('hidden');
+      return;
+    }
 
     if (authToken && currentUser) {
       // Verify token is still valid
