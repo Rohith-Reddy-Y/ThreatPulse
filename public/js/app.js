@@ -131,7 +131,9 @@
   function relativeTime(dateStr) {
     if (!dateStr) return '';
     const now = new Date(), date = new Date(dateStr);
+    if (isNaN(date.getTime())) return '';               // guard: malformed date
     const diff = Math.floor((now - date) / 1000);
+    if (diff < 0) return 'Just now';                     // guard: future/clock skew
     if (diff < 60) return 'Just now';
     if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
     if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
@@ -141,8 +143,9 @@
   }
 
   function dateKey(dateStr) {
-    if (!dateStr) return 'Unknown';
+    if (!dateStr) return '📅 Undated';
     const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return '📅 Undated';         // guard: malformed date
     const today = new Date(); today.setHours(0,0,0,0);
     const yesterday = new Date(today); yesterday.setDate(yesterday.getDate() - 1);
     const articleDate = new Date(d); articleDate.setHours(0,0,0,0);
@@ -336,6 +339,11 @@
         ? '<span class="badge badge-unpatched">❌ Unpatched</span>'
         : '';
 
+    // Owner label — admins see which user each threat belongs to
+    const ownerBadge = (currentUser && currentUser.role === 'admin' && article.owner_name)
+      ? `<span class="badge badge-owner">👤 ${escapeHtml(article.owner_name)}</span>`
+      : '';
+
     const desc = article.description ? escapeHtml(article.description.substring(0, 300)) : '';
 
     // Reviews
@@ -357,7 +365,7 @@
     return `
       <article class="article-card ${article.severity === 'critical' ? 'critical' : ''} ${mitreIds.length ? 'has-ttp' : ''}" data-article-id="${article.id}">
         <div class="article-header">
-          <div class="article-badges">${catBadge}${sevBadge}${ttpBadge}${pocBadge}${patchBadge}${sectorBadge}${actorBadge}${mitreBadges}${cveLink}</div>
+          <div class="article-badges">${catBadge}${sevBadge}${ownerBadge}${ttpBadge}${pocBadge}${patchBadge}${sectorBadge}${actorBadge}${mitreBadges}${cveLink}</div>
         </div>
         <h3 class="article-title"><a href="${escapeHtml(article.url)}" target="_blank" rel="noopener">${escapeHtml(article.title)}</a></h3>
         <div class="article-meta">
@@ -510,6 +518,20 @@
       state.isFetching = false;
       $('#fetch-now-btn').disabled = false;
     }
+  }
+
+  function clearFilters() {
+    state.filters = { category: '', severity: '', source_type: '', search: '', sector: '', threat_actor: '', has_poc: '', has_mitre: '', is_patched: '' };
+    state.currentPage = 1;
+    const si = $('#search-input'); if (si) si.value = '';
+    ['#severity-filter', '#source-type-filter', '#sector-filter', '#threat-actor-filter', '#patch-filter'].forEach(sel => {
+      const el = $(sel); if (el) el.value = '';
+    });
+    $$('.toggle-pill').forEach(b => b.classList.remove('active'));
+    $$('#category-filters .pill').forEach(p => p.classList.remove('active'));
+    const allPill = document.querySelector('#category-filters .pill[data-category=""]');
+    if (allPill) allPill.classList.add('active');
+    fetchArticles();
   }
 
   function exportArticles() {
@@ -844,6 +866,9 @@
 
     // Fetch now
     $('#fetch-now-btn').addEventListener('click', fetchNow);
+
+    // Clear all filters (from the empty state)
+    $('#clear-filters-btn')?.addEventListener('click', clearFilters);
 
     // Export
     $('#export-btn').addEventListener('click', exportArticles);

@@ -649,7 +649,8 @@ function getArticles({ page = 1, limit = 50, category, severity, search, source_
 
   // Join with reviews to include review status
   const articles = getDb().prepare(
-    `SELECT articles.*, 
+    `SELECT articles.*,
+     (SELECT display_name FROM users WHERE users.id = articles.user_id) as owner_name,
      (SELECT json_group_array(json_object('user_id', ar.user_id, 'username', u.display_name, 'status', ar.status, 'started_at', ar.started_at, 'completed_at', ar.completed_at, 'notes', ar.notes))
       FROM article_reviews ar JOIN users u ON ar.user_id = u.id WHERE ar.article_id = articles.id) as reviews
      FROM articles ${whereClause} ORDER BY articles.published_date DESC LIMIT ? OFFSET ?`
