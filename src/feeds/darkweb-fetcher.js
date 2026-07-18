@@ -135,13 +135,10 @@ async function fetchThreatFox(source) {
  */
 async function fetchURLhaus(source) {
   try {
-    const response = await axios.post(
-      'https://urlhaus-api.abuse.ch/v1/',
-      'urlhaus_recent',
-      {
-        ...HTTP_CONFIG,
-        headers: { ...HTTP_CONFIG.headers, 'Content-Type': 'application/x-www-form-urlencoded' }
-      }
+    // URLhaus moved to a path-based endpoint (the old `urlhaus_recent` body 404s now).
+    const response = await axios.get(
+      'https://urlhaus-api.abuse.ch/v1/urls/recent/',
+      { ...HTTP_CONFIG }
     );
 
     const data = response.data;

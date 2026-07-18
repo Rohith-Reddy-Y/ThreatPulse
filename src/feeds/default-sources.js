@@ -200,7 +200,7 @@ const DEFAULT_SOURCES = [
   },
   {
     name: 'URLhaus - Malicious URLs',
-    url: 'https://urlhaus-api.abuse.ch/v1/',
+    url: 'https://urlhaus-api.abuse.ch/v1/urls/recent/',
     type: 'darkweb',
     category: 'darkweb',
     added_by: 'system'
