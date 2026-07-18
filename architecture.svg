@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 660" font-family="'Segoe UI', Inter, Arial, sans-serif">
+  <defs>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="#0f172a" flood-opacity="0.10"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#5b6580"/>
+    </marker>
+  </defs>
+
+  <!-- background -->
+  <rect width="1060" height="660" fill="#f6f8fb"/>
+
+  <!-- title -->
+  <text x="530" y="40" text-anchor="middle" font-size="24" font-weight="700" fill="#1a2233">ThreatPulse — Free Deployment Architecture</text>
+  <text x="530" y="64" text-anchor="middle" font-size="13" fill="#5b6580">One free host + free public APIs — no separate frontend, DB, or auth service</text>
+
+  <!-- users -->
+  <rect x="450" y="86" width="160" height="50" rx="10" fill="#ffffff" stroke="#d7deea" filter="url(#shadow)"/>
+  <text x="530" y="116" text-anchor="middle" font-size="14" font-weight="600" fill="#1a2233">👤  Users / Browser</text>
+
+  <!-- users <-> fly -->
+  <line x1="530" y1="136" x2="530" y2="192" stroke="#5b6580" stroke-width="1.6" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <text x="546" y="168" font-size="12" fill="#5b6580">HTTPS</text>
+
+  <!-- fly container -->
+  <rect x="306" y="192" width="448" height="256" rx="14" fill="#e6f3f5" stroke="#0f7d8f" stroke-width="2"/>
+  <text x="328" y="220" font-size="15" font-weight="700" fill="#0f7d8f">☁  Fly.io — one free, always-on container</text>
+
+  <!-- node box -->
+  <rect x="328" y="232" width="404" height="128" rx="10" fill="#ffffff" stroke="#d7deea" filter="url(#shadow)"/>
+  <text x="346" y="258" font-size="14" font-weight="700" fill="#1a2233">⚙  Node + Express  (single process)</text>
+  <text x="346" y="284" font-size="13" fill="#33415a">•  Serves the SPA  (vanilla JS + Google Fonts)</text>
+  <text x="346" y="308" font-size="13" fill="#33415a">•  REST API  +  built-in JWT auth</text>
+  <text x="346" y="332" font-size="13" fill="#33415a">•  Cron scheduler — fetch every 15 min</text>
+
+  <!-- sqlite box -->
+  <rect x="328" y="378" width="404" height="52" rx="10" fill="#ffffff" stroke="#d7deea" filter="url(#shadow)"/>
+  <text x="346" y="410" font-size="14" font-weight="700" fill="#1a2233">🗄  SQLite  ·  on Fly persistent volume  /data</text>
+
+  <!-- inbound box -->
+  <rect x="24" y="210" width="256" height="238" rx="12" fill="#eef6ee" stroke="#bfe0c9" filter="url(#shadow)"/>
+  <text x="42" y="238" font-size="14" font-weight="700" fill="#1f7a4d">⬇  Threat Intel — inbound</text>
+  <text x="42" y="256" font-size="11" fill="#5b6580">free public APIs / feeds</text>
+  <text x="42" y="286" font-size="13" fill="#33415a">•  NVD API 2.0   (CVEs)</text>
+  <text x="42" y="312" font-size="13" fill="#33415a">•  CISA KEV   (exploited vulns)</text>
+  <text x="42" y="338" font-size="13" fill="#33415a">•  abuse.ch <tspan fill="#c9761a">*</tspan>   (IOCs, malware)</text>
+  <text x="42" y="364" font-size="13" fill="#33415a">•  RansomWatch   (leak sites)</text>
+  <text x="42" y="390" font-size="13" fill="#33415a">•  ~35 RSS feeds   (blogs / CERTs)</text>
+  <text x="42" y="424" font-size="11" fill="#5b6580"><tspan fill="#c9761a">*</tspan> free API key required</text>
+
+  <!-- inbound arrow -->
+  <line x1="280" y1="330" x2="304" y2="330" stroke="#5b6580" stroke-width="1.8" marker-end="url(#arrow)"/>
+
+  <!-- outbound box -->
+  <rect x="780" y="210" width="256" height="200" rx="12" fill="#fbf1e6" stroke="#eed3b3" filter="url(#shadow)"/>
+  <text x="798" y="238" font-size="14" font-weight="700" fill="#b5711a">⬆  Alerts — outbound</text>
+  <text x="798" y="256" font-size="11" fill="#5b6580">free · per-user · choose channels</text>
+  <text x="798" y="288" font-size="13" fill="#33415a">•  Email   (SMTP)</text>
+  <text x="798" y="316" font-size="13" fill="#33415a">•  Telegram   (bot API)</text>
+  <text x="798" y="344" font-size="13" fill="#33415a">•  Microsoft Teams   (webhook)</text>
+  <text x="798" y="372" font-size="13" fill="#33415a">•  WhatsApp   (CallMeBot)</text>
+
+  <!-- outbound arrow -->
+  <line x1="756" y1="330" x2="778" y2="330" stroke="#5b6580" stroke-width="1.8" marker-end="url(#arrow)"/>
+
+  <!-- footer note -->
+  <rect x="24" y="486" width="1012" height="150" rx="12" fill="#ffffff" stroke="#d7deea" filter="url(#shadow)"/>
+  <text x="44" y="514" font-size="14" font-weight="700" fill="#1a2233">Why so few services</text>
+  <text x="44" y="542" font-size="13" fill="#33415a"><tspan font-weight="600" fill="#b5433a">Not used</tspan> (unnecessary at this scale):  Cloudflare Pages · Koyeb · Neon Postgres · R2 · Supabase Auth</text>
+  <text x="44" y="568" font-size="13" fill="#33415a">Node serves the SPA · SQLite-on-volume is the DB · JWT is the auth · no file uploads = nothing to store</text>
+  <text x="44" y="600" font-size="13" fill="#33415a"><tspan font-weight="600" fill="#0f7d8f">Scale path:</tspan>  SQLite is a single writer → run ONE machine. When you outgrow it, swap SQLite → Neon Postgres.</text>
+  <text x="44" y="622" font-size="11" fill="#5b6580">Cost today: $0 — one Fly.io container + free public APIs.</text>
+</svg>
