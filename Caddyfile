@@ -1,0 +1,10 @@
+# Caddy auto-HTTPS reverse proxy for ThreatPulse.
+# DOMAIN and TLS_EMAIL come from the environment (see docker-compose.yml / .env).
+{
+	email {$TLS_EMAIL}
+}
+
+{$DOMAIN} {
+	encode gzip zstd
+	reverse_proxy threatpulse:3000
+}

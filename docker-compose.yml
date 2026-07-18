@@ -1,25 +1,28 @@
-# ThreatPulse — one-command deploy for a free-forever VM (Oracle Cloud / GCP Always Free)
+# ThreatPulse — free-forever VM deploy WITH automatic HTTPS
+#
+#   Needs a domain name (a free DuckDNS subdomain works great) pointed at the VM's IP.
+#   Caddy fetches & renews a free Let's Encrypt certificate automatically.
 #
 #   1. Clone the repo on the VM
-#   2. Create a .env file (copy .env.example, set JWT_SECRET etc.)
-#   3. Run:  docker compose up -d --build
+#   2. Create .env (copy .env.example) and set JWT_SECRET, DOMAIN, ADMIN_EMAIL, etc.
+#   3. Run:  sudo docker compose up -d --build
 #
-# Data lives in the named volume "threatpulse_data" and survives restarts/redeploys.
+# No domain yet? You can still run HTTP-only — see DEPLOYMENT.md.
 
 services:
   threatpulse:
     build: .
     image: threatpulse:latest
     container_name: threatpulse
-    restart: always                 # auto-start on reboot / crash — keeps the 15-min fetcher alive
-    ports:
-      - "80:3000"                   # serve the site on port 80 of the VM
+    restart: always
+    expose:
+      - "3000"                      # internal only — Caddy talks to it, not the public
     environment:
       NODE_ENV: production
       PORT: "3000"
       DB_PATH: /data/threatpulse.db
     env_file:
-      - .env                        # secrets: JWT_SECRET, NVD_API_KEY, ABUSE_CH_API_KEY, SMTP_*, etc.
+      - .env
     volumes:
       - threatpulse_data:/data      # persistent SQLite storage
     healthcheck:
@@ -29,6 +32,27 @@ services:
       retries: 3
       start_period: 20s
 
+  caddy:
+    image: caddy:2
+    container_name: caddy
+    restart: always
+    depends_on:
+      - threatpulse
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+      TLS_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data            # stores the TLS certificates (persistent)
+      - caddy_config:/config
+
 volumes:
   threatpulse_data:
+    driver: local
+  caddy_data:
+    driver: local
+  caddy_config:
     driver: local
