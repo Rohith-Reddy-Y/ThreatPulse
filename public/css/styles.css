@@ -2736,6 +2736,17 @@ body::after {
 }
 .auth-error.hidden { display: none; }
 
+.auth-success {
+  background: rgba(0,255,136,0.1);
+  border: 1px solid rgba(0,255,136,0.3);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  color: var(--green);
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+.auth-success.hidden { display: none; }
+
 .auth-toggle {
   display: flex;
   align-items: center;

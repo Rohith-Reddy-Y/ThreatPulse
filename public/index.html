@@ -306,6 +306,7 @@
       <div class="detect-toggles">
         <button class="pill toggle-pill" id="filter-poc" data-filter="has_poc" title="Show only items with a public proof-of-concept">⚡ PoC Available</button>
         <button class="pill toggle-pill" id="filter-mitre" data-filter="has_mitre" title="Show only items mapped to MITRE ATT&CK techniques">🎯 MITRE Mapped</button>
+        <button class="clear-all-filters-btn" id="clear-all-filters-btn" title="Clear all active filters">✖ Clear All</button>
       </div>
       <button class="btn btn-primary fetch-now-btn" id="fetch-now-btn">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
@@ -418,6 +419,7 @@
             <div class="form-group">
               <input type="email" id="notif-email" placeholder="you@company.com">
             </div>
+            <p class="notif-hint">No setup needed — just enter your email and we'll send alerts from ThreatPulse.</p>
             <button type="button" class="btn btn-ghost notif-test" data-test="email">Test Email</button>
           </div>
 

@@ -525,13 +525,26 @@
     state.currentPage = 1;
     const si = $('#search-input'); if (si) si.value = '';
     ['#severity-filter', '#source-type-filter', '#sector-filter', '#threat-actor-filter', '#patch-filter'].forEach(sel => {
-      const el = $(sel); if (el) el.value = '';
+      const el = $(sel); if (el) { el.value = ''; el.classList.remove('has-value'); }
     });
     $$('.toggle-pill').forEach(b => b.classList.remove('active'));
     $$('#category-filters .pill').forEach(p => p.classList.remove('active'));
     const allPill = document.querySelector('#category-filters .pill[data-category=""]');
     if (allPill) allPill.classList.add('active');
+    updateClearAllButton();
     fetchArticles();
+  }
+
+  function hasActiveFilters() {
+    const f = state.filters;
+    return f.category || f.severity || f.source_type || f.search || f.sector || f.threat_actor || f.has_poc || f.has_mitre || f.is_patched !== '';
+  }
+
+  function updateClearAllButton() {
+    const btn = $('#clear-all-filters-btn');
+    if (btn) {
+      btn.classList.toggle('visible', hasActiveFilters());
+    }
   }
 
   function exportArticles() {
@@ -804,53 +817,50 @@
     searchInput.addEventListener('input', debounce(() => {
       state.filters.search = searchInput.value;
       state.currentPage = 1;
+      updateClearAllButton();
       fetchArticles();
     }, 400));
 
     // Category pills
     $$('#category-filters .pill').forEach(pill => {
       pill.addEventListener('click', () => {
-        $$('#category-filters .pill').forEach(p => p.classList.remove('active'));
-        pill.classList.add('active');
-        state.filters.category = pill.dataset.category;
+        const clickedCategory = pill.dataset.category;
+        // If clicking the already-active pill (and it's not 'All'), deselect it
+        if (pill.classList.contains('active') && clickedCategory !== '') {
+          pill.classList.remove('active');
+          state.filters.category = '';
+          const allPill = document.querySelector('#category-filters .pill[data-category=""]');
+          if (allPill) allPill.classList.add('active');
+        } else {
+          $$('#category-filters .pill').forEach(p => p.classList.remove('active'));
+          pill.classList.add('active');
+          state.filters.category = clickedCategory;
+        }
         state.currentPage = 1;
+        updateClearAllButton();
         fetchArticles();
       });
     });
 
     // Severity filter
-    $('#severity-filter').addEventListener('change', (e) => {
-      state.filters.severity = e.target.value;
-      state.currentPage = 1;
-      fetchArticles();
-    });
-
-    // Source type filter
-    $('#source-type-filter').addEventListener('change', (e) => {
-      state.filters.source_type = e.target.value;
-      state.currentPage = 1;
-      fetchArticles();
-    });
-
-    // Sector filter
-    $('#sector-filter').addEventListener('change', (e) => {
-      state.filters.sector = e.target.value;
-      state.currentPage = 1;
-      fetchArticles();
-    });
-
-    // Threat actor filter
-    $('#threat-actor-filter').addEventListener('change', (e) => {
-      state.filters.threat_actor = e.target.value;
-      state.currentPage = 1;
-      fetchArticles();
-    });
-
-    // Patch status filter
-    $('#patch-filter').addEventListener('change', (e) => {
-      state.filters.is_patched = e.target.value;
-      state.currentPage = 1;
-      fetchArticles();
+    // Dropdown filters — shared handler that adds/removes .has-value class
+    ['#severity-filter', '#source-type-filter', '#sector-filter', '#threat-actor-filter', '#patch-filter'].forEach(sel => {
+      const el = $(sel);
+      if (!el) return;
+      el.addEventListener('change', (e) => {
+        const filterMap = {
+          '#severity-filter': 'severity',
+          '#source-type-filter': 'source_type',
+          '#sector-filter': 'sector',
+          '#threat-actor-filter': 'threat_actor',
+          '#patch-filter': 'is_patched'
+        };
+        state.filters[filterMap[sel]] = e.target.value;
+        e.target.classList.toggle('has-value', e.target.value !== '');
+        state.currentPage = 1;
+        updateClearAllButton();
+        fetchArticles();
+      });
     });
 
     // Detection-engineering toggle pills (PoC / MITRE)
@@ -860,6 +870,7 @@
         const active = btn.classList.toggle('active');
         state.filters[key] = active ? '1' : '';
         state.currentPage = 1;
+        updateClearAllButton();
         fetchArticles();
       });
     });
@@ -869,6 +880,7 @@
 
     // Clear all filters (from the empty state)
     $('#clear-filters-btn')?.addEventListener('click', clearFilters);
+    $('#clear-all-filters-btn')?.addEventListener('click', clearFilters);
 
     // Export
     $('#export-btn').addEventListener('click', exportArticles);
