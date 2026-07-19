@@ -2,6 +2,7 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const crypto = require('crypto');
 const fs = require('fs');
+const { enrichArticle } = require('./enrich');
 
 // Auto-detect Railway's persistent volume at /data, otherwise fallback to local project directory
 const defaultDbPath = fs.existsSync('/data') 
@@ -533,6 +534,9 @@ function updateSourceFetchStatus(id, { last_fetched, last_error = null }) {
 // ============================================
 
 function insertArticle(article) {
+  // Centralized enrichment — fills sector / threat_actors / mitre_ids for every
+  // source (RSS, CVE, CISA KEV, dark web, scraped) that didn't set them.
+  enrichArticle(article);
   const urlHash = hashUrl(article.url);
   try {
     const result = getDb().prepare(`

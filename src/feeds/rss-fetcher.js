@@ -4,6 +4,8 @@
  */
 
 const RSSParser = require('rss-parser');
+// Shared, source-agnostic enrichment (sector / threat actors / MITRE IDs)
+const { detectSector, detectThreatActors, extractMitreIds } = require('../enrich');
 
 const parser = new RSSParser({
   timeout: 15000,
@@ -103,52 +105,6 @@ function detectPatchStatus(title, description) {
  * Extract MITRE ATT&CK Tactic and Technique IDs from text
  * Matches patterns like T1059, T1059.001, TA0001
  */
-function extractMitreIds(title, description) {
-  const text = `${title} ${description}`;
-  const matches = text.match(/\b(T[1-9]\d{3}(\.\d{3})?|TA00\d{2})\b/g);
-  if (!matches || matches.length === 0) return null;
-  const unique = [...new Set(matches.map(m => m.toUpperCase()))];
-  return unique.join(',');
-}
-
-/**
- * Detect industry sector from content
- */
-function detectSector(title, description) {
-  const text = `${title} ${description}`.toLowerCase();
-  if (/\bbank\b|\bfinancial\b|\bpayment\b|\bcredit card\b|\bswift\b|\bfintech\b|\batm\b|\bpci\b|fs-isac|banking|\bfin\d|wire transfer|monetary/i.test(text)) return 'financial';
-  if (/\bhospital\b|\bhipaa\b|\bpatient\b|\bmedical\b|\bpharma\b|\bhealthcare\b|\bclinic\b|\behr\b|health data/i.test(text)) return 'healthcare';
-  if (/\bgovernment\b|\bfederal\b|\belection\b|state-sponsored|\bmilitary\b|\bdefense\b|\bintelligence agency|national security/i.test(text)) return 'government';
-  if (/\bcloud\b|\bsaas\b|\bdevops\b|\bkubernetes\b|\bdocker\b|\bci\/cd\b|software supply chain/i.test(text)) return 'technology';
-  return null;
-}
-
-/**
- * Detect known threat actors from content
- */
-const KNOWN_THREAT_ACTORS = [
-  'Scattered Spider', 'Lazarus Group', 'APT28', 'APT29', 'APT41', 'APT27', 'APT33', 'APT34', 'APT35', 'APT38', 'APT40',
-  'Fancy Bear', 'Cozy Bear', 'BlackCat', 'ALPHV', 'LockBit', 'Cl0p', 'Clop',
-  'Volt Typhoon', 'Salt Typhoon', 'Flax Typhoon', 'Sandworm', 'FIN7', 'FIN11', 'FIN12',
-  'REvil', 'Conti', 'DarkSide', 'Black Basta', 'Rhysida', 'Play', 'Akira', 'Medusa', 'Royal',
-  'Turla', 'Kimsuky', 'Charming Kitten', 'MuddyWater', 'OilRig', 'Hafnium',
-  'UNC2452', 'UNC3886', 'Star Blizzard', 'Midnight Blizzard', 'Forest Blizzard',
-  'BlackTech', 'Mustang Panda', 'Gamaredon', 'Lapsus', 'Vice Society',
-  'BianLian', 'NoEscape', 'Hunters International', 'INC Ransom', 'RansomHub',
-  'Qilin', 'DragonForce', 'Embargo'
-];
-
-function detectThreatActors(title, description) {
-  const text = `${title} ${description}`;
-  const found = [];
-  for (const actor of KNOWN_THREAT_ACTORS) {
-    if (text.toLowerCase().includes(actor.toLowerCase())) {
-      found.push(actor);
-    }
-  }
-  return found.length > 0 ? found.join(',') : null;
-}
-
 /**
  * Strip HTML tags from text
  */
@@ -196,9 +152,9 @@ async function fetchRSSFeed(source) {
         is_patched: detectPatchStatus(title, description),
         has_poc: detectPOC(title, description),
         tags: generateTags(title, description),
-        mitre_ids: extractMitreIds(title, description),
-        sector: detectSector(title, description),
-        threat_actors: detectThreatActors(title, description)
+        mitre_ids: extractMitreIds(`${title} ${description}`),
+        sector: detectSector(`${title} ${description}`),
+        threat_actors: detectThreatActors(`${title} ${description}`)
       });
     }
 
