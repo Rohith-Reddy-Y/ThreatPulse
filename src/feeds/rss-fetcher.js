@@ -8,10 +8,13 @@ const RSSParser = require('rss-parser');
 const { detectSector, detectThreatActors, extractMitreIds } = require('../enrich');
 
 const parser = new RSSParser({
-  timeout: 15000,
+  timeout: 20000,
   headers: {
-    'User-Agent': 'ThreatPulse/1.0 (Threat Intelligence Aggregator)',
-    'Accept': 'application/rss+xml, application/xml, text/xml, */*'
+    // Present as a real browser — many worthy feeds (Cloudflare/Akamai fronted)
+    // return 403 to non-browser User-Agents.
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Accept': 'application/rss+xml, application/atom+xml, application/xml;q=0.9, text/html;q=0.8, */*;q=0.7',
+    'Accept-Language': 'en-US,en;q=0.9'
   },
   customFields: {
     item: [

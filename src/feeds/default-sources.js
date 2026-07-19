@@ -1179,6 +1179,20 @@ const DEFAULT_SOURCES = [
     category: 'darkweb',
     added_by: 'system'
   },
+  {
+    name: 'Red Siege',
+    url: 'https://redsiege.com/feed/',
+    type: 'rss',
+    category: 'threat_intel',
+    added_by: 'system'
+  },
+  {
+    name: 'Qi An Xin XLab',
+    url: 'https://blog.xlab.qianxin.com/rss/',
+    type: 'rss',
+    category: 'malware',
+    added_by: 'system'
+  },
 ];
 
 // System sources that were removed because their feeds are permanently broken.
