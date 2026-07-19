@@ -299,9 +299,15 @@
 
     let html = '';
     for (const [date, articles] of Object.entries(groups)) {
-      html += `<div class="date-group"><div class="date-header"><span class="date-label">${date}</span><span class="date-count">${articles.length} items</span></div>`;
-      articles.forEach(a => { html += createArticleCard(a); });
-      html += '</div>';
+      const cards = articles.map(a => createArticleCard(a)).join('');
+      html += `<section class="date-section">
+        <div class="date-header" role="button" tabindex="0" aria-expanded="true">
+          <span class="date-header-icon">▼</span>
+          <span class="date-header-text">${escapeHtml(date)}</span>
+          <span class="date-header-count">${articles.length} item${articles.length === 1 ? '' : 's'}</span>
+        </div>
+        <div class="date-articles">${cards}</div>
+      </section>`;
     }
     container.innerHTML = html;
     loadMore.classList.toggle('hidden', state.currentPage >= state.totalPages);
@@ -537,7 +543,9 @@
 
   function hasActiveFilters() {
     const f = state.filters;
-    return f.category || f.severity || f.source_type || f.search || f.sector || f.threat_actor || f.has_poc || f.has_mitre || f.is_patched !== '';
+    return !!(f.category || f.severity || f.source_type || f.search ||
+              f.sector || f.threat_actor || f.has_poc || f.has_mitre ||
+              (f.is_patched !== ''));
   }
 
   function updateClearAllButton() {
@@ -908,6 +916,20 @@
     });
 
     document.addEventListener('click', (e) => {
+      // Collapse / expand a date section (ignore clicks on links/buttons inside)
+      const dateHeader = e.target.closest('.date-header');
+      if (dateHeader) {
+        const section = dateHeader.closest('.date-section');
+        const body = section && section.querySelector('.date-articles');
+        const icon = dateHeader.querySelector('.date-header-icon');
+        if (body) {
+          const collapsed = body.classList.toggle('collapsed');
+          if (icon) icon.classList.toggle('collapsed', collapsed);
+          dateHeader.setAttribute('aria-expanded', String(!collapsed));
+        }
+        return;
+      }
+
       // Edit source URL
       const editBtn = e.target.closest('[data-edit-source]');
       if (editBtn) {

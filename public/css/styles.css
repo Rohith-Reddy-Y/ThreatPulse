@@ -134,20 +134,30 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Animated background grid */
+/* Animated aurora — slowly drifting threat-intel glow (overscanned so the
+   scale/translate animation never reveals the viewport edges). */
 body::before {
   content: '';
   position: fixed;
-  inset: 0;
+  inset: -12%;
   background:
     radial-gradient(60% 50% at 15% 0%, rgba(124, 92, 255, 0.18), transparent 60%),
     radial-gradient(50% 50% at 90% 8%, rgba(34, 211, 238, 0.14), transparent 55%),
     radial-gradient(60% 60% at 80% 100%, rgba(246, 95, 154, 0.09), transparent 60%),
     linear-gradient(180deg, var(--bg-deep) 0%, var(--bg-primary) 100%);
-  z-index: -2;
+  z-index: -3;
   pointer-events: none;
+  will-change: transform;
+  animation: auroraFloat 24s var(--ease-out) infinite alternate;
 }
 
+@keyframes auroraFloat {
+  0%   { transform: translate3d(0, 0, 0) scale(1); }
+  50%  { transform: translate3d(-1.5%, 1.2%, 0) scale(1.06); }
+  100% { transform: translate3d(1.8%, -1%, 0) scale(1.03); }
+}
+
+/* Drifting technical grid */
 body::after {
   content: '';
   position: fixed;
@@ -156,7 +166,7 @@ body::after {
     linear-gradient(var(--grid-color) 1px, transparent 1px),
     linear-gradient(90deg, var(--grid-color) 1px, transparent 1px);
   background-size: 60px 60px;
-  z-index: -1;
+  z-index: -2;
   pointer-events: none;
   animation: gridDrift 30s linear infinite;
 }
@@ -164,6 +174,46 @@ body::after {
 @keyframes gridDrift {
   from { transform: translate(0, 0); }
   to { transform: translate(60px, 60px); }
+}
+
+/* Sweeping "radar scan" beam — the dynamic, on-theme background layer.
+   Sits behind all app content (which paints later in the DOM) and above the
+   aurora/grid pseudo-elements. */
+.bg-scan {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  overflow: hidden;
+}
+.bg-scan::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 42vh;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(34, 211, 238, 0.045) 42%,
+    rgba(124, 92, 255, 0.06) 55%,
+    transparent 100%);
+  filter: blur(2px);
+  will-change: transform, opacity;
+  animation: scanSweep 10s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+@keyframes scanSweep {
+  0%   { transform: translateY(-45vh); opacity: 0; }
+  12%  { opacity: 1; }
+  88%  { opacity: 1; }
+  100% { transform: translateY(108vh); opacity: 0; }
+}
+
+/* Respect reduced-motion preferences — freeze the animated layers */
+@media (prefers-reduced-motion: reduce) {
+  body::before,
+  body::after,
+  .bg-scan::before { animation: none; }
 }
 
 /* ─── CUSTOM SCROLLBAR ─── */
@@ -568,6 +618,57 @@ body::after {
   color: var(--text-primary);
 }
 
+/* Dark mode dropdown options */
+.filter-select option {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  padding: 8px 12px;
+}
+
+.filter-select option:checked {
+  background: var(--grad-soft);
+  color: var(--text-primary);
+}
+
+.filter-select.has-value {
+  color: var(--text-primary);
+  border-color: var(--border-accent);
+  background-color: rgba(124, 92, 255, 0.06);
+}
+
+/* Clear All Filters — hidden by default, shown when any filter is active */
+.clear-all-filters-btn {
+  display: none;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  font-family: var(--font-body);
+  cursor: pointer;
+  border: 1px solid var(--border-accent);
+  background: var(--purple-dim);
+  color: var(--purple);
+  transition: all 0.25s var(--ease-out);
+  white-space: nowrap;
+}
+.clear-all-filters-btn:hover {
+  background: var(--grad);
+  color: #0a0b12;
+  border-color: transparent;
+  box-shadow: 0 6px 18px rgba(124, 92, 255, 0.3);
+  transform: translateY(-1px);
+}
+.clear-all-filters-btn.visible {
+  display: inline-flex;
+  animation: clearBtnIn 0.3s var(--ease-out) both;
+}
+@keyframes clearBtnIn {
+  from { opacity: 0; transform: scale(0.85); }
+  to { opacity: 1; transform: scale(1); }
+}
+
 /* ─── BUTTONS ─── */
 .btn {
   display: inline-flex;
@@ -674,9 +775,9 @@ body::after {
    SKELETON LOADING
    ═══════════════════════════════════════════════════════════ */
 .skeleton-group {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
 }
 
 .skeleton-card {
@@ -811,9 +912,9 @@ body::after {
 }
 
 .date-articles {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
   overflow: hidden;
   transition: max-height 0.5s var(--ease-out), opacity 0.3s;
 }
@@ -831,11 +932,14 @@ body::after {
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
-  padding: 20px 22px;
+  padding: 18px;
   transition: all 0.35s var(--ease-out);
   animation: cardEnter 0.5s var(--ease-out) both;
   position: relative;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 280px;
 }
 
 @keyframes cardEnter {
@@ -1609,6 +1713,14 @@ body::after {
     gap: 14px;
   }
 
+  .date-articles {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .skeleton-group {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
   .stats-bar {
     grid-template-columns: repeat(2, 1fr);
   }
@@ -1661,6 +1773,14 @@ body::after {
   .main-content {
     padding: 0 16px 16px;
     gap: 16px;
+  }
+
+  .date-articles {
+    grid-template-columns: 1fr;
+  }
+
+  .skeleton-group {
+    grid-template-columns: 1fr;
   }
 
   .sidebar {
@@ -1730,22 +1850,43 @@ body::after {
   to { opacity: 1; }
 }
 
-/* Animated particles background */
+/* Animated aurora + drifting grid behind the auth card */
 .auth-overlay::before {
   content: '';
   position: absolute;
-  inset: 0;
+  inset: -12%;
+  z-index: -1;
   background:
-    radial-gradient(ellipse 50% 40% at 20% 30%, rgba(45, 168, 189, 0.06) 0%, transparent 60%),
-    radial-gradient(ellipse 40% 50% at 80% 70%, rgba(168, 85, 247, 0.05) 0%, transparent 60%),
-    radial-gradient(ellipse 60% 30% at 50% 50%, rgba(255, 51, 102, 0.03) 0%, transparent 50%);
-  animation: authBgPulse 8s ease-in-out infinite alternate;
+    radial-gradient(ellipse 50% 40% at 20% 30%, rgba(124, 92, 255, 0.16) 0%, transparent 60%),
+    radial-gradient(ellipse 40% 50% at 80% 70%, rgba(34, 211, 238, 0.14) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 30% at 50% 50%, rgba(246, 95, 154, 0.06) 0%, transparent 50%);
+  animation: authBgPulse 9s ease-in-out infinite alternate;
+  will-change: transform, opacity;
   pointer-events: none;
 }
 
 @keyframes authBgPulse {
-  0% { opacity: 0.7; transform: scale(1); }
-  100% { opacity: 1; transform: scale(1.1); }
+  0% { opacity: 0.75; transform: translate3d(0, 0, 0) scale(1); }
+  100% { opacity: 1; transform: translate3d(1.5%, -1%, 0) scale(1.1); }
+}
+
+/* Sweeping scan beam + technical grid overlay on the auth screen */
+.auth-overlay::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background-image:
+    linear-gradient(rgba(124, 92, 255, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(124, 92, 255, 0.045) 1px, transparent 1px);
+  background-size: 48px 48px;
+  animation: gridDrift 28s linear infinite;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-overlay::before,
+  .auth-overlay::after { animation: none; }
 }
 
 .auth-card {
@@ -3040,7 +3181,9 @@ body,
   box-shadow: var(--shadow-card);
   border: 1px solid var(--border-subtle);
 }
-.article-card { padding: 16px 18px; }
+.article-card { padding: 18px; display: flex; flex-direction: column; }
+.article-desc { flex: 1; }
+.article-actions { margin-top: auto; padding-top: 8px; }
 .sidebar-card { padding: 18px; }
 .stat-card:hover,
 .article-card:hover {
@@ -3057,6 +3200,20 @@ body,
 [data-theme="light"] .tag {
   background: var(--cyan-dim);
   color: var(--cyan);
+}
+[data-theme="light"] .filter-select {
+  background-color: #ffffff;
+  color: var(--text-secondary);
+  border-color: var(--border-subtle);
+}
+[data-theme="light"] .filter-select option {
+  background: #ffffff;
+  color: var(--text-primary);
+}
+[data-theme="light"] .filter-select.has-value {
+  color: var(--text-primary);
+  border-color: var(--border-accent);
+  background-color: rgba(109, 75, 255, 0.06);
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -3218,7 +3375,9 @@ body,
 .logo-icon, .auth-logo .logo-icon { filter: drop-shadow(0 0 16px rgba(124,92,255,0.55)); }
 .logo-accent { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .auth-form input, .form-group input, .form-select, .filter-select, #search-input {
-  background: var(--bg-input) !important;
+  /* background-color (not the `background` shorthand) so the custom chevron
+     background-image on .filter-select / .form-select is preserved. */
+  background-color: var(--bg-input) !important;
   border: 1px solid var(--border-subtle) !important;
   border-radius: 12px !important;
   color: var(--text-primary);
@@ -3227,6 +3386,11 @@ body,
 .auth-form input:focus, .form-group input:focus, .form-select:focus, .filter-select:focus, #search-input:focus {
   border-color: var(--violet) !important;
   box-shadow: 0 0 0 3px rgba(124,92,255,0.18) !important;
+}
+.filter-select.has-value {
+  border-color: var(--border-accent) !important;
+  background-color: rgba(124, 92, 255, 0.06) !important;
+  color: var(--text-primary) !important;
 }
 
 /* ── Header ── */

@@ -176,9 +176,39 @@ router.put('/auth/email', auth.requireAuth, (req, res) => {
     if (existing && existing.id !== req.user.id) {
       return res.status(409).json({ success: false, error: 'Email already registered to another account' });
     }
+
+    const previousEmail = req.user.email;
+    if (email === previousEmail) {
+      return res.status(400).json({ success: false, error: 'That is already your email address' });
+    }
+
     db.updateUserEmail(req.user.id, email);
     db.logAudit(req.user.id, 'email_change', `Email updated to ${email}`, req.ip);
     res.json({ success: true, email });
+
+    // Notify the user of the change (like real-world apps): confirm to the new
+    // address, and alert the old one so an unauthorized change is noticed.
+    // Fire-and-forget — the response has already been sent.
+    (async () => {
+      try {
+        const when = new Date().toLocaleString();
+        const confirm = [{
+          title: '✉️ Your ThreatPulse email was changed',
+          description: `Hi ${req.user.displayName}, the email on your ThreatPulse account was updated to ${email} on ${when}. If you made this change, no action is needed. If you did NOT, reset your password immediately and contact your administrator.`,
+          url: process.env.BASE_URL || `${req.protocol}://${req.get('host')}`,
+          source_name: 'ThreatPulse Security',
+          published_date: new Date().toISOString(),
+          category: 'advisory', severity: 'high',
+          cve_id: null, is_patched: -1, has_poc: 0, tags: 'account-security'
+        }];
+        await sendAlertEmail(confirm, email);
+        if (previousEmail && previousEmail !== email) {
+          await sendAlertEmail(confirm, previousEmail);
+        }
+      } catch (mailErr) {
+        console.error('[API] Email-change notification failed:', mailErr.message);
+      }
+    })();
   } catch (error) {
     console.error('[API] Change email error:', error.message);
     res.status(500).json({ success: false, error: 'Failed to update email' });
