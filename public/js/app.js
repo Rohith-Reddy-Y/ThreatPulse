@@ -43,6 +43,16 @@
   const $$ = (sel) => document.querySelectorAll(sel);
 
   // ═══════════════════════════════════════════════════════════
+  //  INLINE ICONS (clean SVGs — no emoji)
+  // ═══════════════════════════════════════════════════════════
+  const ICONS = {
+    eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>',
+    eyeOff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.9 4.2A9.5 9.5 0 0 1 12 4c6.5 0 10 7 10 7a13.6 13.6 0 0 1-2.2 3M6.1 6.1A13.5 13.5 0 0 0 2 11s3.5 7 10 7a9.3 9.3 0 0 0 3.9-.8"/><path d="M3 3l18 18"/></svg>',
+    sun: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M6.3 17.7l-1.4 1.4M19.1 4.9l-1.4 1.4"/></svg>',
+    moon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>'
+  };
+
+  // ═══════════════════════════════════════════════════════════
   //  API HELPER (with auth)
   // ═══════════════════════════════════════════════════════════
   async function api(method, endpoint, body = null) {
@@ -143,14 +153,14 @@
   }
 
   function dateKey(dateStr) {
-    if (!dateStr) return '📅 Undated';
+    if (!dateStr) return 'Undated';
     const d = new Date(dateStr);
-    if (isNaN(d.getTime())) return '📅 Undated';         // guard: malformed date
+    if (isNaN(d.getTime())) return 'Undated';            // guard: malformed date
     const today = new Date(); today.setHours(0,0,0,0);
     const yesterday = new Date(today); yesterday.setDate(yesterday.getDate() - 1);
     const articleDate = new Date(d); articleDate.setHours(0,0,0,0);
-    if (articleDate.getTime() === today.getTime()) return '📅 Today';
-    if (articleDate.getTime() === yesterday.getTime()) return '📅 Yesterday';
+    if (articleDate.getTime() === today.getTime()) return 'Today';
+    if (articleDate.getTime() === yesterday.getTime()) return 'Yesterday';
     return d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
   }
 
@@ -169,11 +179,6 @@
     const now = new Date();
     const el = $('#clock-time');
     if (el) el.textContent = now.toLocaleTimeString('en-US', { hour12: true });
-  }
-
-  function sourceTypeIcon(type) {
-    const icons = { rss: '📡', api: '🔌', darkweb: '🕸️', blog: '📝', twitter: '🐦', website: '🌐', custom: '⚙️', other: '📎' };
-    return icons[type] || '📎';
   }
 
   function animateValue(el, target) {
@@ -302,7 +307,7 @@
       const cards = articles.map(a => createArticleCard(a)).join('');
       html += `<section class="date-section">
         <div class="date-header" role="button" tabindex="0" aria-expanded="true">
-          <span class="date-header-icon">▼</span>
+          <span class="date-header-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
           <span class="date-header-text">${escapeHtml(date)}</span>
           <span class="date-header-count">${articles.length} item${articles.length === 1 ? '' : 's'}</span>
         </div>
@@ -326,28 +331,28 @@
   function createArticleCard(article) {
     const catBadge = `<span class="badge badge-${article.category}">${escapeHtml(article.category)}</span>`;
     const sevBadge = `<span class="badge badge-severity-${article.severity}">${article.severity}</span>`;
-    const sectorBadge = article.sector ? `<span class="badge badge-sector">${sectorIcon(article.sector)} ${article.sector}</span>` : '';
-    const actorBadge = article.threat_actors ? article.threat_actors.split(',').map(a => `<span class="badge badge-actor">🕷️ ${escapeHtml(a.trim())}</span>`).join('') : '';
+    const sectorBadge = article.sector ? `<span class="badge badge-sector">${escapeHtml(article.sector)}</span>` : '';
+    const actorBadge = article.threat_actors ? article.threat_actors.split(',').map(a => `<span class="badge badge-actor">${escapeHtml(a.trim())}</span>`).join('') : '';
     const cveLink = article.cve_id ? `<a href="https://nvd.nist.gov/vuln/detail/${article.cve_id}" target="_blank" rel="noopener" class="cve-link">${article.cve_id}</a>` : '';
-    const pocBadge = article.has_poc ? '<span class="badge badge-poc">⚡ PoC Available</span>' : '';
+    const pocBadge = article.has_poc ? '<span class="badge badge-poc">PoC Available</span>' : '';
 
     // MITRE ATT&CK technique/tactic IDs — key signal for detection engineering
     const mitreIds = article.mitre_ids ? article.mitre_ids.split(',').map(s => s.trim()).filter(Boolean) : [];
     const mitreBadges = mitreIds.map(id =>
-      `<a href="${mitreLink(id)}" target="_blank" rel="noopener" class="badge badge-mitre" title="MITRE ATT&CK ${escapeHtml(id)}">🎯 ${escapeHtml(id)}</a>`
+      `<a href="${mitreLink(id)}" target="_blank" rel="noopener" class="badge badge-mitre" title="MITRE ATT&CK ${escapeHtml(id)}">${escapeHtml(id)}</a>`
     ).join('');
-    const ttpBadge = mitreIds.length ? '<span class="badge badge-ttp">🆕 TTP</span>' : '';
+    const ttpBadge = mitreIds.length ? '<span class="badge badge-ttp">TTP</span>' : '';
 
     // Patch status — 1 = patched, 0 = unpatched, -1 = unknown
     const patchBadge = article.is_patched === 1
-      ? '<span class="badge badge-patched">✅ Patched</span>'
+      ? '<span class="badge badge-patched">Patched</span>'
       : article.is_patched === 0
-        ? '<span class="badge badge-unpatched">❌ Unpatched</span>'
+        ? '<span class="badge badge-unpatched">Unpatched</span>'
         : '';
 
     // Owner label — admins see which user each threat belongs to
     const ownerBadge = (currentUser && currentUser.role === 'admin' && article.owner_name)
-      ? `<span class="badge badge-owner">👤 ${escapeHtml(article.owner_name)}</span>`
+      ? `<span class="badge badge-owner">${escapeHtml(article.owner_name)}</span>`
       : '';
 
     const desc = article.description ? escapeHtml(article.description.substring(0, 300)) : '';
@@ -361,9 +366,8 @@
     if (reviews.length > 0) {
       reviewHtml = '<div class="article-reviews">';
       reviews.forEach(r => {
-        const statusIcon = r.status === 'reviewed' ? '✅' : r.status === 'escalated' ? '🔴' : '👁️';
         const timeStr = r.status === 'reviewing' ? `since ${relativeTime(r.started_at)}` : relativeTime(r.completed_at || r.started_at);
-        reviewHtml += `<span class="review-tag review-${r.status}">${statusIcon} ${escapeHtml(r.username)} ${timeStr}</span>`;
+        reviewHtml += `<span class="review-tag review-${r.status}">${escapeHtml(r.username)} · ${timeStr}</span>`;
       });
       reviewHtml += '</div>';
     }
@@ -375,7 +379,7 @@
         </div>
         <h3 class="article-title"><a href="${escapeHtml(article.url)}" target="_blank" rel="noopener">${escapeHtml(article.title)}</a></h3>
         <div class="article-meta">
-          <span>${sourceTypeIcon(article.source_type)} ${escapeHtml(article.source_name)}</span>
+          <span>${escapeHtml(article.source_name)}</span>
           ${article.author ? `<span>by ${escapeHtml(article.author)}</span>` : ''}
           <span>${relativeTime(article.published_date)}</span>
         </div>
@@ -383,24 +387,19 @@
         ${article.tags ? `<div class="article-tags">${article.tags.split(',').map(t => `<span class="tag">${t.trim()}</span>`).join('')}</div>` : ''}
         ${reviewHtml}
         <div class="article-actions">
-          <button class="btn-review" data-review-article="${article.id}" title="Start reviewing">👁️ Review</button>
-          <button class="btn-review-done" data-review-done="${article.id}" title="Mark as reviewed">✅ Done</button>
-          <button class="btn-escalate" data-escalate="${article.id}" title="Escalate">🔴 Escalate</button>
+          <button class="btn-review" data-review-article="${article.id}" title="Start reviewing">Review</button>
+          <button class="btn-review-done" data-review-done="${article.id}" title="Mark as reviewed">Done</button>
+          <button class="btn-escalate" data-escalate="${article.id}" title="Escalate">Escalate</button>
         </div>
       </article>`;
   }
 
-  function sectorIcon(sector) {
-    const icons = { financial: '🏦', healthcare: '🏥', government: '🏛️', technology: '💻' };
-    return icons[sector] || '📂';
-  }
-
   // Unified source health status — same logic used by the admin panel
   function sourceStatus(source) {
-    if (!source.enabled) return { cls: 'disabled', label: 'Disabled', color: 'var(--text-muted)', icon: '⏸' };
-    if (source.last_error) return { cls: 'error', label: 'Error', color: 'var(--red)', icon: '⚠' };
-    if (source.last_fetched) return { cls: 'active', label: 'OK', color: 'var(--green)', icon: '✓' };
-    return { cls: 'idle', label: 'Not yet fetched', color: 'var(--text-muted)', icon: '○' };
+    if (!source.enabled) return { cls: 'disabled', label: 'Disabled', color: 'var(--text-muted)' };
+    if (source.last_error) return { cls: 'error', label: 'Error', color: 'var(--red)' };
+    if (source.last_fetched) return { cls: 'active', label: 'OK', color: 'var(--green)' };
+    return { cls: 'idle', label: 'Not yet fetched', color: 'var(--text-muted)' };
   }
 
   function renderSources() {
@@ -424,10 +423,9 @@
       <div class="source-item" data-source-id="${source.id}">
         <input type="checkbox" class="dash-source-cb" data-src-id="${source.id}" data-src-url="${escapeHtml(source.url)}" data-src-name="${escapeHtml(source.name)}" style="margin-right:6px;cursor:pointer;">
         <span class="source-status-dot ${st.cls}" title="${st.label}"></span>
-        <span class="source-type-icon">${sourceTypeIcon(source.type)}</span>
         <div class="source-info">
-          <div class="source-info-name" title="${escapeHtml(source.name)}"><a href="${escapeHtml(source.url || '#')}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;" onmouseover="this.style.color='#2da8bd'" onmouseout="this.style.color='inherit'">${escapeHtml(source.name)}</a></div>
-          <div class="source-info-meta">Fetched: ${lastFetched} <span style="color:${st.color};font-size:10px;" title="${source.last_error ? escapeHtml(source.last_error) : st.label}">${st.icon} ${st.label}</span></div>
+          <div class="source-info-name" title="${escapeHtml(source.name)}"><a href="${escapeHtml(source.url || '#')}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;" onmouseover="this.style.color='var(--cyan)'" onmouseout="this.style.color='inherit'">${escapeHtml(source.name)}</a></div>
+          <div class="source-info-meta">Fetched: ${lastFetched} <span style="color:${st.color};font-size:10px;" title="${source.last_error ? escapeHtml(source.last_error) : st.label}">${st.label}</span></div>
         </div>
         <div class="source-actions">
           <label class="toggle-switch source-toggle">
@@ -607,11 +605,11 @@
           setUser(result.token, result.user);
           initDashboard();
         } else {
-          errEl.textContent = '❌ ' + (result.error || 'Invalid username/email or password');
+          errEl.textContent = (result.error || 'Invalid username/email or password');
           errEl.classList.remove('hidden');
         }
       } catch (err) {
-        errEl.textContent = '⚠️ Connection error — could not reach the server';
+        errEl.textContent = 'Connection error — could not reach the server';
         errEl.classList.remove('hidden');
       }
     });
@@ -626,7 +624,7 @@
       const pw = $('#reg-password').value;
       const confirmPw = $('#reg-confirm').value;
       if (pw !== confirmPw) {
-        errEl.textContent = '❌ Passwords do not match';
+        errEl.textContent = 'Passwords do not match';
         errEl.classList.remove('hidden');
         return;
       }
@@ -678,14 +676,14 @@
           body: JSON.stringify({ email: $('#forgot-email').value.trim() })
         }).then(r => r.json());
         if (result.success) {
-          okEl.textContent = '✅ ' + (result.message || 'If that email exists, a reset link has been sent.');
+          okEl.textContent = (result.message || 'If that email exists, a reset link has been sent.');
           okEl.classList.remove('hidden');
         } else {
-          errEl.textContent = '❌ ' + (result.error || 'Request failed');
+          errEl.textContent = (result.error || 'Request failed');
           errEl.classList.remove('hidden');
         }
       } catch (err) {
-        errEl.textContent = '⚠️ Connection error — could not reach the server';
+        errEl.textContent = 'Connection error — could not reach the server';
         errEl.classList.remove('hidden');
       }
     });
@@ -697,7 +695,7 @@
       errEl.classList.add('hidden'); okEl.classList.add('hidden');
       const pw = $('#reset-password').value, confirmPw = $('#reset-confirm').value;
       if (pw !== confirmPw) {
-        errEl.textContent = '❌ Passwords do not match';
+        errEl.textContent = 'Passwords do not match';
         errEl.classList.remove('hidden');
         return;
       }
@@ -708,15 +706,15 @@
           body: JSON.stringify({ token, newPassword: pw })
         }).then(r => r.json());
         if (result.success) {
-          okEl.textContent = '✅ Password reset! Redirecting to sign in…';
+          okEl.textContent = 'Password reset! Redirecting to sign in…';
           okEl.classList.remove('hidden');
           setTimeout(() => { window.location.href = '/'; }, 1600);
         } else {
-          errEl.textContent = '❌ ' + (result.error || 'Reset failed');
+          errEl.textContent = (result.error || 'Reset failed');
           errEl.classList.remove('hidden');
         }
       } catch (err) {
-        errEl.textContent = '⚠️ Connection error — could not reach the server';
+        errEl.textContent = 'Connection error — could not reach the server';
         errEl.classList.remove('hidden');
       }
     });
@@ -1004,7 +1002,7 @@
         const input = document.getElementById(targetId);
         if (input) {
           input.type = input.type === 'password' ? 'text' : 'password';
-          eyeBtn.textContent = input.type === 'password' ? '👁️' : '🙈';
+          eyeBtn.innerHTML = input.type === 'password' ? ICONS.eye : ICONS.eyeOff;
         }
       }
     });
@@ -1089,7 +1087,7 @@
     const apply = (t) => {
       document.documentElement.setAttribute('data-theme', t);
       try { localStorage.setItem('tp_theme', t); } catch (e) {}
-      if (btn) btn.textContent = t === 'light' ? '☀️' : '🌙';
+      if (btn) btn.innerHTML = t === 'light' ? ICONS.sun : ICONS.moon;
     };
     apply(localStorage.getItem('tp_theme') || 'dark');
     if (btn) {

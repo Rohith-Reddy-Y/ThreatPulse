@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/css/styles.css">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237c5cff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z'/><path d='M9 12l2 2 4-4'/></svg>">
   <script>
     (function () {
       try {
@@ -23,12 +23,12 @@
   <header class="header">
     <div class="header-left">
       <div class="logo">
-        <span class="logo-icon">🛡️</span>
+        <span class="logo-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg></span>
         <h1 class="logo-text">Threat<span class="logo-accent">Pulse</span> <span style="color:var(--orange);font-size:0.6em;">ADMIN</span></h1>
       </div>
     </div>
     <div class="header-right">
-      <button class="theme-toggle" id="theme-toggle" title="Toggle light / dark theme" aria-label="Toggle theme">🌙</button>
+      <button class="theme-toggle" id="theme-toggle" title="Toggle light / dark theme" aria-label="Toggle theme"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
       <a href="/" class="btn btn-ghost" style="margin-right:12px;">← Dashboard</a>
       <button class="btn btn-danger" id="admin-logout-btn">Logout</button>
     </div>
@@ -44,16 +44,16 @@
   <main class="main-content" style="grid-template-columns: 1fr;">
     <!-- Tab Navigation -->
     <div style="display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap;">
-      <button class="pill active" data-admin-tab="users">👥 Users</button>
-      <button class="pill" data-admin-tab="invites">🎫 Invite Codes</button>
-      <button class="pill" data-admin-tab="sources">📡 All Sources</button>
-      <button class="pill" data-admin-tab="audit">📋 Audit Log</button>
+      <button class="pill active" data-admin-tab="users">Users</button>
+      <button class="pill" data-admin-tab="invites">Invite Codes</button>
+      <button class="pill" data-admin-tab="sources">All Sources</button>
+      <button class="pill" data-admin-tab="audit">Audit Log</button>
     </div>
 
     <!-- Users Tab -->
     <div class="admin-tab" id="tab-users">
       <div class="sidebar-card" style="max-width:100%;">
-        <h3 class="sidebar-title">👥 User Management</h3>
+        <h3 class="sidebar-title">User Management</h3>
         <div id="users-table-container" style="overflow-x:auto;">
           <table class="admin-table" id="users-table">
             <thead><tr><th>Username</th><th>Display Name</th><th>Role</th><th>Sources</th><th>Last Login</th><th>Status</th><th>Actions</th></tr></thead>
@@ -66,7 +66,7 @@
     <!-- Invite Codes Tab -->
     <div class="admin-tab hidden" id="tab-invites">
       <div class="sidebar-card" style="max-width:100%;">
-        <h3 class="sidebar-title">🎫 Invite Codes</h3>
+        <h3 class="sidebar-title">Invite Codes</h3>
         <button class="btn btn-primary" id="generate-invite-btn" style="margin-bottom:16px;">+ Generate New Code</button>
         <table class="admin-table" id="invites-table">
           <thead><tr><th>Code</th><th>Created By</th><th>Used By</th><th>Used At</th><th>Status</th></tr></thead>
@@ -78,12 +78,12 @@
     <!-- Sources Tab -->
     <div class="admin-tab hidden" id="tab-sources">
       <div class="sidebar-card" style="max-width:100%;">
-        <h3 class="sidebar-title">📡 All Sources (God View)</h3>
+        <h3 class="sidebar-title">All Sources (God View)</h3>
         <div class="bulk-actions hidden" id="sources-bulk-actions">
           <span id="selected-count">0 selected</span>
-          <button class="btn btn-ghost" id="bulk-edit-btn" style="font-size:12px;padding:4px 10px;">✏️ Edit URL</button>
-          <button class="btn btn-danger" id="bulk-delete-btn" style="font-size:12px;padding:4px 10px;">🗑 Delete</button>
-          <button class="btn btn-ghost" id="clear-selection-btn" style="font-size:12px;padding:4px 10px;">✖ Clear</button>
+          <button class="btn btn-ghost" id="bulk-edit-btn" style="font-size:12px;padding:4px 10px;">Edit URL</button>
+          <button class="btn btn-danger" id="bulk-delete-btn" style="font-size:12px;padding:4px 10px;">Delete</button>
+          <button class="btn btn-ghost" id="clear-selection-btn" style="font-size:12px;padding:4px 10px;">Clear</button>
         </div>
         <div id="sources-by-user-container"></div>
       </div>
@@ -92,7 +92,7 @@
     <!-- Audit Log Tab -->
     <div class="admin-tab hidden" id="tab-audit">
       <div class="sidebar-card" style="max-width:100%;">
-        <h3 class="sidebar-title">📋 Audit Log</h3>
+        <h3 class="sidebar-title">Audit Log</h3>
         <div id="audit-log-container" style="max-height:600px;overflow-y:auto;">
           <table class="admin-table" id="audit-table">
             <thead><tr><th>Time</th><th>User</th><th>Action</th><th>Details</th><th>IP</th></tr></thead>

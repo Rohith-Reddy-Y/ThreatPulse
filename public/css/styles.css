@@ -3465,3 +3465,23 @@ body,
 /* ── Scrollbar ── */
 ::-webkit-scrollbar-thumb { background: rgba(124,92,255,0.3); }
 ::-webkit-scrollbar-thumb:hover { background: rgba(124,92,255,0.5); }
+
+/* ═══════════════════════════════════════════════════════════
+   INLINE SVG ICON SIZING  (replaces former emoji glyphs)
+   ═══════════════════════════════════════════════════════════ */
+.logo-icon { display: inline-flex; align-items: center; line-height: 0; }
+.logo-icon svg { width: 1.6rem; height: 1.6rem; color: var(--cyan); }
+.auth-logo .logo-icon { justify-content: center; }
+.auth-logo .logo-icon svg { width: 46px; height: 46px; }
+.clock-icon, .source-icon { display: inline-flex; align-items: center; line-height: 0; }
+.clock-icon svg, .source-icon svg { width: 14px; height: 14px; }
+.theme-toggle svg { width: 18px; height: 18px; }
+.empty-icon { display: flex; justify-content: center; }
+.empty-icon svg { width: 52px; height: 52px; opacity: 0.45; }
+.eye-toggle { display: inline-flex; align-items: center; justify-content: center; }
+.eye-toggle svg { width: 17px; height: 17px; display: block; }
+.date-header-icon { display: inline-flex; align-items: center; line-height: 0; }
+.date-header-icon svg { width: 13px; height: 13px; }
+/* Badges built from an inline SVG + label — keep the two aligned */
+.badge svg { width: 12px; height: 12px; vertical-align: -2px; margin-right: 3px; }
+.btn-review svg, .btn-review-done svg, .btn-escalate svg { width: 13px; height: 13px; vertical-align: -2px; margin-right: 3px; }

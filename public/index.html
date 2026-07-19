@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/css/styles.css">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237c5cff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z'/><path d='M9 12l2 2 4-4'/></svg>">
   <link rel="manifest" href="/manifest.json">
   <meta name="theme-color" content="#10151f">
   <script>
@@ -30,7 +30,7 @@
   <div id="auth-overlay" class="auth-overlay">
     <div class="auth-card">
       <div class="auth-logo">
-        <span class="logo-icon">🛡️</span>
+        <span class="logo-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg></span>
         <h1>Threat<span class="logo-accent">Pulse</span></h1>
         <p class="auth-subtitle">Cyber Threat Intelligence Platform</p>
       </div>
@@ -45,15 +45,15 @@
           <label for="login-password">Password</label>
           <div class="password-field">
             <input type="password" id="login-password" placeholder="Enter password" required autocomplete="current-password">
-            <button type="button" class="eye-toggle" data-target="login-password">👁️</button>
+            <button type="button" class="eye-toggle" data-target="login-password"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg></button>
           </div>
         </div>
         <div id="login-error" class="auth-error hidden"></div>
         <button type="submit" class="btn btn-primary btn-full" id="login-btn">
-          🔐 Sign In
+          Sign In
         </button>
         <div style="text-align:center;margin-top:10px;">
-          <button type="button" class="btn btn-ghost" id="forgot-password-btn" style="font-size:12px;opacity:0.7;">🔑 Forgot Password?</button>
+          <button type="button" class="btn btn-ghost" id="forgot-password-btn" style="font-size:12px;opacity:0.7;">Forgot Password?</button>
         </div>
       </form>
 
@@ -66,7 +66,7 @@
         <div id="forgot-error" class="auth-error hidden"></div>
         <div id="forgot-success" class="auth-success hidden"></div>
         <button type="submit" class="btn btn-primary btn-full" id="forgot-btn">
-          📧 Send Reset Link
+          Send Reset Link
         </button>
         <div style="text-align:center;margin-top:10px;">
           <button type="button" class="btn btn-ghost" id="back-to-login-btn" style="font-size:12px;">← Back to Login</button>
@@ -79,20 +79,20 @@
           <label for="reset-password">New Password</label>
           <div class="password-field">
             <input type="password" id="reset-password" placeholder="Min 8 chars, uppercase, lowercase, number" required minlength="8">
-            <button type="button" class="eye-toggle" data-target="reset-password">👁️</button>
+            <button type="button" class="eye-toggle" data-target="reset-password"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg></button>
           </div>
         </div>
         <div class="form-group">
           <label for="reset-confirm">Confirm Password</label>
           <div class="password-field">
             <input type="password" id="reset-confirm" placeholder="Re-enter new password" required minlength="8">
-            <button type="button" class="eye-toggle" data-target="reset-confirm">👁️</button>
+            <button type="button" class="eye-toggle" data-target="reset-confirm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg></button>
           </div>
         </div>
         <div id="reset-error" class="auth-error hidden"></div>
         <div id="reset-success" class="auth-success hidden"></div>
         <button type="submit" class="btn btn-primary btn-full" id="reset-btn">
-          🔐 Reset Password
+          Reset Password
         </button>
       </form>
 
@@ -114,14 +114,14 @@
           <label for="reg-password">Password</label>
           <div class="password-field">
             <input type="password" id="reg-password" placeholder="Min 8 chars, uppercase, lowercase, number" required minlength="8" autocomplete="new-password">
-            <button type="button" class="eye-toggle" data-target="reg-password">👁️</button>
+            <button type="button" class="eye-toggle" data-target="reg-password"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg></button>
           </div>
         </div>
         <div class="form-group">
           <label for="reg-confirm">Confirm Password</label>
           <div class="password-field">
             <input type="password" id="reg-confirm" placeholder="Re-enter your password" required minlength="8" autocomplete="new-password">
-            <button type="button" class="eye-toggle" data-target="reg-confirm">👁️</button>
+            <button type="button" class="eye-toggle" data-target="reg-confirm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg></button>
           </div>
         </div>
         <div class="form-group">
@@ -130,7 +130,7 @@
         </div>
         <div id="register-error" class="auth-error hidden"></div>
         <button type="submit" class="btn btn-primary btn-full" id="register-btn">
-          📝 Create Account
+          Create Account
         </button>
       </form>
 
@@ -151,7 +151,7 @@
   <header class="header">
     <div class="header-left">
       <div class="logo">
-        <span class="logo-icon">🛡️</span>
+        <span class="logo-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg></span>
         <h1 class="logo-text">Threat<span class="logo-accent">Pulse</span></h1>
       </div>
       <span class="header-tagline">Real-Time Threat Intelligence</span>
@@ -159,7 +159,7 @@
     <div class="header-right">
       <div class="header-meta">
         <div class="live-clock" id="live-clock">
-          <span class="clock-icon">🕐</span>
+          <span class="clock-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span>
           <span class="clock-time" id="clock-time">--:--:--</span>
         </div>
         <div class="last-updated" id="last-updated">
@@ -167,11 +167,11 @@
           <span>Last Updated: <span id="last-updated-time">—</span></span>
         </div>
         <div class="sources-active">
-          <span class="source-icon">📡</span>
+          <span class="source-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 4.9a10 10 0 0 0 0 14.2M19.1 4.9a10 10 0 0 1 0 14.2M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4"/><circle cx="12" cy="12" r="1.8"/></svg></span>
           <span><span id="total-sources-count">0</span> Sources Active</span>
         </div>
       </div>
-      <button class="theme-toggle" id="theme-toggle" title="Toggle light / dark theme" aria-label="Toggle theme">🌙</button>
+      <button class="theme-toggle" id="theme-toggle" title="Toggle light / dark theme" aria-label="Toggle theme"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
       <!-- User Menu -->
       <div class="user-menu" id="user-menu">
         <button class="user-menu-btn" id="user-menu-btn">
@@ -185,10 +185,10 @@
             <span class="user-dropdown-role" id="dropdown-role">analyst</span>
           </div>
           <hr class="dropdown-divider">
-          <a href="/admin" class="user-dropdown-item admin-link hidden" id="admin-link">🔧 Admin Panel</a>
-          <button class="user-dropdown-item" id="change-email-btn">✉️ Change Email</button>
-          <button class="user-dropdown-item" id="change-password-btn">🔑 Change Password</button>
-          <button class="user-dropdown-item danger" id="logout-btn">🚪 Logout</button>
+          <a href="/admin" class="user-dropdown-item admin-link hidden" id="admin-link">Admin Panel</a>
+          <button class="user-dropdown-item" id="change-email-btn">Change Email</button>
+          <button class="user-dropdown-item" id="change-password-btn">Change Password</button>
+          <button class="user-dropdown-item danger" id="logout-btn">Logout</button>
         </div>
       </div>
     </div>
@@ -214,7 +214,7 @@
         <span class="stat-value" id="stat-critical" data-target="0">0</span>
         <span class="stat-label">Critical Vulns</span>
       </div>
-      <span class="stat-trend danger" id="stat-critical-trend">⚠ 0</span>
+      <span class="stat-trend danger" id="stat-critical-trend">0 active</span>
     </div>
     <div class="stat-card" data-stat="pocs">
       <div class="stat-icon pocs-icon">
@@ -224,7 +224,7 @@
         <span class="stat-value" id="stat-pocs" data-target="0">0</span>
         <span class="stat-label">POCs Detected</span>
       </div>
-      <span class="stat-trend warning" id="stat-pocs-trend">⚡ 0</span>
+      <span class="stat-trend warning" id="stat-pocs-trend">0 live</span>
     </div>
     <div class="stat-card" data-stat="sources">
       <div class="stat-icon sources-icon">
@@ -248,22 +248,22 @@
     <div class="filter-group">
       <div class="filter-pills" id="category-filters">
         <button class="pill active" data-category="">All</button>
-        <button class="pill" data-category="vulnerability">🔓 Vulnerabilities</button>
-        <button class="pill" data-category="malware">🦠 Malware</button>
-        <button class="pill" data-category="breach">💥 Breaches</button>
-        <button class="pill" data-category="advisory">📋 Advisories</button>
-        <button class="pill" data-category="darkweb">🕸️ Dark Web</button>
-        <button class="pill" data-category="news">📰 News</button>
+        <button class="pill" data-category="vulnerability">Vulnerabilities</button>
+        <button class="pill" data-category="malware">Malware</button>
+        <button class="pill" data-category="breach">Breaches</button>
+        <button class="pill" data-category="advisory">Advisories</button>
+        <button class="pill" data-category="darkweb">Dark Web</button>
+        <button class="pill" data-category="news">News</button>
       </div>
     </div>
     <div class="filter-actions">
       <div class="filter-select-group">
         <select id="severity-filter" class="filter-select">
           <option value="">All Severities</option>
-          <option value="critical">🔴 Critical</option>
-          <option value="high">🟠 High</option>
-          <option value="medium">🟡 Medium</option>
-          <option value="low">🟢 Low</option>
+          <option value="critical">Critical</option>
+          <option value="high">High</option>
+          <option value="medium">Medium</option>
+          <option value="low">Low</option>
         </select>
         <select id="source-type-filter" class="filter-select">
           <option value="">All Source Types</option>
@@ -273,14 +273,14 @@
         </select>
         <select id="sector-filter" class="filter-select">
           <option value="">All Sectors</option>
-          <option value="financial">🏦 Financial</option>
-          <option value="healthcare">🏥 Healthcare</option>
-          <option value="government">🏛️ Government</option>
-          <option value="technology">💻 Technology</option>
+          <option value="financial">Financial</option>
+          <option value="healthcare">Healthcare</option>
+          <option value="government">Government</option>
+          <option value="technology">Technology</option>
         </select>
         <select id="threat-actor-filter" class="filter-select">
           <option value="">All Threat Actors</option>
-          <option value="Scattered Spider">🕷️ Scattered Spider</option>
+          <option value="Scattered Spider">Scattered Spider</option>
           <option value="Lazarus Group">Lazarus Group</option>
           <option value="APT28">APT28 / Fancy Bear</option>
           <option value="APT29">APT29 / Cozy Bear</option>
@@ -302,14 +302,14 @@
         </select>
         <select id="patch-filter" class="filter-select">
           <option value="">All Patch Status</option>
-          <option value="1">✅ Patched</option>
-          <option value="0">❌ Unpatched</option>
+          <option value="1">Patched</option>
+          <option value="0">Unpatched</option>
         </select>
       </div>
       <div class="detect-toggles">
-        <button class="pill toggle-pill" id="filter-poc" data-filter="has_poc" title="Show only items with a public proof-of-concept">⚡ PoC Available</button>
-        <button class="pill toggle-pill" id="filter-mitre" data-filter="has_mitre" title="Show only items mapped to MITRE ATT&CK techniques">🎯 MITRE Mapped</button>
-        <button class="clear-all-filters-btn" id="clear-all-filters-btn" title="Clear all active filters">✖ Clear All</button>
+        <button class="pill toggle-pill" id="filter-poc" data-filter="has_poc" title="Show only items with a public proof-of-concept">PoC Available</button>
+        <button class="pill toggle-pill" id="filter-mitre" data-filter="has_mitre" title="Show only items mapped to MITRE ATT&CK techniques">MITRE Mapped</button>
+        <button class="clear-all-filters-btn" id="clear-all-filters-btn" title="Clear all active filters">Clear All</button>
       </div>
       <button class="btn btn-primary fetch-now-btn" id="fetch-now-btn">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
@@ -331,10 +331,10 @@
         <div class="skeleton-card"><div class="skeleton-header"><div class="skeleton-badge"></div><div class="skeleton-badge"></div></div><div class="skeleton-title"></div><div class="skeleton-text"></div><div class="skeleton-text short"></div><div class="skeleton-meta"><div class="skeleton-tag"></div><div class="skeleton-tag"></div><div class="skeleton-tag"></div></div></div>
       </div>
       <div class="empty-state hidden" id="empty-state">
-        <div class="empty-icon">🔍</div>
+        <div class="empty-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg></div>
         <h3>No threats match your filters</h3>
         <p>Your current filters returned nothing. Try widening them or clear all.</p>
-        <button class="btn btn-primary" id="clear-filters-btn" style="margin-top:14px;">✖ Clear All Filters</button>
+        <button class="btn btn-primary" id="clear-filters-btn" style="margin-top:14px;">Clear All Filters</button>
       </div>
       <div id="articles-container"></div>
       <div class="load-more-container hidden" id="load-more-container">
@@ -398,8 +398,8 @@
         </div>
         <div class="sources-bulk-bar hidden" id="dashboard-bulk-bar">
           <span id="dash-selected-count">0</span>
-          <button class="btn btn-ghost" id="dash-edit-btn" style="font-size:11px;padding:3px 8px;">✏️ Edit URL</button>
-          <button class="btn btn-danger" id="dash-delete-btn" style="font-size:11px;padding:3px 8px;">🗑 Delete</button>
+          <button class="btn btn-ghost" id="dash-edit-btn" style="font-size:11px;padding:3px 8px;">Edit URL</button>
+          <button class="btn btn-danger" id="dash-delete-btn" style="font-size:11px;padding:3px 8px;">Delete</button>
         </div>
         <div id="my-sources-list" class="sources-list">
           <p class="empty-sources">No sources yet. Add your first source above to start tracking threats!</p>
@@ -416,7 +416,7 @@
           <!-- Email -->
           <div class="notif-channel">
             <div class="notif-channel-head">
-              <span class="notif-channel-title">✉️ Email</span>
+              <span class="notif-channel-title">Email</span>
               <label class="toggle-switch"><input type="checkbox" id="notif-email-enabled"><span class="toggle-slider"></span></label>
             </div>
             <div class="form-group">
@@ -429,7 +429,7 @@
           <!-- Telegram -->
           <div class="notif-channel">
             <div class="notif-channel-head">
-              <span class="notif-channel-title">📨 Telegram</span>
+              <span class="notif-channel-title">Telegram</span>
               <label class="toggle-switch"><input type="checkbox" id="notif-telegram-enabled"><span class="toggle-slider"></span></label>
             </div>
             <div class="form-group">
@@ -444,7 +444,7 @@
           <!-- Microsoft Teams -->
           <div class="notif-channel">
             <div class="notif-channel-head">
-              <span class="notif-channel-title">👥 Microsoft Teams</span>
+              <span class="notif-channel-title">Microsoft Teams</span>
               <label class="toggle-switch"><input type="checkbox" id="notif-teams-enabled"><span class="toggle-slider"></span></label>
             </div>
             <div class="form-group">
@@ -456,7 +456,7 @@
           <!-- WhatsApp -->
           <div class="notif-channel">
             <div class="notif-channel-head">
-              <span class="notif-channel-title">🟢 WhatsApp</span>
+              <span class="notif-channel-title">WhatsApp</span>
               <label class="toggle-switch"><input type="checkbox" id="notif-whatsapp-enabled"><span class="toggle-slider"></span></label>
             </div>
             <div class="form-group">
@@ -501,7 +501,7 @@
       </div>
     </div>
     <div class="footer-center">
-      <span class="footer-brand">⚡ Powered by <strong>ThreatPulse v2</strong> — Multi-User Threat Intelligence</span>
+      <span class="footer-brand">Powered by <strong>ThreatPulse v2</strong> — Multi-User Threat Intelligence</span>
     </div>
     <div class="footer-right">
       <div class="data-status">
@@ -516,7 +516,7 @@
   <!-- ═══════════════════ CHANGE EMAIL MODAL ═══════════════════ -->
   <div id="email-modal" class="modal-overlay hidden">
     <div class="auth-card" style="max-width: 400px;">
-      <h2 style="color: var(--cyan); margin-bottom: 1rem;">✉️ Change Email</h2>
+      <h2 style="color: var(--cyan); margin-bottom: 1rem;">Change Email</h2>
       <form id="email-form">
         <div class="form-group">
           <label for="account-email">Email Address</label>
@@ -534,9 +534,9 @@
   <!-- ═══════════════════ CHANGE PASSWORD MODAL ═══════════════════ -->
   <div id="password-modal" class="modal-overlay hidden">
     <div class="auth-card" style="max-width: 400px;">
-      <h2 style="color: var(--cyan); margin-bottom: 1rem;">🔑 Change Password</h2>
+      <h2 style="color: var(--cyan); margin-bottom: 1rem;">Change Password</h2>
       <div id="password-forced-notice" class="auth-error hidden" style="margin-bottom:1rem;">
-        🔒 For security, you must set a new password before continuing.
+        For security, you must set a new password before continuing.
       </div>
       <form id="password-form">
         <div class="form-group">

@@ -118,7 +118,7 @@
     const tbody = $('#invites-tbody');
     tbody.innerHTML = data.codes.map(c => `
       <tr>
-        <td><code class="copy-code" data-copy="${escapeHtml(c.code)}" style="color:var(--cyan);font-family:var(--font-mono);font-size:14px;cursor:pointer;" title="Click to copy">${escapeHtml(c.code)} 📋</code></td>
+        <td><code class="copy-code" data-copy="${escapeHtml(c.code)}" style="color:var(--cyan);font-family:var(--font-mono);font-size:14px;cursor:pointer;" title="Click to copy">${escapeHtml(c.code)}</code></td>
         <td>${escapeHtml(c.created_by_name || 'System')}</td>
         <td>${c.used_by_name ? escapeHtml(c.used_by_name) : '—'}</td>
         <td>${c.used_at ? relativeTime(c.used_at) : '—'}</td>
@@ -130,8 +130,8 @@
   // Unified source health status — must match the user dashboard exactly
   function sourceStatus(s) {
     if (!s.enabled) return { cls: 'disabled', label: 'Disabled' };
-    if (s.last_error) return { cls: 'error', label: '⚠️ Error' };
-    if (s.last_fetched) return { cls: 'active', label: '✓ OK' };
+    if (s.last_error) return { cls: 'error', label: 'Error' };
+    if (s.last_fetched) return { cls: 'active', label: 'OK' };
     return { cls: 'idle', label: '○ Not yet fetched' };
   }
 
@@ -173,7 +173,7 @@
       const errorCount = sources.filter(s => s.last_error).length;
       const errBadge = errorCount ? `<span style="color:var(--red);font-size:12px;margin-left:6px;">● ${errorCount} down</span>` : '';
       html += `<div class="user-source-group">
-        <h4 style="color:var(--cyan);margin:16px 0 8px;font-size:14px;">👤 ${escapeHtml(g.name)} <span style="color:var(--text-muted);font-size:12px;">(${sources.length} source${sources.length === 1 ? '' : 's'})</span>${errBadge}</h4>`;
+        <h4 style="color:var(--cyan);margin:16px 0 8px;font-size:14px;">${escapeHtml(g.name)} <span style="color:var(--text-muted);font-size:12px;">(${sources.length} source${sources.length === 1 ? '' : 's'})</span>${errBadge}</h4>`;
       if (sources.length === 0) {
         html += `<p style="color:var(--text-muted);font-size:12px;padding:4px 2px 8px;">No sources yet.</p></div>`;
         continue;
@@ -246,7 +246,7 @@
     if (copyCode) {
       copyText(copyCode.dataset.copy).then(() => {
         const original = copyCode.textContent;
-        copyCode.textContent = '✅ Copied!';
+        copyCode.textContent = 'Copied!';
         copyCode.style.color = 'var(--green)';
         setTimeout(() => { copyCode.textContent = original; copyCode.style.color = 'var(--cyan)'; }, 1500);
         showToast('Invite code copied to clipboard', 'success');
@@ -339,7 +339,9 @@
     const apply = (t) => {
       document.documentElement.setAttribute('data-theme', t);
       try { localStorage.setItem('tp_theme', t); } catch (e) {}
-      if (btn) btn.textContent = t === 'light' ? '☀️' : '🌙';
+      if (btn) btn.innerHTML = t === 'light'
+        ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M6.3 17.7l-1.4 1.4M19.1 4.9l-1.4 1.4"/></svg>'
+        : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
     };
     apply(localStorage.getItem('tp_theme') || 'dark');
     if (btn) btn.addEventListener('click', () => {
