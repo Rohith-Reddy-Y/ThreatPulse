@@ -7,17 +7,26 @@
     "start": "node server.js",
     "dev": "node --watch server.js"
   },
-  "keywords": ["threat-intelligence", "cybersecurity", "vulnerability", "cve", "aggregator"],
+  "keywords": [
+    "threat-intelligence",
+    "cybersecurity",
+    "vulnerability",
+    "cve",
+    "aggregator"
+  ],
   "author": "Rohit",
   "license": "MIT",
   "dependencies": {
-    "express": "^4.21.0",
-    "better-sqlite3": "^11.7.0",
-    "rss-parser": "^3.13.0",
     "axios": "^1.7.0",
+    "better-sqlite3": "^11.7.0",
+    "cheerio": "^1.0.0",
+    "dotenv": "^16.4.0",
+    "express": "^4.21.0",
     "node-cron": "^3.0.3",
     "nodemailer": "^6.9.0",
-    "cheerio": "^1.0.0",
-    "dotenv": "^16.4.0"
+    "rss-parser": "^3.13.0"
+  },
+  "optionalDependencies": {
+    "puppeteer-core": "^25.3.0"
   }
 }

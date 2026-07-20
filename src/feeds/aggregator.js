@@ -51,6 +51,7 @@ async function fetchAllSources() {
     const apiSources = sources.filter(s => s.type === 'api');
     const darkwebSources = sources.filter(s => s.type === 'darkweb');
     const customSources = sources.filter(s => s.type === 'custom' || s.type === 'website');
+    const browserSources = sources.filter(s => s.type === 'browser');
 
     // --- 1. Fetch RSS Feeds (parallel, batched) ---
     console.log(`\n[RSS] Fetching ${rssSources.length} RSS feeds...`);
@@ -187,6 +188,41 @@ async function fetchAllSources() {
           });
         }
         await sleep(2000); // Be polite with scraping
+      }
+    }
+
+    // --- 5. Fetch Cloudflare/Akamai-protected feeds via a headless browser ---
+    if (browserSources.length > 0) {
+      const browserFetcher = require('./browser-fetcher');
+      if (browserFetcher.isAvailable()) {
+        console.log(`\n[Browser] Fetching ${browserSources.length} protected feeds via headless browser...`);
+        try {
+          const { articles, results } = await browserFetcher.fetchViaBrowser(browserSources);
+          if (articles.length > 0) {
+            const inserted = db.insertArticles(articles);
+            totalNew += inserted.newCount;
+            totalFetched += articles.length;
+            newArticles.push(...inserted.newArticles);
+          }
+          for (const r of results) {
+            if (!r.success) totalErrors++;
+            db.updateSourceFetchStatus(r.source.id, {
+              last_fetched: new Date().toISOString(),
+              last_error: r.success ? null : r.error
+            });
+          }
+        } catch (error) {
+          totalErrors++;
+          console.error(`[Browser] Overall error: ${error.message}`);
+        }
+      } else {
+        console.log(`[Browser] Skipping ${browserSources.length} browser-type source(s) — no headless Chrome on this host (install Chrome or set PUPPETEER_EXECUTABLE_PATH).`);
+        for (const source of browserSources) {
+          db.updateSourceFetchStatus(source.id, {
+            last_fetched: new Date().toISOString(),
+            last_error: 'Headless browser not available on this host'
+          });
+        }
       }
     }
 

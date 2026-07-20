@@ -1193,6 +1193,31 @@ const DEFAULT_SOURCES = [
     category: 'malware',
     added_by: 'system'
   },
+
+  // ============================================
+  // BROWSER-FETCHED (Cloudflare/Akamai protected — needs headless Chrome)
+  // ============================================
+  {
+    name: 'Outpost24 Blog',
+    url: 'https://outpost24.com/blog/feed/',
+    type: 'browser',
+    category: 'vulnerability',
+    added_by: 'system'
+  },
+  {
+    name: 'Tripwire State of Security',
+    url: 'https://www.tripwire.com/state-of-security/feed/',
+    type: 'browser',
+    category: 'news',
+    added_by: 'system'
+  },
+  {
+    name: 'Security Boulevard',
+    url: 'https://securityboulevard.com/feed/',
+    type: 'browser',
+    category: 'news',
+    added_by: 'system'
+  }
 ];
 
 // System sources that were removed because their feeds are permanently broken.
