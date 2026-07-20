@@ -765,15 +765,15 @@
       errEl.classList.add('hidden');
       try {
         const result = await api('PUT', '/api/auth/email', { email: $('#account-email').value.trim() });
-        if (result.success) {
-          if (currentUser) {
-            currentUser.email = result.email;
-            localStorage.setItem('tp_user', JSON.stringify(currentUser));
-          }
-          showToast('Success', 'Email updated.', 'success');
+        if (result.success && result.verificationRequired) {
           $('#email-modal').classList.add('hidden');
+          $('#verification-code').value = '';
+          $('#verification-error').classList.add('hidden');
+          $('#verification-notice').textContent = `We sent a 6-digit verification code to your new email: ${result.email}. Please enter it below to confirm.`;
+          state.pendingVerificationType = 'email_change';
+          $('#verification-modal').classList.remove('hidden');
         } else {
-          errEl.textContent = result.error; errEl.classList.remove('hidden');
+          errEl.textContent = result.error || 'Failed to update email'; errEl.classList.remove('hidden');
         }
       } catch (err) {
         errEl.textContent = err.message; errEl.classList.remove('hidden');
@@ -796,20 +796,61 @@
           currentPassword: $('#current-password').value,
           newPassword: $('#new-password').value
         });
-        if (result.success) {
-          showToast('Success', 'Password changed successfully.', 'success');
-          if (currentUser) {
-            currentUser.mustChangePassword = false;
-            localStorage.setItem('tp_user', JSON.stringify(currentUser));
-          }
+        if (result.success && result.verificationRequired) {
           $('#password-modal').classList.add('hidden');
-          const notice = $('#password-forced-notice');
-          if (notice) notice.classList.add('hidden');
-          const cancelBtn = $('#cancel-password-btn');
-          if (cancelBtn) cancelBtn.classList.remove('hidden');
-          $('#password-form').reset();
+          $('#verification-code').value = '';
+          $('#verification-error').classList.add('hidden');
+          $('#verification-notice').textContent = `We sent a 6-digit verification code to your registered email: ${result.email}. Please enter it below to confirm.`;
+          state.pendingVerificationType = 'password_change';
+          $('#verification-modal').classList.remove('hidden');
         } else {
-          errEl.textContent = result.error;
+          errEl.textContent = result.error || 'Failed to change password';
+          errEl.classList.remove('hidden');
+        }
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+    });
+
+    // Verification Form submit
+    $('#cancel-verification-btn')?.addEventListener('click', () => {
+      $('#verification-modal').classList.add('hidden');
+      state.pendingVerificationType = null;
+    });
+    $('#verification-form')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errEl = $('#verification-error');
+      errEl.classList.add('hidden');
+      try {
+        const code = $('#verification-code').value.trim();
+        const type = state.pendingVerificationType;
+        if (!code || !type) return;
+
+        const result = await api('POST', '/api/auth/verify-change', { type, code });
+        if (result.success) {
+          if (type === 'email_change') {
+            if (currentUser) {
+              currentUser.email = result.email;
+              localStorage.setItem('tp_user', JSON.stringify(currentUser));
+            }
+            showToast('Success', 'Email updated successfully.', 'success');
+          } else if (type === 'password_change') {
+            if (currentUser) {
+              currentUser.mustChangePassword = false;
+              localStorage.setItem('tp_user', JSON.stringify(currentUser));
+            }
+            showToast('Success', 'Password changed successfully.', 'success');
+            const notice = $('#password-forced-notice');
+            if (notice) notice.classList.add('hidden');
+            const cancelBtn = $('#cancel-password-btn');
+            if (cancelBtn) cancelBtn.classList.remove('hidden');
+          }
+          $('#verification-modal').classList.add('hidden');
+          $('#password-form').reset();
+          state.pendingVerificationType = null;
+        } else {
+          errEl.textContent = result.error || 'Verification failed';
           errEl.classList.remove('hidden');
         }
       } catch (err) {

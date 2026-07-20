@@ -7,7 +7,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../database');
 const auth = require('../auth');
-const { sendAlertEmail } = require('../notifications/email-notifier');
+const { sendAlertEmail, sendVerificationEmail } = require('../notifications/email-notifier');
 const { sendTelegramAlert } = require('../notifications/telegram-notifier');
 const { sendTeamsAlert } = require('../notifications/teams-notifier');
 const { sendWhatsAppAlert } = require('../notifications/whatsapp-notifier');
@@ -132,7 +132,7 @@ router.get('/auth/me', auth.requireAuth, (req, res) => {
   });
 });
 
-router.put('/auth/password', auth.requireAuth, (req, res) => {
+router.put('/auth/password', auth.requireAuth, async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
     if (!currentPassword || !newPassword) {
@@ -153,19 +153,33 @@ router.put('/auth/password', auth.requireAuth, (req, res) => {
       return res.status(400).json({ success: false, error: 'New password must be different from the current one' });
     }
 
-    const salt = auth.generateSalt();
-    const newHash = auth.hashPassword(newPassword, salt);
-    db.updateUserPassword(req.user.id, newHash, salt); // also clears must_change_password
-    db.logAudit(req.user.id, 'password_change', 'Password changed', req.ip);
+    // Generate verification code (6 digits)
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 mins
 
-    res.json({ success: true });
+    // Hash the new password and store it as newHash:newSalt in target_value
+    const newSalt = auth.generateSalt();
+    const newHash = auth.hashPassword(newPassword, newSalt);
+    const targetValue = `${newHash}:${newSalt}`;
+
+    db.createVerificationCode(req.user.id, 'password_change', targetValue, code, expiresAt);
+
+    // Send code to current email
+    const userEmail = user.email || req.user.email;
+    if (!userEmail) {
+      return res.status(400).json({ success: false, error: 'No email address registered. Contact admin to set one.' });
+    }
+
+    await sendVerificationEmail(userEmail, req.user.displayName, 'password_change', code);
+
+    res.json({ success: true, verificationRequired: true, type: 'password_change', email: userEmail });
   } catch (error) {
     console.error('[API] Change password error:', error.message);
-    res.status(500).json({ success: false, error: 'Failed to change password' });
+    res.status(500).json({ success: false, error: 'Failed to initiate password change' });
   }
 });
 
-router.put('/auth/email', auth.requireAuth, (req, res) => {
+router.put('/auth/email', auth.requireAuth, async (req, res) => {
   try {
     const email = auth.sanitizeString(req.body.email, 255);
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -182,36 +196,80 @@ router.put('/auth/email', auth.requireAuth, (req, res) => {
       return res.status(400).json({ success: false, error: 'That is already your email address' });
     }
 
-    db.updateUserEmail(req.user.id, email);
-    db.logAudit(req.user.id, 'email_change', `Email updated to ${email}`, req.ip);
-    res.json({ success: true, email });
+    // Generate verification code (6 digits)
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 mins
 
-    // Notify the user of the change (like real-world apps): confirm to the new
-    // address, and alert the old one so an unauthorized change is noticed.
-    // Fire-and-forget — the response has already been sent.
-    (async () => {
-      try {
-        const when = new Date().toLocaleString();
-        const confirm = [{
-          title: '✉️ Your ThreatPulse email was changed',
-          description: `Hi ${req.user.displayName}, the email on your ThreatPulse account was updated to ${email} on ${when}. If you made this change, no action is needed. If you did NOT, reset your password immediately and contact your administrator.`,
-          url: process.env.BASE_URL || `${req.protocol}://${req.get('host')}`,
-          source_name: 'ThreatPulse Security',
-          published_date: new Date().toISOString(),
-          category: 'advisory', severity: 'high',
-          cve_id: null, is_patched: -1, has_poc: 0, tags: 'account-security'
-        }];
-        await sendAlertEmail(confirm, email);
-        if (previousEmail && previousEmail !== email) {
-          await sendAlertEmail(confirm, previousEmail);
-        }
-      } catch (mailErr) {
-        console.error('[API] Email-change notification failed:', mailErr.message);
-      }
-    })();
+    db.createVerificationCode(req.user.id, 'email_change', email, code, expiresAt);
+
+    // Send verification code to the NEW email address
+    await sendVerificationEmail(email, req.user.displayName, 'email_change', code);
+
+    res.json({ success: true, verificationRequired: true, type: 'email_change', email });
   } catch (error) {
     console.error('[API] Change email error:', error.message);
-    res.status(500).json({ success: false, error: 'Failed to update email' });
+    res.status(500).json({ success: false, error: 'Failed to initiate email change' });
+  }
+});
+
+router.post('/auth/verify-change', auth.requireAuth, (req, res) => {
+  try {
+    const { type, code } = req.body;
+    if (!type || !code) {
+      return res.status(400).json({ success: false, error: 'Verification type and code are required' });
+    }
+
+    const verification = db.validateVerificationCode(req.user.id, type, code);
+    if (!verification) {
+      return res.status(400).json({ success: false, error: 'Invalid or expired verification code' });
+    }
+
+    if (type === 'email_change') {
+      const newEmail = verification.target_value;
+      const previousEmail = req.user.email;
+
+      db.updateUserEmail(req.user.id, newEmail);
+      db.logAudit(req.user.id, 'email_change', `Email updated to ${newEmail} via verification code`, req.ip);
+      db.deleteVerificationCode(verification.id);
+
+      // Notify old and new emails
+      (async () => {
+        try {
+          const when = new Date().toLocaleString();
+          const confirm = [{
+            title: '✉️ Your ThreatPulse email was changed',
+            description: `Hi ${req.user.displayName}, the email on your ThreatPulse account was updated to ${newEmail} on ${when}. If you made this change, no action is needed.`,
+            url: process.env.BASE_URL || `${req.protocol}://${req.get('host')}`,
+            source_name: 'ThreatPulse Security',
+            published_date: new Date().toISOString(),
+            category: 'advisory', severity: 'high',
+            cve_id: null, is_patched: -1, has_poc: 0, tags: 'account-security'
+          }];
+          await sendAlertEmail(confirm, newEmail);
+          if (previousEmail) {
+            await sendAlertEmail(confirm, previousEmail);
+          }
+        } catch (mailErr) {
+          console.error('[API] Verification notification email failed:', mailErr.message);
+        }
+      })();
+
+      return res.json({ success: true, email: newEmail, message: 'Email address updated successfully' });
+
+    } else if (type === 'password_change') {
+      const [newHash, newSalt] = verification.target_value.split(':');
+
+      db.updateUserPassword(req.user.id, newHash, newSalt); // also clears must_change_password
+      db.logAudit(req.user.id, 'password_change', 'Password changed via verification code', req.ip);
+      db.deleteVerificationCode(verification.id);
+
+      return res.json({ success: true, message: 'Password updated successfully' });
+    }
+
+    res.status(400).json({ success: false, error: 'Unsupported verification type' });
+  } catch (error) {
+    console.error('[API] Verification error:', error.message);
+    res.status(500).json({ success: false, error: 'Failed to verify change' });
   }
 });
 

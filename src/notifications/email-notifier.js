@@ -162,4 +162,56 @@ async function sendTestEmail(recipientEmail, smtpConfig = null) {
   return sendAlertEmail(testArticles, recipientEmail, smtpConfig);
 }
 
-module.exports = { initTransporter, sendAlertEmail, sendTestEmail };
+async function sendVerificationEmail(recipientEmail, username, type, code, smtpConfig = null) {
+  const t = initTransporter(smtpConfig);
+  if (!t) {
+    console.log(`[Email Mock] SMTP not configured. Verification code for ${username} is: ${code}`);
+    return { success: true, mock: true, code };
+  }
+
+  const subject = type === 'email_change' 
+    ? '✉️ Verify your new ThreatPulse email address' 
+    : '🔑 Verify your ThreatPulse password change';
+
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head><meta charset="utf-8"></head>
+    <body style="margin: 0; padding: 0; background: #0a0e17; font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; color: #eaedf7;">
+      <div style="max-width: 500px; margin: 0 auto; padding: 24px;">
+        <div style="text-align: center; padding: 24px 0;">
+          <h1 style="color: #00f0ff; font-size: 24px; margin: 0;">🛡️ ThreatPulse Verification</h1>
+        </div>
+        <div style="background: rgba(15,20,35,0.9); border-radius: 12px; padding: 24px; border: 1px solid #1a2332; text-align: center;">
+          <p style="font-size: 15px; color: #8899aa; margin-bottom: 20px;">
+            Hi ${username},<br>
+            Please use the verification code below to complete your ${type === 'email_change' ? 'email' : 'password'} change.
+          </p>
+          <div style="background: #111424; border: 1px solid #7c5cff; border-radius: 8px; padding: 16px; font-size: 32px; font-weight: 700; letter-spacing: 6px; color: #22d3ee; margin: 20px auto; max-width: 200px;">
+            ${code}
+          </div>
+          <p style="font-size: 12px; color: #556677; margin-top: 20px;">
+            This code will expire in 15 minutes. If you did not request this change, please ignore this email.
+          </p>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+
+  try {
+    const info = await t.transporter.sendMail({
+      from: `"ThreatPulse 🛡️" <${t.user}>`,
+      to: recipientEmail,
+      subject,
+      html
+    });
+    console.log(`[Email] Verification email sent to ${recipientEmail}: ${info.messageId}`);
+    return { success: true, messageId: info.messageId };
+  } catch (error) {
+    console.error(`[Email] Verification send failed: ${error.message}`);
+    return { success: false, error: error.message };
+  }
+}
+
+module.exports = { initTransporter, sendAlertEmail, sendTestEmail, sendVerificationEmail };

@@ -90,7 +90,7 @@ function initializeSchema() {
     CREATE TABLE IF NOT EXISTS sources (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
-      url TEXT NOT NULL UNIQUE,
+      url TEXT NOT NULL,
       type TEXT NOT NULL DEFAULT 'rss',
       category TEXT DEFAULT 'news',
       enabled INTEGER DEFAULT 1,
@@ -99,7 +99,8 @@ function initializeSchema() {
       last_fetched TEXT,
       last_error TEXT,
       fetch_count INTEGER DEFAULT 0,
-      created_at TEXT DEFAULT (datetime('now'))
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(url, user_id)
     );
 
     CREATE TABLE IF NOT EXISTS articles (
@@ -138,6 +139,17 @@ function initializeSchema() {
       status TEXT DEFAULT 'sent',
       error_message TEXT,
       FOREIGN KEY (article_id) REFERENCES articles(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS verification_codes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      type TEXT NOT NULL,
+      target_value TEXT,
+      code TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
   `);
 
@@ -252,6 +264,41 @@ function initializeSchema() {
   ];
   for (const sql of indexes) {
     try { d.exec(sql); } catch(e) { /* index already exists */ }
+  }
+
+  // Step 5b: Migrate sources UNIQUE constraint from url-only to (url, user_id)
+  // so different users can each have the same source URL independently.
+  try {
+    const hasOldUnique = d.prepare(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='sources'"
+    ).get();
+    if (hasOldUnique && hasOldUnique.sql && hasOldUnique.sql.includes('url TEXT NOT NULL UNIQUE')) {
+      console.log('[DB] Migrating sources table: url UNIQUE -> UNIQUE(url, user_id)...');
+      d.exec(`
+        CREATE TABLE sources_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          url TEXT NOT NULL,
+          type TEXT NOT NULL DEFAULT 'rss',
+          category TEXT DEFAULT 'news',
+          enabled INTEGER DEFAULT 1,
+          added_by TEXT DEFAULT 'system',
+          user_id INTEGER,
+          last_fetched TEXT,
+          last_error TEXT,
+          fetch_count INTEGER DEFAULT 0,
+          created_at TEXT DEFAULT (datetime('now')),
+          UNIQUE(url, user_id)
+        );
+        INSERT INTO sources_new SELECT * FROM sources;
+        DROP TABLE sources;
+        ALTER TABLE sources_new RENAME TO sources;
+        CREATE INDEX IF NOT EXISTS idx_sources_user ON sources(user_id);
+      `);
+      console.log('[DB] Sources table migrated successfully ✓');
+    }
+  } catch(e) {
+    console.warn('[DB] Sources UNIQUE migration note:', e.message);
   }
 
   // Step 6: Assign orphaned sources/articles (user_id IS NULL) to admin user
@@ -485,7 +532,7 @@ function addSource({ name, url, type = 'rss', category = 'news', added_by = 'use
     return { id: result.lastInsertRowid, success: true };
   } catch (err) {
     if (err.message.includes('UNIQUE')) {
-      return { success: false, error: 'Source URL already exists' };
+      return { success: false, error: 'Source URL already exists for this user' };
     }
     throw err;
   }
@@ -847,6 +894,25 @@ function getAuditLog(limit = 100) {
   ).all(limit);
 }
 
+// Verification codes for email/password updates
+function createVerificationCode(userId, type, targetValue, code, expiresAt) {
+  getDb().prepare('DELETE FROM verification_codes WHERE user_id = ? AND type = ?').run(userId, type);
+  getDb().prepare(
+    'INSERT INTO verification_codes (user_id, type, target_value, code, expires_at) VALUES (?, ?, ?, ?, ?)'
+  ).run(userId, type, targetValue, code, expiresAt);
+}
+
+function validateVerificationCode(userId, type, code) {
+  const row = getDb().prepare(
+    "SELECT * FROM verification_codes WHERE user_id = ? AND type = ? AND code = ? AND expires_at > datetime('now')"
+  ).get(userId, type, code);
+  return row || null;
+}
+
+function deleteVerificationCode(id) {
+  getDb().prepare('DELETE FROM verification_codes WHERE id = ?').run(id);
+}
+
 module.exports = {
   getDb,
   initializeSchema,
@@ -908,6 +974,10 @@ module.exports = {
   // Audit
   logAudit,
   getAuditLog,
+  // Verification Codes
+  createVerificationCode,
+  validateVerificationCode,
+  deleteVerificationCode,
   // Utils
   hashUrl
 };

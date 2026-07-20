@@ -556,6 +556,25 @@
     </div>
   </div>
 
+  <!-- ═══════════════════ VERIFICATION CODE MODAL ═══════════════════ -->
+  <div id="verification-modal" class="modal-overlay hidden">
+    <div class="auth-card" style="max-width: 400px;">
+      <h2 style="color: var(--cyan); margin-bottom: 0.5rem;">Enter Verification Code</h2>
+      <p id="verification-notice" style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 1.5rem;"></p>
+      <form id="verification-form">
+        <div class="form-group">
+          <label for="verification-code">6-Digit Code</label>
+          <input type="text" id="verification-code" placeholder="123456" required pattern="[0-9]{6}" maxlength="6" style="text-align: center; font-size: 1.5rem; letter-spacing: 4px; font-family: var(--font-mono);">
+        </div>
+        <div id="verification-error" class="auth-error hidden"></div>
+        <div style="display: flex; gap: 8px;">
+          <button type="submit" class="btn btn-primary" style="flex:1;">Verify & Save</button>
+          <button type="button" class="btn btn-ghost" id="cancel-verification-btn">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <script src="/js/app.js"></script>
 </body>
 </html>

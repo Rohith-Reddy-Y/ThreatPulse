@@ -618,14 +618,25 @@ body::after {
   color: var(--text-primary);
 }
 
-/* Dark mode dropdown options */
-.filter-select option {
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-  padding: 8px 12px;
+.filter-select, .form-select {
+  color-scheme: dark;
+}
+[data-theme="light"] .filter-select, [data-theme="light"] .form-select {
+  color-scheme: light;
 }
 
-.filter-select option:checked {
+/* Dropdown options styling */
+.filter-select option, .form-select option {
+  background-color: #111322 !important;
+  color: #eaedf7 !important;
+}
+
+[data-theme="light"] .filter-select option, [data-theme="light"] .form-select option {
+  background-color: #ffffff !important;
+  color: #171b2e !important;
+}
+
+.filter-select option:checked, .form-select option:checked {
   background: var(--grad-soft);
   color: var(--text-primary);
 }

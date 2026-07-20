@@ -232,6 +232,26 @@ function registerUser(username, displayName, password, inviteCode, email = null)
   // Create default notification settings for this user
   db.createUserNotificationSettings(result.id);
 
+  // Seed default sources for the new user so they start with the full feed library
+  try {
+    const { DEFAULT_SOURCES } = require('./feeds/default-sources');
+    let seeded = 0;
+    for (const source of DEFAULT_SOURCES) {
+      const addResult = db.addSource({
+        name: source.name,
+        url: source.url,
+        type: source.type,
+        category: source.category,
+        added_by: 'system',
+        user_id: result.id
+      });
+      if (addResult.success) seeded++;
+    }
+    console.log(`[Auth] Seeded ${seeded} default sources for new user "${username}" (id=${result.id})`);
+  } catch (e) {
+    console.warn(`[Auth] Could not seed sources for new user: ${e.message}`);
+  }
+
   // Generate token
   const token = createToken({ userId: result.id, username, role: 'analyst' });
 
