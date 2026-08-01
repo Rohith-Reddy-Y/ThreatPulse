@@ -399,7 +399,8 @@ function updateUser(id, updates) {
   }
   if (fields.length === 0) return { success: false, error: 'No valid fields' };
   values.push(id);
-  getDb().prepare(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+  const result = getDb().prepare(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+  if (result.changes === 0) return { success: false, error: 'User not found' };
   return { success: true };
 }
 

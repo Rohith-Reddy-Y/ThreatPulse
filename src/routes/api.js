@@ -623,6 +623,7 @@ router.put('/admin/users/:id', auth.requireAuth, auth.requireAdmin, (req, res) =
   try {
     const userId = parseInt(req.params.id);
     const result = db.updateUser(userId, req.body);
+    if (!result.success) return res.status(400).json(result);
     db.logAudit(req.user.id, 'admin_user_update', `Updated user ${userId}: ${JSON.stringify(req.body)}`, req.ip);
     res.json(result);
   } catch (error) {
