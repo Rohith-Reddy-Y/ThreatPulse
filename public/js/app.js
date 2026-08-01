@@ -622,6 +622,35 @@
       }
     });
 
+    // Auth: Register — password strength + confirm match (real-time)
+    $('#reg-password').addEventListener('input', () => {
+      const pw = $('#reg-password').value;
+      const meter = $('#password-strength');
+      if (!pw) { meter.classList.add('hidden'); meter.className = 'password-strength hidden'; return; }
+      meter.classList.remove('hidden');
+      let score = 0;
+      if (pw.length >= 8) score++;
+      if (pw.length >= 12) score++;
+      if (/[A-Z]/.test(pw)) score++;
+      if (/[a-z]/.test(pw)) score++;
+      if (/[0-9]/.test(pw)) score++;
+      if (/[^A-Za-z0-9]/.test(pw)) score++;
+      const levels = ['weak','weak','fair','good','strong','strong','strong'];
+      const labels = ['Very Weak','Weak','Fair','Good','Strong','Very Strong','Excellent'];
+      const cls = levels[Math.min(score, 6)];
+      $('#strength-text').textContent = labels[Math.min(score, 6)];
+      meter.className = 'password-strength strength-' + cls;
+    });
+    $('#reg-confirm').addEventListener('input', () => {
+      const match = $('#reg-password').value === $('#reg-confirm').value;
+      const hint = $('#confirm-match');
+      if ($('#reg-confirm').value) {
+        hint.classList.toggle('hidden', match);
+      } else {
+        hint.classList.add('hidden');
+      }
+    });
+
     // Auth: Register
     $('#register-form').addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -684,7 +713,11 @@
           body: JSON.stringify({ email: $('#forgot-email').value.trim() })
         }).then(r => r.json());
         if (result.success) {
-          okEl.textContent = (result.message || 'If that email exists, a reset link has been sent.');
+          let msg = result.message || 'If that email exists, a reset link has been sent.';
+          if (result._devResetLink) {
+            msg += '\n\n⚠️ SMTP not configured. Copy this link to reset:\n' + result._devResetLink;
+          }
+          okEl.textContent = msg;
           okEl.classList.remove('hidden');
         } else {
           errEl.textContent = (result.error || 'Request failed');

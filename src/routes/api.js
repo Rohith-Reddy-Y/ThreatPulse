@@ -99,6 +99,7 @@ router.post('/auth/forgot-password', async (req, res) => {
       const baseUrl = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
       const resetLink = `${baseUrl}/?reset=${result._token}`;
       
+      let emailSent = false;
       try {
         const { sendAlertEmail } = require('../notifications/email-notifier');
         const resetArticle = [{
@@ -114,10 +115,26 @@ router.post('/auth/forgot-password', async (req, res) => {
           has_poc: 0,
           tags: 'password-reset'
         }];
-        await sendAlertEmail(resetArticle, result._email);
-        console.log(`[Auth] Password reset email sent to ${result._email}`);
+        const emailResult = await sendAlertEmail(resetArticle, result._email);
+        emailSent = emailResult.success && !emailResult.mock;
+        if (emailResult.mock) {
+          console.log(`[Auth] ⚠️ SMTP not configured — reset token for ${result._email}: ${resetLink}`);
+        } else {
+          console.log(`[Auth] Password reset email sent to ${result._email}`);
+        }
       } catch (emailErr) {
         console.error(`[Auth] Failed to send reset email: ${emailErr.message}`);
+        console.log(`[Auth] ⚠️ Manual reset link for ${result._email}: ${resetLink}`);
+      }
+
+      // In development or when SMTP fails, include the reset link in the response
+      // so the user can still reset (admin/SRE can relay it).
+      if (!emailSent && (process.env.NODE_ENV !== 'production' || !process.env.SMTP_HOST)) {
+        return res.json({
+          success: true,
+          message: 'Reset link generated. SMTP not configured — copy this link:',
+          _devResetLink: resetLink
+        });
       }
     }
 
