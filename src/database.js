@@ -713,32 +713,34 @@ function getArticles({ page = 1, limit = 50, category, severity, search, source_
 function getArticleStats(userId = null) {
   const d = getDb();
   // Fully isolated per user; admin passes no userId to see totals across everyone.
-  const userFilter = userId ? `AND user_id = ${parseInt(userId)}` : '';
+  const userFilter = userId ? 'AND user_id = ?' : '';
+  const userFilterParam = userId ? [parseInt(userId)] : [];
 
   const threatsToday = d.prepare(
     `SELECT COUNT(*) as count FROM articles WHERE date(published_date) = date('now') ${userFilter}`
-  ).get().count;
+  ).get(...userFilterParam).count;
 
   const criticalVulns = d.prepare(
     `SELECT COUNT(*) as count FROM articles WHERE severity = 'critical' AND date(published_date) >= date('now', '-7 days') ${userFilter}`
-  ).get().count;
+  ).get(...userFilterParam).count;
 
   const pocsDetected = d.prepare(
     `SELECT COUNT(*) as count FROM articles WHERE has_poc = 1 AND date(published_date) >= date('now', '-7 days') ${userFilter}`
-  ).get().count;
+  ).get(...userFilterParam).count;
 
-  const sourceFilter = userId ? `AND user_id = ${parseInt(userId)}` : '';
+  const sourceFilter = userId ? 'AND user_id = ?' : '';
+  const sourceFilterParam = userId ? [parseInt(userId)] : [];
   const activeSources = d.prepare(
     `SELECT COUNT(*) as count FROM sources WHERE enabled = 1 ${sourceFilter}`
-  ).get().count;
+  ).get(...sourceFilterParam).count;
 
   const lastFetch = d.prepare(
     `SELECT MAX(fetched_date) as last FROM articles WHERE 1=1 ${userFilter}`
-  ).get();
+  ).get(...userFilterParam);
 
   const totalArticles = d.prepare(
     `SELECT COUNT(*) as count FROM articles WHERE 1=1 ${userFilter}`
-  ).get().count;
+  ).get(...userFilterParam).count;
 
   return {
     threatsToday,
@@ -752,10 +754,12 @@ function getArticleStats(userId = null) {
 
 function getUnnotifiedArticles(severityThreshold = 'high') {
   const severityOrder = { critical: 4, high: 3, medium: 2, low: 1, info: 0 };
+  const threshold = severityOrder[severityThreshold] || 3;
   const articles = getDb().prepare(
-    `SELECT * FROM articles WHERE notified = 0 ORDER BY published_date DESC`
+    'SELECT * FROM articles WHERE notified = 0 ORDER BY published_date DESC'
   ).all();
-  return articles;
+  // Filter by severity threshold before returning
+  return articles.filter(a => (severityOrder[a.severity] || 0) >= threshold);
 }
 
 function markAsNotified(articleIds) {

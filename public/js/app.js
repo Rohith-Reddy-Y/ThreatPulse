@@ -70,7 +70,7 @@
       throw new Error('Session expired');
     }
     const data = await res.json();
-    if (!res.ok && data.error) throw new Error(data.error);
+    if (!res.ok) throw new Error(data?.error || `Request failed (${res.status})`);
     return data;
   }
 
@@ -289,6 +289,14 @@
       container.innerHTML = '';
       empty.classList.remove('hidden');
       loadMore.classList.add('hidden');
+      // Context-aware empty state
+      const hasFilters = hasActiveFilters();
+      $('#empty-title').textContent = hasFilters ? 'No threats match your filters' : 'No Threats Yet';
+      $('#empty-message').textContent = hasFilters
+        ? 'Your current filters returned nothing. Try widening them or clear all.'
+        : 'Your dashboard is empty. Add threat intelligence sources from the sidebar to start tracking threats, or click Fetch Now.';
+      $('#clear-filters-btn-empty').style.display = hasFilters ? '' : 'none';
+      $('#fetch-now-empty').style.display = hasFilters ? 'none' : '';
       return;
     }
 
@@ -924,8 +932,9 @@
 
     // Fetch now
     $('#fetch-now-btn').addEventListener('click', fetchNow);
+    $('#fetch-now-empty').addEventListener('click', fetchNow);
 
-    // Clear all filters (from the empty state)
+    // Auth: Login
     $('#clear-filters-btn')?.addEventListener('click', clearFilters);
     $('#clear-all-filters-btn')?.addEventListener('click', clearFilters);
 

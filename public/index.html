@@ -332,9 +332,12 @@
       </div>
       <div class="empty-state hidden" id="empty-state">
         <div class="empty-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg></div>
-        <h3>No threats match your filters</h3>
-        <p>Your current filters returned nothing. Try widening them or clear all.</p>
-        <button class="btn btn-primary" id="clear-filters-btn" style="margin-top:14px;">Clear All Filters</button>
+        <h3 id="empty-title">No Threats Yet</h3>
+        <p id="empty-message">Your dashboard is empty. Add your first threat intelligence source from the sidebar to start tracking threats, or click "Fetch Now" to pull the latest data.</p>
+        <div id="empty-actions" style="display:flex;gap:10px;justify-content:center;margin-top:14px;flex-wrap:wrap;">
+          <button class="btn btn-primary" id="clear-filters-btn-empty" style="display:none;">Clear All Filters</button>
+          <button class="btn btn-secondary" id="fetch-now-empty">Fetch Now</button>
+        </div>
       </div>
       <div id="articles-container"></div>
       <div class="load-more-container hidden" id="load-more-container">

@@ -72,11 +72,18 @@ function rateLimit(maxRequests, bucket) {
   };
 }
 
-// Clean rate limit store periodically
+// Clean rate limit store periodically; also cap size to prevent memory growth
 setInterval(() => {
   const now = Date.now();
   for (const [key, entry] of rateLimitStore) {
     if (now > entry.resetAt) rateLimitStore.delete(key);
+  }
+  // If store still has 10k+ entries after cleanup, evict the oldest
+  if (rateLimitStore.size > 10000) {
+    const sorted = [...rateLimitStore.entries()].sort((a, b) => a[1].resetAt - b[1].resetAt);
+    for (let i = 0; i < Math.min(1000, sorted.length); i++) {
+      rateLimitStore.delete(sorted[i][0]);
+    }
   }
 }, 60000);
 

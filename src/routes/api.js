@@ -13,6 +13,18 @@ const { sendTeamsAlert } = require('../notifications/teams-notifier');
 const { sendWhatsAppAlert } = require('../notifications/whatsapp-notifier');
 
 // ============================================
+// FORGOT-PASSWORD THROTTLE
+// ============================================
+let forgotPasswordThrottle = new Map();
+// Clean expired entries every 15 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of forgotPasswordThrottle) {
+    if (now >= entry.resetAt) forgotPasswordThrottle.delete(key);
+  }
+}, 15 * 60 * 1000);
+
+// ============================================
 // AUTH ROUTES (public)
 // ============================================
 
@@ -61,6 +73,23 @@ router.post('/auth/register', (req, res) => {
 });
 
 router.post('/auth/forgot-password', async (req, res) => {
+  // Simple per-IP throttle: max 3 forgot-password requests per 15 minutes
+  const ip = req.ip || req.connection?.remoteAddress || 'unknown';
+  if (!forgotPasswordThrottle) forgotPasswordThrottle = new Map();
+  const now = Date.now();
+  const windowMs = 15 * 60 * 1000;
+  const key = `forgot:${ip}`;
+  const entry = forgotPasswordThrottle.get(key);
+  if (entry && now < entry.resetAt && entry.count >= 3) {
+    // Still return generic success to prevent enumeration
+    return res.json({ success: true, message: 'If an account with that email exists, a reset link has been sent.' });
+  }
+  if (!entry || now >= entry.resetAt) {
+    forgotPasswordThrottle.set(key, { count: 1, resetAt: now + windowMs });
+  } else {
+    entry.count++;
+  }
+
   try {
     const { email } = req.body;
     const result = auth.forgotPassword(auth.sanitizeString(email, 255));

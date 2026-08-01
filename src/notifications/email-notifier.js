@@ -6,9 +6,12 @@
 const nodemailer = require('nodemailer');
 
 let transporter = null;
+let transporterUser = null;
 
 /**
- * Initialize the email transporter
+ * Initialize the email transporter. Creates it once and reuses it.
+ * Pass smtpConfig for per-user SMTP overrides (from notification_settings table);
+ * when those differ from the cached transporter, a new one is created on demand.
  */
 function initTransporter(smtpConfig) {
   const host = smtpConfig?.smtp_host || process.env.SMTP_HOST;
@@ -21,12 +24,16 @@ function initTransporter(smtpConfig) {
     return null;
   }
 
+  // Reuse the existing transporter when the config hasn't changed
+  if (transporter && transporterUser === user) return { transporter, user };
+
   transporter = nodemailer.createTransport({
     host,
     port,
     secure: port === 465,
     auth: { user, pass }
   });
+  transporterUser = user;
 
   console.log(`[Email] Transporter initialized (${host}:${port})`);
   return { transporter, user };
