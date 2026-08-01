@@ -99,6 +99,9 @@ router.post('/auth/forgot-password', async (req, res) => {
       const baseUrl = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
       const resetLink = `${baseUrl}/?reset=${result._token}`;
       
+      // Always log the reset link so admins can find it via `docker logs`
+      console.log(`[Auth] Password reset link for ${result._email}: ${resetLink}`);
+
       let emailSent = false;
       try {
         const { sendAlertEmail } = require('../notifications/email-notifier');
@@ -118,21 +121,22 @@ router.post('/auth/forgot-password', async (req, res) => {
         const emailResult = await sendAlertEmail(resetArticle, result._email);
         emailSent = emailResult.success && !emailResult.mock;
         if (emailResult.mock) {
-          console.log(`[Auth] ⚠️ SMTP not configured — reset token for ${result._email}: ${resetLink}`);
-        } else {
+          console.log('[Auth] ⚠️  SMTP not configured — email NOT sent');
+        } else if (emailResult.success) {
           console.log(`[Auth] Password reset email sent to ${result._email}`);
+        } else {
+          console.log(`[Auth] ⚠️  SMTP send failed: ${emailResult.error}`);
         }
       } catch (emailErr) {
         console.error(`[Auth] Failed to send reset email: ${emailErr.message}`);
-        console.log(`[Auth] ⚠️ Manual reset link for ${result._email}: ${resetLink}`);
       }
 
-      // In development or when SMTP fails, include the reset link in the response
-      // so the user can still reset (admin/SRE can relay it).
-      if (!emailSent && (process.env.NODE_ENV !== 'production' || !process.env.SMTP_HOST)) {
+      // Show the reset link in the response if email didn't actually go out
+      // (SMTP mock, send failure, or no SMTP configured at all)
+      if (!emailSent) {
         return res.json({
           success: true,
-          message: 'Reset link generated. SMTP not configured — copy this link:',
+          message: 'Reset link generated but email could not be sent. Copy this URL to reset your password:',
           _devResetLink: resetLink
         });
       }
