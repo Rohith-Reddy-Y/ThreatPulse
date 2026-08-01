@@ -97,7 +97,7 @@ function buildEmailHTML(articles) {
         </table>
 
         <div style="text-align: center; padding: 24px 0;">
-          <a href="http://localhost:${process.env.PORT || 3000}" style="display: inline-block; background: linear-gradient(135deg, #00f0ff, #0080ff); color: #000; padding: 12px 32px; border-radius: 8px; text-decoration: none; font-weight: 600;">Open ThreatPulse Dashboard →</a>
+          <a href="${process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`}" style="display: inline-block; background: linear-gradient(135deg, #00f0ff, #0080ff); color: #000; padding: 12px 32px; border-radius: 8px; text-decoration: none; font-weight: 600;">Open ThreatPulse Dashboard →</a>
         </div>
 
         <p style="text-align: center; color: #334455; font-size: 12px; margin-top: 16px;">
@@ -153,7 +153,7 @@ async function sendTestEmail(recipientEmail, smtpConfig = null) {
   const testArticles = [{
     title: '🧪 ThreatPulse Test Notification',
     description: 'This is a test notification from ThreatPulse. If you received this email, your notification settings are working correctly!',
-    url: `http://localhost:${process.env.PORT || 3000}`,
+    url: `${process.env.BASE_URL || `http://localhost:${process.env.PORT || 3000}`}`,
     source_name: 'ThreatPulse',
     source_type: 'system',
     author: 'ThreatPulse System',
