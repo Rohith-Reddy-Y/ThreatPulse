@@ -724,6 +724,16 @@ router.get('/admin/audit-log', auth.requireAuth, auth.requireAdmin, (req, res) =
   }
 });
 
+// Admin: view pending password reset tokens (for manual recovery)
+router.get('/admin/reset-tokens', auth.requireAuth, auth.requireAdmin, (req, res) => {
+  try {
+    const pending = db.getPendingResetTokens();
+    res.json({ tokens: pending });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch reset tokens' });
+  }
+});
+
 // ============================================
 // NOTIFICATION HANDLER
 // ============================================

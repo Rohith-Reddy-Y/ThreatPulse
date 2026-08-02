@@ -379,6 +379,17 @@ function cleanupExpiredResetTokens() {
   getDb().prepare('DELETE FROM password_reset_tokens WHERE expires_at < datetime(\'now\') OR used = 1').run();
 }
 
+function getPendingResetTokens() {
+  return getDb().prepare(`
+    SELECT prt.id, prt.user_id, u.username, u.email, prt.token,
+           prt.expires_at, prt.created_at
+    FROM password_reset_tokens prt
+    JOIN users u ON prt.user_id = u.id
+    WHERE prt.used = 0 AND prt.expires_at > datetime('now')
+    ORDER BY prt.created_at DESC
+  `).all();
+}
+
 function getAllUsers() {
   return getDb().prepare(
     `SELECT u.id, u.username, u.display_name, u.role, u.is_active, u.last_login, u.created_at,
@@ -942,6 +953,7 @@ module.exports = {
   validatePasswordResetToken,
   markResetTokenUsed,
   cleanupExpiredResetTokens,
+  getPendingResetTokens,
   // Invite Codes
   createInviteCode,
   validateInviteCode,
