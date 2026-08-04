@@ -250,7 +250,7 @@
       stroke = `${rr.toString(16).padStart(2,'0')}${gg.toString(16).padStart(2,'0')}${bb.toString(16).padStart(2,'0')}`;
     }
 
-    const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23${stroke}' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' opacity='${pulse.toFixed(2)}'><defs><filter id='glow'><feGaussianBlur stdDeviation='0.5' result='blur'/><feMerge><feMergeNode in='blur'/><feMergeNode in='SourceGraphic'/></feMerge></filter></defs><g filter='url(%23glow)'><path d='M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z'/><path d='M9 12l2 2 4-4'/></g></svg>`;
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='#${stroke}' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' opacity='${pulse.toFixed(2)}'><defs><filter id='glow'><feGaussianBlur stdDeviation='0.5' result='blur'/><feMerge><feMergeNode in='blur'/><feMergeNode in='SourceGraphic'/></feMerge></filter></defs><g filter='url(#glow)'><path d='M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z'/><path d='M9 12l2 2 4-4'/></g></svg>`;
 
     const favicon = $('#dynamic-favicon');
     if (favicon) favicon.href = 'data:image/svg+xml,' + encodeURIComponent(svg);
