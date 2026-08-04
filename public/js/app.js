@@ -22,7 +22,7 @@
     currentPage: 1,
     totalPages: 1,
     totalArticles: 0,
-    filters: { category: '', severity: '', source_type: '', search: '', sector: '', threat_actor: '', has_poc: '', has_mitre: '', is_patched: '' },
+    filters: { category: '', severity: '', source_type: '', search: '', sector: '', threat_actor: '', has_poc: '', has_mitre: '', is_patched: '', time_range: '' },
     refreshCountdown: 60,
     refreshTimer: null,
     countdownTimer: null,
@@ -273,6 +273,7 @@
       if (state.filters.has_poc) params.set('has_poc', state.filters.has_poc);
       if (state.filters.has_mitre) params.set('has_mitre', state.filters.has_mitre);
       if (state.filters.is_patched !== '') params.set('is_patched', state.filters.is_patched);
+      if (state.filters.time_range) params.set('time_range', state.filters.time_range);
 
       const data = await api('GET', `${d('L2FwaS9hcnRpY2xlcw==')}?${params}`);
       state.currentPage = data.page;
@@ -405,8 +406,8 @@
         ? '<span class="badge badge-unpatched">Unpatched</span>'
         : '';
 
-    // Owner label — admins see which user each threat belongs to
-    const ownerBadge = (currentUser && currentUser.role === 'admin' && article.owner_name)
+    // Owner label — shows which user's source each article came from
+    const ownerBadge = article.owner_name
       ? `<span class="badge badge-owner">${escapeHtml(article.owner_name)}</span>`
       : '';
 
@@ -580,10 +581,10 @@
   }
 
   function clearFilters() {
-    state.filters = { category: '', severity: '', source_type: '', search: '', sector: '', threat_actor: '', has_poc: '', has_mitre: '', is_patched: '' };
+    state.filters = { category: '', severity: '', source_type: '', search: '', sector: '', threat_actor: '', has_poc: '', has_mitre: '', is_patched: '', time_range: '' };
     state.currentPage = 1;
     const si = $('#search-input'); if (si) si.value = '';
-    ['#severity-filter', '#source-type-filter', '#sector-filter', '#threat-actor-filter', '#patch-filter'].forEach(sel => {
+    ['#severity-filter', '#source-type-filter', '#sector-filter', '#threat-actor-filter', '#patch-filter', '#time-range-filter'].forEach(sel => {
       const el = $(sel); if (el) { el.value = ''; el.classList.remove('has-value'); }
     });
     $$('.toggle-pill').forEach(b => b.classList.remove('active'));
@@ -598,7 +599,7 @@
     const f = state.filters;
     return !!(f.category || f.severity || f.source_type || f.search ||
               f.sector || f.threat_actor || f.has_poc || f.has_mitre ||
-              (f.is_patched !== ''));
+              (f.is_patched !== '') || f.time_range);
   }
 
   function updateClearAllButton() {
@@ -1119,7 +1120,7 @@
 
     // Severity filter
     // Dropdown filters — shared handler that adds/removes .has-value class
-    ['#severity-filter', '#source-type-filter', '#sector-filter', '#threat-actor-filter', '#patch-filter'].forEach(sel => {
+    ['#severity-filter', '#source-type-filter', '#sector-filter', '#threat-actor-filter', '#patch-filter', '#time-range-filter'].forEach(sel => {
       const el = $(sel);
       if (!el) return;
       el.addEventListener('change', (e) => {
@@ -1128,7 +1129,8 @@
           '#source-type-filter': 'source_type',
           '#sector-filter': 'sector',
           '#threat-actor-filter': 'threat_actor',
-          '#patch-filter': 'is_patched'
+          '#patch-filter': 'is_patched',
+          '#time-range-filter': 'time_range'
         };
         state.filters[filterMap[sel]] = e.target.value;
         e.target.classList.toggle('has-value', e.target.value !== '');

@@ -363,7 +363,20 @@ router.post('/auth/verify-change', auth.requireAuth, (req, res) => {
 
 router.get('/articles', auth.requireAuth, (req, res) => {
   try {
-    const { page, limit, category, severity, search, source_type, start_date, end_date, sector, threat_actor, has_poc, has_mitre, is_patched } = req.query;
+    const { page, limit, category, severity, search, source_type, start_date, end_date, time_range, sector, threat_actor, has_poc, has_mitre, is_patched } = req.query;
+
+    // Translate time_range shorthand to start/end dates
+    let startDate = start_date;
+    let endDate = end_date;
+    if (time_range && time_range !== 'custom' && time_range !== 'all') {
+      const now = new Date();
+      endDate = now.toISOString();
+      const ranges = { '1h': 60*60*1000, '6h': 6*60*60*1000, '12h': 12*60*60*1000, '24h': 24*60*60*1000, '7d': 7*24*60*60*1000, '30d': 30*24*60*60*1000 };
+      if (ranges[time_range]) {
+        startDate = new Date(now.getTime() - ranges[time_range]).toISOString();
+      }
+    }
+
     const result = db.getArticles({
       page: parseInt(page) || 1,
       limit: Math.min(parseInt(limit) || 50, 200),
@@ -371,8 +384,8 @@ router.get('/articles', auth.requireAuth, (req, res) => {
       severity,
       search: auth.sanitizeString(search, 200),
       source_type,
-      startDate: start_date,
-      endDate: end_date,
+      startDate,
+      endDate,
       // Admin sees all articles; regular users are isolated to their own.
       userId: req.user.role === 'admin' ? null : req.user.id,
       sector,

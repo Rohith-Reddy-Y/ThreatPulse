@@ -315,6 +315,15 @@
           <option value="1">Patched</option>
           <option value="0">Unpatched</option>
         </select>
+        <select id="time-range-filter" class="filter-select">
+          <option value="">All Time</option>
+          <option value="1h">Last 1 Hour</option>
+          <option value="6h">Last 6 Hours</option>
+          <option value="12h">Last 12 Hours</option>
+          <option value="24h">Last 24 Hours</option>
+          <option value="7d">Last 7 Days</option>
+          <option value="30d">Last 30 Days</option>
+        </select>
       </div>
       <div class="detect-toggles">
         <button class="pill toggle-pill" id="filter-poc" data-filter="has_poc" title="Show only items with a public proof-of-concept">PoC Available</button>
