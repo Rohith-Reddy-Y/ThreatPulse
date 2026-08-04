@@ -1,11 +1,12 @@
 /**
  * ThreatPulse — Authentication Module
- * Handles password hashing, JWT tokens, and auth middleware
+ * httpOnly cookie-based JWT auth with refresh tokens + CSRF
  * Zero external dependencies — uses Node.js built-in crypto
  */
 
 const crypto = require('crypto');
 const db = require('./database');
+const security = require('./security');
 
 // ============================================
 // CONFIG
@@ -13,7 +14,6 @@ const db = require('./database');
 const IS_PRODUCTION = process.env.NODE_ENV === 'production' || !!process.env.RAILWAY_ENVIRONMENT;
 
 // JWT secret must be stable across restarts, or every session silently invalidates
-// (and multi-instance deployments break). Require it in production; warn in development.
 const JWT_SECRET = (() => {
   if (process.env.JWT_SECRET && process.env.JWT_SECRET.length >= 32) {
     return process.env.JWT_SECRET;
@@ -27,13 +27,16 @@ const JWT_SECRET = (() => {
   console.warn('[Auth] ⚠️  Set a stable JWT_SECRET in your .env for persistent sessions.');
   return crypto.randomBytes(64).toString('hex');
 })();
-const JWT_EXPIRY = 24 * 60 * 60; // 24 hours in seconds
+const ACCESS_TOKEN_EXPIRY = security.ACCESS_TOKEN_EXPIRY;    // 15 min
+const REFRESH_TOKEN_EXPIRY = security.REFRESH_TOKEN_EXPIRY;  // 7 days
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MINUTES = 15;
 const PASSWORD_MIN_LENGTH = 8;
 
-// Token blacklist (in-memory, cleared on restart — acceptable for this scale)
+// Token blacklist (in-memory, for logout)
 const tokenBlacklist = new Set();
+// Refresh token store: refreshToken → { userId, username, role, expiresAt }
+const refreshTokens = new Map();
 
 // ============================================
 // PASSWORD HASHING (crypto.scryptSync)
@@ -88,7 +91,7 @@ function createToken(payload) {
   const tokenPayload = {
     ...payload,
     iat: now,
-    exp: now + JWT_EXPIRY
+    exp: now + ACCESS_TOKEN_EXPIRY
   };
 
   const headerEncoded = base64UrlEncode(JSON.stringify(header));
@@ -99,6 +102,18 @@ function createToken(payload) {
     .digest('base64url');
 
   return `${headerEncoded}.${payloadEncoded}.${signature}`;
+}
+
+function createRefreshToken(user) {
+  const token = crypto.randomBytes(48).toString('hex');
+  const expiresAt = Date.now() + REFRESH_TOKEN_EXPIRY * 1000;
+  refreshTokens.set(token, {
+    userId: user.id,
+    username: user.username,
+    role: user.role,
+    expiresAt
+  });
+  return token;
 }
 
 function verifyToken(token) {
@@ -129,23 +144,46 @@ function verifyToken(token) {
   }
 }
 
+function verifyRefreshToken(token) {
+  const entry = refreshTokens.get(token);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    refreshTokens.delete(token);
+    return null;
+  }
+  return entry;
+}
+
 function blacklistToken(token) {
   tokenBlacklist.add(token);
-  // Auto-clean expired tokens every hour
-  setTimeout(() => tokenBlacklist.delete(token), JWT_EXPIRY * 1000);
+  // Auto-clean after expiry
+  setTimeout(() => tokenBlacklist.delete(token), ACCESS_TOKEN_EXPIRY * 1000);
+}
+
+function revokeRefreshToken(token) {
+  refreshTokens.delete(token);
 }
 
 // ============================================
-// AUTH MIDDLEWARE
+// AUTH MIDDLEWARE — reads from httpOnly cookie first, Bearer header as fallback
 // ============================================
 
 function requireAuth(req, res, next) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  let token = null;
+
+  // 1. Try httpOnly cookie (primary)
+  if (req.cookies && req.cookies.tp_access) {
+    token = req.cookies.tp_access;
+  }
+  // 2. Fallback to Bearer header (API clients, scripts, mobile)
+  else if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+    token = req.headers.authorization.slice(7);
+  }
+
+  if (!token) {
     return res.status(401).json({ error: 'Authentication required' });
   }
 
-  const token = authHeader.slice(7);
   const payload = verifyToken(token);
   if (!payload) {
     return res.status(401).json({ error: 'Invalid or expired token' });
@@ -252,13 +290,16 @@ function registerUser(username, displayName, password, inviteCode, email = null)
     console.warn(`[Auth] Could not seed sources for new user: ${e.message}`);
   }
 
-  // Generate token
-  const token = createToken({ userId: result.id, username, role: 'analyst' });
+  // Generate access + refresh tokens
+  const userObj = { id: result.id, username, role: 'analyst' };
+  const accessToken = createToken({ userId: userObj.id, username: userObj.username, role: userObj.role });
+  const refreshToken = createRefreshToken(userObj);
 
   return {
     success: true,
-    token,
-    user: { id: result.id, username, displayName, role: 'analyst' }
+    accessToken,
+    refreshToken,
+    user: { id: result.id, username, displayName, role: 'analyst', email }
   };
 }
 
@@ -311,11 +352,13 @@ function loginUser(identifier, password) {
   db.resetFailedLogins(user.id);
   db.updateUserLastLogin(user.id);
 
-  const token = createToken({ userId: user.id, username: user.username, role: user.role });
+  const accessToken = createToken({ userId: user.id, username: user.username, role: user.role });
+  const refreshToken = createRefreshToken(user);
 
   return {
     success: true,
-    token,
+    accessToken,
+    refreshToken,
     user: {
       id: user.id,
       username: user.username,
@@ -327,8 +370,48 @@ function loginUser(identifier, password) {
   };
 }
 
-function logoutUser(token) {
-  blacklistToken(token);
+function refreshAccessToken(refreshTokenStr) {
+  if (!refreshTokenStr) return { success: false, error: 'Refresh token required' };
+
+  const entry = verifyRefreshToken(refreshTokenStr);
+  if (!entry) return { success: false, error: 'Invalid or expired refresh token' };
+
+  // Verify user still exists and is active
+  const user = db.getUserById(entry.userId);
+  if (!user || !user.is_active) {
+    revokeRefreshToken(refreshTokenStr);
+    return { success: false, error: 'Account disabled or not found' };
+  }
+
+  // Rotate: revoke old refresh token, issue new pair
+  revokeRefreshToken(refreshTokenStr);
+
+  const newAccessToken = createToken({ userId: user.id, username: user.username, role: user.role });
+  const newRefreshToken = createRefreshToken(user);
+
+  return {
+    success: true,
+    accessToken: newAccessToken,
+    refreshToken: newRefreshToken,
+    user: {
+      id: user.id,
+      username: user.username,
+      displayName: user.display_name,
+      role: user.role,
+      email: user.email || null
+    }
+  };
+}
+
+function logoutUser(req) {
+  // Blacklist access token
+  const accessToken = req.cookies?.tp_access || req.token;
+  if (accessToken) blacklistToken(accessToken);
+
+  // Revoke refresh token
+  const refreshToken = req.cookies?.tp_refresh;
+  if (refreshToken) revokeRefreshToken(refreshToken);
+
   return { success: true };
 }
 
@@ -337,7 +420,6 @@ function logoutUser(token) {
 // ============================================
 
 function generateInitialAdminPassword() {
-  // Meets the strength policy (upper, lower, digit, symbol, length) by construction.
   const random = crypto.randomBytes(12).toString('base64').replace(/[^a-zA-Z0-9]/g, '');
   return `Tp${random}9!`;
 }
@@ -347,14 +429,12 @@ function ensureAdminExists() {
   if (users.length === 0) {
     console.log('[Auth] No users found — creating default admin...');
     const salt = generateSalt();
-    // Use a caller-supplied password if provided, otherwise generate a strong random one.
     const initialPassword = process.env.ADMIN_INITIAL_PASSWORD || generateInitialAdminPassword();
     const passwordHash = hashPassword(initialPassword, salt);
     const adminEmail = process.env.ADMIN_EMAIL || null;
     const result = db.createUser('admin', 'Administrator', passwordHash, salt, 'admin', null, adminEmail);
     if (result.success) {
       db.createUserNotificationSettings(result.id);
-      // Force the admin to set their own password on first login.
       db.setMustChangePassword(result.id, 1);
 
       console.log('[Auth] Default admin created ✓');
@@ -378,6 +458,14 @@ function ensureAdminExists() {
   }
 }
 
+// Clean expired refresh tokens every hour
+setInterval(() => {
+  const now = Date.now();
+  for (const [token, entry] of refreshTokens) {
+    if (now > entry.expiresAt) refreshTokens.delete(token);
+  }
+}, 60 * 60 * 1000);
+
 // ============================================
 // INPUT SANITIZATION
 // ============================================
@@ -395,45 +483,39 @@ function validateUrl(url) {
     return false;
   }
 
-  // Only allow http/https
   if (!['http:', 'https:'].includes(parsed.protocol)) return false;
 
   let hostname = parsed.hostname.toLowerCase();
-  // Strip IPv6 brackets: http://[::1]/ -> ::1
   if (hostname.startsWith('[') && hostname.endsWith(']')) hostname = hostname.slice(1, -1);
 
-  // Block local / internal hostnames
   if (hostname === 'localhost' || hostname.endsWith('.localhost')) return false;
   if (hostname.endsWith('.internal') || hostname.endsWith('.local')) return false;
 
-  // IPv6 checks
   if (hostname.includes(':')) {
-    if (hostname === '::1' || hostname === '::') return false;      // loopback / unspecified
-    if (hostname.startsWith('fe80')) return false;                 // link-local
-    if (/^f[cd][0-9a-f]{2}:/.test(hostname)) return false;         // unique local fc00::/7
-    if (hostname.startsWith('::ffff:')) {                          // IPv4-mapped IPv6
+    if (hostname === '::1' || hostname === '::') return false;
+    if (hostname.startsWith('fe80')) return false;
+    if (/^f[cd][0-9a-f]{2}:/.test(hostname)) return false;
+    if (hostname.startsWith('::ffff:')) {
       return validateUrl(`http://${hostname.split(':').pop()}`);
     }
     return true;
   }
 
-  // IPv4 checks — block all private / reserved ranges
   const m = hostname.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   if (m) {
     const a = parseInt(m[1], 10);
     const b = parseInt(m[2], 10);
     if ([a, b, parseInt(m[3], 10), parseInt(m[4], 10)].some(o => o > 255)) return false;
-    if (a === 0 || a === 127) return false;               // this-host / loopback
-    if (a === 10) return false;                           // 10.0.0.0/8
-    if (a === 172 && b >= 16 && b <= 31) return false;    // 172.16.0.0/12
-    if (a === 192 && b === 168) return false;             // 192.168.0.0/16
-    if (a === 169 && b === 254) return false;             // link-local + cloud metadata (169.254.169.254)
-    if (a === 100 && b >= 64 && b <= 127) return false;   // CGNAT 100.64.0.0/10
-    if (a >= 224) return false;                           // multicast / reserved
+    if (a === 0 || a === 127) return false;
+    if (a === 10) return false;
+    if (a === 172 && b >= 16 && b <= 31) return false;
+    if (a === 192 && b === 168) return false;
+    if (a === 169 && b === 254) return false;
+    if (a === 100 && b >= 64 && b <= 127) return false;
+    if (a >= 224) return false;
     return true;
   }
 
-  // Regular hostname — allow (DNS-rebinding is out of scope for this validator)
   return true;
 }
 
@@ -442,26 +524,24 @@ function validateUrl(url) {
 // ============================================
 
 function forgotPassword(email) {
-  // Always return success to prevent user enumeration
   const genericResponse = { success: true, message: 'If an account with that email exists, a reset link has been sent.' };
-  
+
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return { success: false, error: 'Valid email address is required' };
   }
 
   const user = db.getUserByEmail(email);
-  if (!user) return genericResponse; // Don't reveal if email exists
+  if (!user) return genericResponse;
 
-  // Generate secure token (32 bytes = 64 hex chars)
   const token = crypto.randomBytes(32).toString('hex');
-  const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 hour
+  const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
 
   db.createPasswordResetToken(user.id, token, expiresAt);
   db.cleanupExpiredResetTokens();
 
   return {
     ...genericResponse,
-    _token: token,       // Internal: used by API route to send email
+    _token: token,
     _userId: user.id,
     _email: user.email,
     _username: user.username
@@ -479,16 +559,16 @@ function resetPassword(token, newPassword) {
     return { success: false, error: 'Invalid or expired reset token' };
   }
 
-  // Change password
   const salt = generateSalt();
   const passwordHash = hashPassword(newPassword, salt);
   db.updateUserPassword(tokenRow.user_id, passwordHash, salt);
-
-  // Mark token as used
   db.markResetTokenUsed(token);
-
-  // Audit log
   db.logAudit(tokenRow.user_id, 'password_reset', 'Password reset via email token', null);
+
+  // Revoke all sessions for this user on password reset
+  for (const [rt, entry] of refreshTokens) {
+    if (entry.userId === tokenRow.user_id) refreshTokens.delete(rt);
+  }
 
   return { success: true, message: 'Password has been reset successfully' };
 }
@@ -497,17 +577,14 @@ module.exports = {
   registerUser,
   loginUser,
   logoutUser,
+  refreshAccessToken,
   requireAuth,
   requireAdmin,
   ensureAdminExists,
+  forgotPassword,
+  resetPassword,
   sanitizeString,
   validateUrl,
   validatePasswordStrength,
-  createToken,
-  verifyToken,
-  forgotPassword,
-  resetPassword,
-  hashPassword,
-  verifyPassword,
-  generateSalt
+  setCookies: security,  // pass through for routes
 };

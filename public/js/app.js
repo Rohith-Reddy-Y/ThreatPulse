@@ -6,18 +6,12 @@
 
 (function () {
   // ═══════════════════════════════════════════════════════════
-  //  AUTH STATE
+  //  AUTH STATE (cookie-based httpOnly JWT — no localStorage)
   // ═══════════════════════════════════════════════════════════
-  let authToken = localStorage.getItem('tp_token');
-  // Guard against a corrupt localStorage value crashing the whole app on load
   let currentUser = null;
-  try {
-    currentUser = JSON.parse(localStorage.getItem('tp_user') || 'null');
-  } catch (e) {
-    currentUser = null;
-    localStorage.removeItem('tp_user');
-    localStorage.removeItem('tp_token');
-  }
+  // Access token lifetime is 15 min; refresh proactively at 13 min
+  const REFRESH_MARGIN = 13 * 60 * 1000; // refresh 2 min before expiry
+  let refreshTimer = null;
 
   // ═══════════════════════════════════════════════════════════
   //  STATE
@@ -53,25 +47,78 @@
   };
 
   // ═══════════════════════════════════════════════════════════
-  //  API HELPER (with auth)
+  //  API HELPERS (cookie-based auth + CSRF)
   // ═══════════════════════════════════════════════════════════
+
+  // Read CSRF token from the readable cookie set by the server
+  function getCsrfToken() {
+    const match = document.cookie.match(/(?:^|;\s*)tp_csrf=([^;]*)/);
+    return match ? match[1] : null;
+  }
+
   async function api(method, endpoint, body = null) {
     const opts = {
       method,
       headers: { 'Content-Type': 'application/json' }
     };
-    if (authToken) opts.headers['Authorization'] = `Bearer ${authToken}`;
+
+    // Add CSRF token for state-changing requests
+    if (method !== 'GET') {
+      const csrf = getCsrfToken();
+      if (csrf) opts.headers['X-CSRF-Token'] = csrf;
+    }
+
     if (body) opts.body = JSON.stringify(body);
 
     const res = await fetch(endpoint, opts);
     if (res.status === 401) {
-      // Token expired or invalid
+      // Try refreshing the token once, then retry
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        // Update CSRF token from the refresh response cookie
+        const newCsrf = getCsrfToken();
+        if (newCsrf && method !== 'GET') opts.headers['X-CSRF-Token'] = newCsrf;
+        const retryRes = await fetch(endpoint, opts);
+        if (retryRes.status === 401) {
+          logout();
+          throw new Error('Session expired');
+        }
+        const retryData = await retryRes.json();
+        if (!retryRes.ok) throw new Error(retryData?.error || `Request failed (${retryRes.status})`);
+        return retryData;
+      }
       logout();
       throw new Error('Session expired');
     }
     const data = await res.json();
     if (!res.ok) throw new Error(data?.error || `Request failed (${res.status})`);
     return data;
+  }
+
+  async function refreshAccessToken() {
+    try {
+      const csrf = getCsrfToken();
+      const res = await fetch('/api/auth/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf || '' }
+      });
+      if (!res.ok) return false;
+      const data = await res.json();
+      if (data.success && data.user) {
+        currentUser = data.user;
+        updateUserMenu();
+        scheduleAutoRefresh();
+        return true;
+      }
+      return false;
+    } catch { return false; }
+  }
+
+  function scheduleAutoRefresh() {
+    if (refreshTimer) clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(async () => {
+      await refreshAccessToken();
+    }, REFRESH_MARGIN);
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -87,26 +134,23 @@
     $('#app-container').classList.remove('hidden');
   }
 
-  function setUser(token, user) {
-    authToken = token;
+  function setUser(user) {
     currentUser = user;
-    localStorage.setItem('tp_token', token);
-    localStorage.setItem('tp_user', JSON.stringify(user));
     updateUserMenu();
+    scheduleAutoRefresh();
     hideAuth();
   }
 
   function logout() {
-    if (authToken) {
-      fetch('/api/auth/logout', { method: 'POST', headers: { 'Authorization': `Bearer ${authToken}` } }).catch(() => {});
-    }
-    authToken = null;
+    // Call server to clear cookies + blacklist tokens
+    fetch('/api/auth/logout', { method: 'POST', headers: { 'X-CSRF-Token': getCsrfToken() || '' } }).catch(() => {});
+
     currentUser = null;
-    localStorage.removeItem('tp_token');
-    localStorage.removeItem('tp_user');
-    showAuth();
+    if (refreshTimer) clearTimeout(refreshTimer);
+    refreshTimer = null;
     if (state.refreshTimer) clearInterval(state.refreshTimer);
     if (state.countdownTimer) clearInterval(state.countdownTimer);
+    showAuth();
   }
 
   function updateUserMenu() {
@@ -627,7 +671,7 @@
         }).then(r => r.json());
 
         if (result.success) {
-          setUser(result.token, result.user);
+          setUser(result.user);
           initDashboard();
         } else {
           errEl.textContent = (result.error || 'Invalid username/email or password');
@@ -755,7 +799,7 @@
         }).then(r => r.json());
 
         if (result.success) {
-          setUser(result.token, result.user);
+          setUser(result.user);
           initDashboard();
         } else {
           errEl.textContent = result.error || 'Registration failed';
@@ -1015,13 +1059,11 @@
           if (type === 'email_change') {
             if (currentUser) {
               currentUser.email = result.email;
-              localStorage.setItem('tp_user', JSON.stringify(currentUser));
             }
             showToast('Success', 'Email updated successfully.', 'success');
           } else if (type === 'password_change') {
             if (currentUser) {
               currentUser.mustChangePassword = false;
-              localStorage.setItem('tp_user', JSON.stringify(currentUser));
             }
             showToast('Success', 'Password changed successfully.', 'success');
             const notice = $('#password-forced-notice');
@@ -1337,25 +1379,25 @@
       return;
     }
 
-    if (authToken && currentUser) {
-      // Verify token is still valid
-      fetch('/api/auth/me', { headers: { 'Authorization': `Bearer ${authToken}` } })
-        .then(r => r.json())
-        .then(data => {
-          if (data.success && data.user) {
-            currentUser = data.user;
-            localStorage.setItem('tp_user', JSON.stringify(data.user));
-            updateUserMenu();
-            hideAuth();
-            initDashboard();
-          } else {
-            logout();
-          }
-        })
-        .catch(() => logout());
-    } else {
-      showAuth();
-    }
+    // Check if we have an httpOnly session cookie by hitting /api/auth/me
+    // (the cookie is sent automatically, no JS involved)
+    fetch('/api/auth/me')
+      .then(r => {
+        if (!r.ok) throw new Error('Not authenticated');
+        return r.json();
+      })
+      .then(data => {
+        if (data.success && data.user) {
+          currentUser = data.user;
+          updateUserMenu();
+          scheduleAutoRefresh();
+          hideAuth();
+          initDashboard();
+        } else {
+          showAuth();
+        }
+      })
+      .catch(() => showAuth());
   }
 
   // Start

@@ -7,6 +7,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../database');
 const auth = require('../auth');
+const security = require('../security');
 const { sendAlertEmail, sendVerificationEmail } = require('../notifications/email-notifier');
 const { sendTelegramAlert } = require('../notifications/telegram-notifier');
 const { sendTeamsAlert } = require('../notifications/teams-notifier');
@@ -32,17 +33,22 @@ router.post('/auth/login', (req, res) => {
   try {
     const { username, password } = req.body;
     const ip = req.ip || req.connection?.remoteAddress;
-    // Accept a username OR an email as the identifier (emails can be up to 255 chars)
     const identifier = auth.sanitizeString(username, 255);
     const result = auth.loginUser(identifier, password);
 
     if (result.success) {
+      // Set httpOnly cookies
+      security.setAccessTokenCookie(res, result.accessToken);
+      security.setRefreshTokenCookie(res, result.refreshToken);
+      // Set CSRF token (readable by JS, sent as X-CSRF-Token header)
+      security.setCsrfCookie(res);
+
       db.logAudit(result.user.id, 'login', 'Successful login', ip);
+      return res.json({ success: true, user: result.user });
     } else {
       db.logAudit(null, 'login_failed', `Failed login for: ${identifier}`, ip);
+      return res.json(result);
     }
-
-    res.json(result);
   } catch (error) {
     console.error('[API] Login error:', error.message);
     res.status(500).json({ success: false, error: 'Login failed' });
@@ -62,10 +68,16 @@ router.post('/auth/register', (req, res) => {
     );
 
     if (result.success) {
+      // Set httpOnly cookies
+      security.setAccessTokenCookie(res, result.accessToken);
+      security.setRefreshTokenCookie(res, result.refreshToken);
+      security.setCsrfCookie(res);
+
       db.logAudit(result.user.id, 'register', 'New user registered', ip);
+      return res.json({ success: true, user: result.user });
     }
 
-    res.json(result);
+    return res.json(result);
   } catch (error) {
     console.error('[API] Register error:', error.message);
     res.status(500).json({ success: false, error: 'Registration failed' });
@@ -170,16 +182,38 @@ router.post('/auth/reset-password', (req, res) => {
 });
 
 router.post('/auth/logout', auth.requireAuth, (req, res) => {
-  auth.logoutUser(req.token);
+  auth.logoutUser(req);
+  security.clearAuthCookies(res);
   db.logAudit(req.user.id, 'logout', null, req.ip);
   res.json({ success: true });
 });
 
 router.get('/auth/me', auth.requireAuth, (req, res) => {
+  // Return a fresh CSRF token so the client always has one
+  security.setCsrfCookie(res);
   res.json({
     success: true,
     user: req.user
   });
+});
+
+// Refresh access + refresh tokens using the refresh-token cookie
+router.post('/auth/refresh', (req, res) => {
+  const refreshToken = req.cookies?.tp_refresh;
+  if (!refreshToken) {
+    return res.status(401).json({ success: false, error: 'No refresh token' });
+  }
+
+  const result = auth.refreshAccessToken(refreshToken);
+  if (!result.success) {
+    security.clearAuthCookies(res);
+    return res.status(401).json(result);
+  }
+
+  security.setAccessTokenCookie(res, result.accessToken);
+  security.setRefreshTokenCookie(res, result.refreshToken);
+  security.setCsrfCookie(res);
+  res.json({ success: true, user: result.user });
 });
 
 router.put('/auth/password', auth.requireAuth, async (req, res) => {

@@ -24,6 +24,21 @@ const PORT = process.env.PORT || 3000;
 // SECURITY MIDDLEWARE
 // ============================================
 
+// Cookie parser (httpOnly JWT + CSRF) — no dependency
+const { cookieParser, csrfMiddleware } = require('./src/security');
+app.use(cookieParser);
+
+// CSRF protection on all state-changing requests
+// (csrfMiddleware checks method internally, skips GET/HEAD/OPTIONS)
+app.use('/api', (req, res, next) => {
+  // Exempt login, register, forgot-password, reset-password, and refresh
+  // from CSRF — these are the endpoints that establish/give tokens
+  const csrfExempt = ['/auth/login', '/auth/register', '/auth/forgot-password',
+                      '/auth/reset-password', '/auth/refresh'];
+  if (csrfExempt.some(p => req.path === p)) return next();
+  return csrfMiddleware(req, res, next);
+});
+
 // Security headers (Helmet-style, no dependency)
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -98,7 +113,7 @@ app.use((req, res, next) => {
   const origin = process.env.ALLOWED_ORIGIN || '*';
   res.header('Access-Control-Allow-Origin', origin);
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-CSRF-Token');
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
