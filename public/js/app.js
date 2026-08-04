@@ -232,36 +232,40 @@
   let faviconFrame = 0;
   function updateFavicon() {
     faviconFrame++;
-    // 3 overlapping rings at different phases (0%, 33%, 66% through cycle)
-    const cycle = 48; // frames per full pulse
+    const cycle = 48;
     const f = faviconFrame % cycle;
 
     function ringAlpha(offset) {
       const phase = (f + offset) % cycle;
       const progress = phase / cycle;
-      // Ring appears, expands, then fades
-      if (progress < 0.1) return 0;          // wait
-      if (progress < 0.7) return 0.8;         // visible
-      return 0.8 * (1 - (progress - 0.7) / 0.3); // fade out
+      if (progress < 0.1) return 0;
+      if (progress < 0.7) return 0.8;
+      return 0.8 * (1 - (progress - 0.7) / 0.3);
     }
 
     function ringRadius(offset) {
       const phase = (f + offset) % cycle;
       const progress = phase / cycle;
-      return 1 + progress * 3.5; // r=1 → r=4.5
+      return 1.5 + progress * 3;
     }
 
-    const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'>
-      <rect width='12' height='12' rx='2' fill='%230e1219'/>
-      <circle cx='6' cy='6' r='${ringRadius(0).toFixed(2)}' fill='none' stroke='%232da8bd' stroke-width='0.5' opacity='${ringAlpha(0).toFixed(2)}'/>
-      <circle cx='6' cy='6' r='${ringRadius(16).toFixed(2)}' fill='none' stroke='%232da8bd' stroke-width='0.5' opacity='${ringAlpha(16).toFixed(2)}'/>
-      <circle cx='6' cy='6' r='${ringRadius(32).toFixed(2)}' fill='none' stroke='%232da8bd' stroke-width='0.5' opacity='${ringAlpha(32).toFixed(2)}'/>
-      <circle cx='6' cy='6' r='1.2' fill='%232da8bd' opacity='0.9'/>
-      <line x1='6' y1='6' x2='${(6 + Math.cos(faviconFrame * 0.15) * 5.5).toFixed(1)}' y2='${(6 + Math.sin(faviconFrame * 0.15) * 5.5).toFixed(1)}' stroke='%232da8bd' stroke-width='0.3' opacity='0.3'/>
-    </svg>`;
+    const scanX = (6 + Math.cos(faviconFrame * 0.15) * 5).toFixed(1);
+    const scanY = (6 + Math.sin(faviconFrame * 0.15) * 5).toFixed(1);
 
-    const favicon = $('#dynamic-favicon');
-    if (favicon) favicon.href = 'data:image/svg+xml,' + encodeURIComponent(svg);
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12">'
+      + '<rect width="12" height="12" rx="2" fill="#0e1219"/>'
+      + '<circle cx="6" cy="6" r="' + ringRadius(0).toFixed(2) + '" fill="none" stroke="#2da8bd" stroke-width="0.6" opacity="' + ringAlpha(0).toFixed(2) + '"/>'
+      + '<circle cx="6" cy="6" r="' + ringRadius(16).toFixed(2) + '" fill="none" stroke="#2da8bd" stroke-width="0.6" opacity="' + ringAlpha(16).toFixed(2) + '"/>'
+      + '<circle cx="6" cy="6" r="' + ringRadius(32).toFixed(2) + '" fill="none" stroke="#2da8bd" stroke-width="0.6" opacity="' + ringAlpha(32).toFixed(2) + '"/>'
+      + '<circle cx="6" cy="6" r="1.3" fill="#2da8bd" opacity="0.95"/>'
+      + '<line x1="6" y1="6" x2="' + scanX + '" y2="' + scanY + '" stroke="#2da8bd" stroke-width="0.4" opacity="0.35"/>'
+      + '</svg>';
+
+    const encoded = 'data:image/svg+xml,' + encodeURIComponent(svg);
+
+    // Update favicon href directly (works across all browsers)
+    var icon = document.querySelector('link[rel=icon]');
+    if (icon) icon.href = encoded;
   }
 
   function animateValue(el, target) {
