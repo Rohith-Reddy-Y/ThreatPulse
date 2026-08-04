@@ -228,6 +228,34 @@
     if (el) el.textContent = now.toLocaleTimeString('en-US', { hour12: true });
   }
 
+  // Dynamic favicon — pulsing shield that shifts color based on threat activity
+  let faviconFrame = 0;
+  function updateFavicon(criticalCount = 0) {
+    faviconFrame++;
+    const t = faviconFrame * 0.08;
+    // Pulse opacity: sine wave between 0.4 and 1.0
+    const pulse = 0.4 + 0.6 * ((Math.sin(t) + 1) / 2);
+    // Color: shifts between cyan (#2da8bd) and violet (#7c5cff)
+    const r = Math.round(45 + (124 - 45) * ((Math.sin(t * 0.7) + 1) / 2));
+    const g = Math.round(168 + (92 - 168) * ((Math.sin(t * 0.7) + 1) / 2));
+    const b = Math.round(189 + (255 - 189) * ((Math.sin(t * 0.7) + 1) / 2));
+    let stroke = `${r.toString(16).padStart(2,'0')}${g.toString(16).padStart(2,'0')}${b.toString(16).padStart(2,'0')}`;
+
+    // If critical threats active, flash red
+    if (criticalCount > 0) {
+      const flash = (Math.sin(t * 3) + 1) / 2;
+      const rr = Math.round(255 * flash + 124 * (1 - flash));
+      const gg = Math.round(50 * flash + 92 * (1 - flash));
+      const bb = Math.round(80 * flash + 255 * (1 - flash));
+      stroke = `${rr.toString(16).padStart(2,'0')}${gg.toString(16).padStart(2,'0')}${bb.toString(16).padStart(2,'0')}`;
+    }
+
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23${stroke}' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' opacity='${pulse.toFixed(2)}'><defs><filter id='glow'><feGaussianBlur stdDeviation='0.5' result='blur'/><feMerge><feMergeNode in='blur'/><feMergeNode in='SourceGraphic'/></feMerge></filter></defs><g filter='url(%23glow)'><path d='M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z'/><path d='M9 12l2 2 4-4'/></g></svg>`;
+
+    const favicon = $('#dynamic-favicon');
+    if (favicon) favicon.href = 'data:image/svg+xml,' + encodeURIComponent(svg);
+  }
+
   function animateValue(el, target) {
     const start = parseInt(el.textContent) || 0;
     if (start === target) return;
@@ -1349,6 +1377,13 @@
   async function initDashboard() {
     updateClock();
     setInterval(updateClock, 1000);
+    // Start dynamic favicon animation — updates every 2s with threat-aware colors
+    updateFavicon(0);
+    setInterval(() => {
+      const critEl = $('#stat-critical');
+      const critCount = critEl ? parseInt(critEl.textContent) || 0 : 0;
+      updateFavicon(critCount);
+    }, 2000);
     enforcePasswordChange();
     await Promise.allSettled([fetchStats(), fetchArticles(), fetchSources(), fetchNotificationSettings()]);
     startAutoRefresh();
