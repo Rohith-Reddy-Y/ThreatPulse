@@ -2017,22 +2017,21 @@ body::after {
   background: var(--bg-input);
 }
 
+/* Auth error — hidden by default, shown when .hidden is removed */
 .auth-error {
-  display: none;
   padding: 10px 14px;
   background: var(--red-dim);
-  border: 1px solid rgba(255, 51, 102, 0.2);
+  border: 1px solid var(--red);
   border-radius: var(--radius-sm);
   color: var(--red);
-  font-size: 0.78rem;
+  font-size: 0.82rem;
   font-weight: 500;
   text-align: center;
-}
-
-.auth-error.visible {
-  display: block;
+  margin-bottom: 12px;
   animation: shake 0.4s var(--ease-out);
 }
+
+.auth-error.hidden { display: none; }
 
 /* Input hints (below form fields) */
 .input-hint {
@@ -2921,16 +2920,6 @@ body::after {
 .auth-subtitle { color: var(--text-secondary); font-size: 14px; margin-top: 4px; }
 
 .auth-form.hidden { display: none; }
-.auth-error {
-  background: rgba(255,51,102,0.1);
-  border: 1px solid rgba(255,51,102,0.3);
-  border-radius: var(--radius-sm);
-  padding: 10px 14px;
-  color: var(--red);
-  font-size: 13px;
-  margin-bottom: 12px;
-}
-.auth-error.hidden { display: none; }
 
 .auth-success {
   background: rgba(0,255,136,0.1);

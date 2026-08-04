@@ -599,14 +599,31 @@
       e.preventDefault();
       const errEl = $('#login-error');
       errEl.classList.add('hidden');
+      errEl.textContent = '';
+
+      const username = $('#login-username').value.trim();
+      const password = $('#login-password').value;
+
+      // Client-side validation
+      if (!username) {
+        errEl.textContent = 'Please enter your username or email';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      if (!password) {
+        errEl.textContent = 'Please enter your password';
+        errEl.classList.remove('hidden');
+        return;
+      }
+
+      $('#login-btn').disabled = true;
+      $('#login-btn').textContent = 'Signing in…';
+
       try {
         const result = await fetch('/api/auth/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            username: $('#login-username').value.trim(),
-            password: $('#login-password').value
-          })
+          body: JSON.stringify({ username, password })
         }).then(r => r.json());
 
         if (result.success) {
@@ -615,12 +632,21 @@
         } else {
           errEl.textContent = (result.error || 'Invalid username/email or password');
           errEl.classList.remove('hidden');
+          $('#login-password').value = '';
+          $('#login-password').focus();
         }
       } catch (err) {
         errEl.textContent = 'Connection error — could not reach the server';
         errEl.classList.remove('hidden');
+      } finally {
+        $('#login-btn').disabled = false;
+        $('#login-btn').textContent = 'Sign In';
       }
     });
+
+    // Clear login error on input
+    $('#login-username').addEventListener('input', () => { $('#login-error').classList.add('hidden'); });
+    $('#login-password').addEventListener('input', () => { $('#login-error').classList.add('hidden'); });
 
     // Auth: Register — password strength + confirm match (real-time)
     $('#reg-password').addEventListener('input', () => {
@@ -656,27 +682,76 @@
       e.preventDefault();
       const errEl = $('#register-error');
       errEl.classList.add('hidden');
+      errEl.textContent = '';
 
-      // Confirm-password check before hitting the server
+      // Gather values
+      const username = $('#reg-username').value.trim();
+      const displayName = $('#reg-display').value.trim();
+      const email = $('#reg-email').value.trim();
       const pw = $('#reg-password').value;
       const confirmPw = $('#reg-confirm').value;
+      const inviteCode = $('#reg-invite').value.trim();
+
+      // Client-side validation — check each field
+      if (!username || username.length < 3) {
+        errEl.textContent = 'Username must be at least 3 characters';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      if (!/^[a-zA-Z0-9_.-]+$/.test(username)) {
+        errEl.textContent = 'Username can only contain letters, numbers, dots, hyphens, and underscores';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      if (!displayName || displayName.length < 2) {
+        errEl.textContent = 'Display name must be at least 2 characters';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        errEl.textContent = 'Please enter a valid email address';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      if (!pw || pw.length < 8) {
+        errEl.textContent = 'Password must be at least 8 characters';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      if (!/[A-Z]/.test(pw)) {
+        errEl.textContent = 'Password must contain at least one uppercase letter';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      if (!/[a-z]/.test(pw)) {
+        errEl.textContent = 'Password must contain at least one lowercase letter';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      if (!/[0-9]/.test(pw)) {
+        errEl.textContent = 'Password must contain at least one number';
+        errEl.classList.remove('hidden');
+        return;
+      }
       if (pw !== confirmPw) {
         errEl.textContent = 'Passwords do not match';
         errEl.classList.remove('hidden');
         return;
       }
+      if (!inviteCode) {
+        errEl.textContent = 'Please enter your invite code';
+        errEl.classList.remove('hidden');
+        return;
+      }
+
+      $('#register-btn').disabled = true;
+      $('#register-btn').textContent = 'Creating account…';
 
       try {
         const result = await fetch('/api/auth/register', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            username: $('#reg-username').value.trim(),
-            displayName: $('#reg-display').value.trim(),
-            password: pw,
-            email: $('#reg-email').value.trim(),
-            inviteCode: $('#reg-invite').value.trim()
-          })
+          body: JSON.stringify({ username, displayName, password: pw, email, inviteCode })
         }).then(r => r.json());
 
         if (result.success) {
@@ -687,9 +762,17 @@
           errEl.classList.remove('hidden');
         }
       } catch (err) {
-        errEl.textContent = 'Connection error';
+        errEl.textContent = 'Connection error — could not reach the server';
         errEl.classList.remove('hidden');
+      } finally {
+        $('#register-btn').disabled = false;
+        $('#register-btn').textContent = 'Create Account';
       }
+    });
+
+    // Clear register error on input
+    ['#reg-username','#reg-display','#reg-email','#reg-password','#reg-confirm','#reg-invite'].forEach(sel => {
+      $(sel)?.addEventListener('input', () => { $('#register-error').classList.add('hidden'); });
     });
 
     // Auth: Forgot password — show the request form
@@ -707,10 +790,29 @@
       e.preventDefault();
       const errEl = $('#forgot-error'), okEl = $('#forgot-success');
       errEl.classList.add('hidden'); okEl.classList.add('hidden');
+      errEl.textContent = ''; okEl.textContent = '';
+
+      const email = $('#forgot-email').value.trim();
+
+      // Client-side validation
+      if (!email) {
+        errEl.textContent = 'Please enter your email address';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        errEl.textContent = 'Please enter a valid email address';
+        errEl.classList.remove('hidden');
+        return;
+      }
+
+      $('#forgot-btn').disabled = true;
+      $('#forgot-btn').textContent = 'Sending…';
+
       try {
         const result = await fetch('/api/auth/forgot-password', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: $('#forgot-email').value.trim() })
+          body: JSON.stringify({ email })
         }).then(r => r.json());
         if (result.success) {
           let msg = result.message || 'If that email exists, a reset link has been sent.';
@@ -726,6 +828,9 @@
       } catch (err) {
         errEl.textContent = 'Connection error — could not reach the server';
         errEl.classList.remove('hidden');
+      } finally {
+        $('#forgot-btn').disabled = false;
+        $('#forgot-btn').textContent = 'Send Reset Link';
       }
     });
 
@@ -734,13 +839,47 @@
       e.preventDefault();
       const errEl = $('#reset-error'), okEl = $('#reset-success');
       errEl.classList.add('hidden'); okEl.classList.add('hidden');
+      errEl.textContent = ''; okEl.textContent = '';
+
       const pw = $('#reset-password').value, confirmPw = $('#reset-confirm').value;
+
+      // Client-side validation
+      if (!pw || pw.length < 8) {
+        errEl.textContent = 'Password must be at least 8 characters';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      if (!/[A-Z]/.test(pw)) {
+        errEl.textContent = 'Password must contain at least one uppercase letter';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      if (!/[a-z]/.test(pw)) {
+        errEl.textContent = 'Password must contain at least one lowercase letter';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      if (!/[0-9]/.test(pw)) {
+        errEl.textContent = 'Password must contain at least one number';
+        errEl.classList.remove('hidden');
+        return;
+      }
       if (pw !== confirmPw) {
         errEl.textContent = 'Passwords do not match';
         errEl.classList.remove('hidden');
         return;
       }
+
       const token = new URLSearchParams(window.location.search).get('reset');
+      if (!token) {
+        errEl.textContent = 'Missing reset token. Please use the link from your email.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+
+      $('#reset-btn').disabled = true;
+      $('#reset-btn').textContent = 'Resetting…';
+
       try {
         const result = await fetch('/api/auth/reset-password', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -757,6 +896,9 @@
       } catch (err) {
         errEl.textContent = 'Connection error — could not reach the server';
         errEl.classList.remove('hidden');
+      } finally {
+        $('#reset-btn').disabled = false;
+        $('#reset-btn').textContent = 'Reset Password';
       }
     });
 
