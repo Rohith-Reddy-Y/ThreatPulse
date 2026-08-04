@@ -50,6 +50,9 @@
   //  API HELPERS (cookie-based auth + CSRF)
   // ═══════════════════════════════════════════════════════════
 
+  // Decode obfuscated API paths (base64)
+  function d(b64) { return atob(b64); }
+
   // Read CSRF token from the readable cookie set by the server
   function getCsrfToken() {
     const match = document.cookie.match(/(?:^|;\s*)tp_csrf=([^;]*)/);
@@ -98,7 +101,7 @@
   async function refreshAccessToken() {
     try {
       const csrf = getCsrfToken();
-      const res = await fetch('/api/auth/refresh', {
+      const res = await fetch(d('L2FwaS9hdXRoL3JlZnJlc2g='), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf || '' }
       });
@@ -143,7 +146,7 @@
 
   function logout() {
     // Call server to clear cookies + blacklist tokens
-    fetch('/api/auth/logout', { method: 'POST', headers: { 'X-CSRF-Token': getCsrfToken() || '' } }).catch(() => {});
+    fetch(d('L2FwaS9hdXRoL2xvZ291dA=='), { method: 'POST', headers: { 'X-CSRF-Token': getCsrfToken() || '' } }).catch(() => {});
 
     currentUser = null;
     if (refreshTimer) clearTimeout(refreshTimer);
@@ -244,7 +247,7 @@
   // ═══════════════════════════════════════════════════════════
   async function fetchStats() {
     try {
-      const stats = await api('GET', '/api/articles/stats');
+      const stats = await api('GET', d('L2FwaS9hcnRpY2xlcy9zdGF0cw=='));
       animateValue($('#stat-threats'), stats.threatsToday || 0);
       animateValue($('#stat-critical'), stats.criticalVulns || 0);
       animateValue($('#stat-pocs'), stats.pocsDetected || 0);
@@ -271,7 +274,7 @@
       if (state.filters.has_mitre) params.set('has_mitre', state.filters.has_mitre);
       if (state.filters.is_patched !== '') params.set('is_patched', state.filters.is_patched);
 
-      const data = await api('GET', `/api/articles?${params}`);
+      const data = await api('GET', `${d('L2FwaS9hcnRpY2xlcw==')}?${params}`);
       state.currentPage = data.page;
       state.totalPages = data.totalPages;
       state.totalArticles = data.total;
@@ -288,7 +291,7 @@
 
   async function fetchSources() {
     try {
-      const data = await api('GET', '/api/sources');
+      const data = await api('GET', d('L2FwaS9zb3VyY2Vz'));
       const sources = Array.isArray(data) ? data : (data.sources || []);
       state.sources = sources.map(s => ({
         ...s,
@@ -301,7 +304,7 @@
 
   async function fetchNotificationSettings() {
     try {
-      const s = await api('GET', '/api/notifications/settings');
+      const s = await api('GET', d('L2FwaS9ub3RpZmljYXRpb25zL3NldHRpbmdz'));
       if (!s) return;
       if (s.email) $('#notif-email').value = s.email;
       $('#notif-email-enabled').checked = !!s.email_enabled;
@@ -504,7 +507,7 @@
   // ═══════════════════════════════════════════════════════════
   async function addSource(formData) {
     try {
-      await api('POST', '/api/sources', formData);
+      await api('POST', d('L2FwaS9zb3VyY2Vz'), formData);
       showToast('Source Added', `${formData.name} has been added.`, 'success');
       fetchSources();
       $('#add-source-form').reset();
@@ -513,13 +516,13 @@
 
   async function toggleSource(id, enabled) {
     try {
-      await api('PUT', `/api/sources/${id}`, { enabled: enabled ? 1 : 0 });
+      await api('PUT', `${d('L2FwaS9zb3VyY2Vz')}/${id}`, { enabled: enabled ? 1 : 0 });
     } catch (e) { showToast('Error', e.message, 'error'); fetchSources(); }
   }
 
   async function deleteSource(id) {
     try {
-      await api('DELETE', `/api/sources/${id}`);
+      await api('DELETE', `${d('L2FwaS9zb3VyY2Vz')}/${id}`);
       showToast('Source Removed', 'Source has been deleted.', 'success');
       fetchSources();
     } catch (e) { showToast('Error', e.message, 'error'); }
@@ -527,7 +530,7 @@
 
   async function saveNotificationSettings() {
     try {
-      await api('PUT', '/api/notifications/settings', {
+      await api('PUT', d('L2FwaS9ub3RpZmljYXRpb25zL3NldHRpbmdz'), {
         email: $('#notif-email').value.trim(),
         email_enabled: $('#notif-email-enabled').checked ? 1 : 0,
         telegram_chat_id: $('#notif-telegram').value.trim(),
@@ -547,7 +550,7 @@
 
   async function testNotification(type) {
     try {
-      const r = await api('POST', '/api/notifications/test', { type });
+      const r = await api('POST', d('L2FwaS9ub3RpZmljYXRpb25zL3Rlc3Q='), { type });
       if (r && r.success === false) {
         showToast('Test failed', r.error || 'Channel not configured', 'error');
       } else {
@@ -562,7 +565,7 @@
     $('#fetch-now-btn').disabled = true;
     showToast('Fetching', 'Fetching latest threats...', 'info');
     try {
-      await api('POST', '/api/fetch-now');
+      await api('POST', d('L2FwaS9mZXRjaC1ub3c='));
       setTimeout(async () => {
         await Promise.allSettled([fetchStats(), fetchArticles(), fetchSources()]);
         showToast('Complete', 'Feeds updated.', 'success');
@@ -664,7 +667,7 @@
       $('#login-btn').textContent = 'Signing in…';
 
       try {
-        const result = await fetch('/api/auth/login', {
+        const result = await fetch(d('L2FwaS9hdXRoL2xvZ2lu'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ username, password })
@@ -792,7 +795,7 @@
       $('#register-btn').textContent = 'Creating account…';
 
       try {
-        const result = await fetch('/api/auth/register', {
+        const result = await fetch(d('L2FwaS9hdXRoL3JlZ2lzdGVy'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ username, displayName, password: pw, email, inviteCode })
@@ -854,7 +857,7 @@
       $('#forgot-btn').textContent = 'Sending…';
 
       try {
-        const result = await fetch('/api/auth/forgot-password', {
+        const result = await fetch(d('L2FwaS9hdXRoL2ZvcmdvdC1wYXNzd29yZA=='), {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email })
         }).then(r => r.json());
@@ -925,7 +928,7 @@
       $('#reset-btn').textContent = 'Resetting…';
 
       try {
-        const result = await fetch('/api/auth/reset-password', {
+        const result = await fetch(d('L2FwaS9hdXRoL3Jlc2V0LXBhc3N3b3Jk'), {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ token, newPassword: pw })
         }).then(r => r.json());
@@ -991,7 +994,7 @@
       const errEl = $('#email-error');
       errEl.classList.add('hidden');
       try {
-        const result = await api('PUT', '/api/auth/email', { email: $('#account-email').value.trim() });
+        const result = await api('PUT', d('L2FwaS9hdXRoL2VtYWls'), { email: $('#account-email').value.trim() });
         if (result.success && result.verificationRequired) {
           $('#email-modal').classList.add('hidden');
           $('#verification-code').value = '';
@@ -1019,7 +1022,7 @@
       const errEl = $('#password-error');
       errEl.classList.add('hidden');
       try {
-        const result = await api('PUT', '/api/auth/password', {
+        const result = await api('PUT', d('L2FwaS9hdXRoL3Bhc3N3b3Jk'), {
           currentPassword: $('#current-password').value,
           newPassword: $('#new-password').value
         });
@@ -1054,7 +1057,7 @@
         const type = state.pendingVerificationType;
         if (!code || !type) return;
 
-        const result = await api('POST', '/api/auth/verify-change', { type, code });
+        const result = await api('POST', d('L2FwaS9hdXRoL3ZlcmlmeS1jaGFuZ2U='), { type, code });
         if (result.success) {
           if (type === 'email_change') {
             if (currentUser) {
@@ -1202,7 +1205,7 @@
         const currentUrl = editBtn.dataset.editUrl;
         const newUrl = prompt('Enter new URL for this source:', currentUrl);
         if (newUrl && newUrl.trim() !== currentUrl) {
-          api('PUT', `/api/sources/${id}`, { url: newUrl.trim() }).then(() => {
+          api('PUT', `${d('L2FwaS9zb3VyY2Vz')}/${id}`, { url: newUrl.trim() }).then(() => {
             showToast('Updated', 'Source URL updated.', 'success');
             fetchSources();
           }).catch(err => showToast('Error', err.message, 'error'));
@@ -1296,7 +1299,7 @@
         const newUrl = prompt(`Edit URL for "${cb.dataset.srcName}":`, cb.dataset.srcUrl);
         if (newUrl && newUrl.trim() !== cb.dataset.srcUrl) {
           try {
-            await api('PUT', `/api/sources/${cb.dataset.srcId}`, { url: newUrl.trim() });
+            await api('PUT', `${d('L2FwaS9zb3VyY2Vz')}/${cb.dataset.srcId}`, { url: newUrl.trim() });
             showToast('Updated', 'Source URL updated.', 'success');
             fetchSources();
           } catch(err) { showToast('Error', err.message, 'error'); }
@@ -1312,7 +1315,7 @@
       if (checked.length === 0) return;
       if (confirm(`Delete ${checked.length} selected source(s)?`)) {
         for (const cb of checked) {
-          try { await api('DELETE', `/api/sources/${cb.dataset.srcId}`); } catch(e) {}
+          try { await api('DELETE', `${d('L2FwaS9zb3VyY2Vz')}/${cb.dataset.srcId}`); } catch(e) {}
         }
         showToast('Deleted', `${checked.length} source(s) removed.`, 'success');
         fetchSources(); fetchStats();
@@ -1381,7 +1384,7 @@
 
     // Check if we have an httpOnly session cookie by hitting /api/auth/me
     // (the cookie is sent automatically, no JS involved)
-    fetch('/api/auth/me')
+    fetch(d('L2FwaS9hdXRoL21l'))
       .then(r => {
         if (!r.ok) throw new Error('Not authenticated');
         return r.json();

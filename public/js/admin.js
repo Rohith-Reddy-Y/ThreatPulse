@@ -4,6 +4,9 @@
  */
 'use strict';
 (function() {
+  // Decode obfuscated API paths
+  function d(b64) { return atob(b64); }
+
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => document.querySelectorAll(sel);
 
@@ -37,7 +40,7 @@
   // Check auth on load — cookie is sent automatically
   async function init() {
     try {
-      const res = await fetch('/api/auth/me');
+      const res = await fetch(d('L2FwaS9hdXRoL21l'));
       if (!res.ok) throw new Error('Not authenticated');
       const data = await res.json();
       if (!data.success || !data.user || data.user.role !== 'admin') {
@@ -112,7 +115,7 @@
 
   // Fetch stats
   async function loadStats() {
-    const stats = await api('GET', '/api/admin/stats');
+    const stats = await api('GET', d('L2FwaS9hZG1pbi9zdGF0cw=='));
     if (!stats) return;
     $('#admin-total-users').textContent = stats.totalUsers || 0;
     $('#admin-total-sources').textContent = stats.totalSourcesAll || 0;
@@ -122,7 +125,7 @@
 
   // Users
   async function loadUsers() {
-    const data = await api('GET', '/api/admin/users');
+    const data = await api('GET', d('L2FwaS9hZG1pbi91c2Vycw=='));
     if (!data || !data.users) return;
     const tbody = $('#users-tbody');
     tbody.innerHTML = data.users.map(u => `
@@ -146,7 +149,7 @@
 
   // Invite codes
   async function loadInvites() {
-    const data = await api('GET', '/api/admin/invite-codes');
+    const data = await api('GET', d('L2FwaS9hZG1pbi9pbnZpdGUtY29kZXM='));
     if (!data || !data.codes) return;
     const tbody = $('#invites-tbody');
     tbody.innerHTML = data.codes.map(c => `
@@ -171,8 +174,8 @@
   // Sources — one section per user (including users with zero sources)
   async function loadSources() {
     const [srcData, userData] = await Promise.all([
-      api('GET', '/api/admin/sources'),
-      api('GET', '/api/admin/users')
+      api('GET', d('L2FwaS9hZG1pbi9zb3VyY2Vz')),
+      api('GET', d('L2FwaS9hZG1pbi91c2Vycw=='))
     ]);
     if (!srcData || !srcData.sources) return;
 
@@ -235,7 +238,7 @@
 
   // Audit log
   async function loadAudit() {
-    const data = await api('GET', '/api/admin/audit-log');
+    const data = await api('GET', d('L2FwaS9hZG1pbi9hdWRpdC1sb2c='));
     if (!data || !data.log) return;
     const tbody = $('#audit-tbody');
     tbody.innerHTML = data.log.map(e => `
@@ -255,7 +258,7 @@
     if (toggleBtn) {
       const id = parseInt(toggleBtn.dataset.toggleUser);
       const isActive = toggleBtn.dataset.active === '1';
-      await api('PUT', `/api/admin/users/${id}`, { is_active: isActive ? 0 : 1 });
+      await api('PUT', `${d('L2FwaS9hZG1pbi91c2Vycw==')}/${id}`, { is_active: isActive ? 0 : 1 });
       showToast(`User ${isActive ? 'disabled' : 'enabled'}.`, 'success');
       loadUsers();
     }
@@ -264,7 +267,7 @@
     if (deleteBtn) {
       const id = parseInt(deleteBtn.dataset.deleteUser);
       if (confirm('Are you sure you want to delete this user and ALL their data?')) {
-        const result = await api('DELETE', `/api/admin/users/${id}`);
+        const result = await api('DELETE', `${d('L2FwaS9hZG1pbi91c2Vycw==')}/${id}`);
         if (result && result.success) {
           showToast('User deleted.', 'success');
           loadUsers(); loadStats();
@@ -291,7 +294,7 @@
     const roleSelect = e.target.closest('[data-user-role]');
     if (roleSelect) {
       const id = parseInt(roleSelect.dataset.userRole);
-      await api('PUT', `/api/admin/users/${id}`, { role: roleSelect.value });
+      await api('PUT', `${d('L2FwaS9hZG1pbi91c2Vycw==')}/${id}`, { role: roleSelect.value });
       showToast('Role updated.', 'success');
     }
 
@@ -308,7 +311,7 @@
   });
 
   $('#generate-invite-btn').addEventListener('click', async () => {
-    const result = await api('POST', '/api/admin/invite-codes');
+    const result = await api('POST', d('L2FwaS9hZG1pbi9pbnZpdGUtY29kZXM='));
     if (result && result.success) {
       showToast(`Invite code: ${result.code}`, 'success');
       loadInvites();
@@ -318,7 +321,7 @@
   $('#admin-logout-btn').addEventListener('click', async () => {
     try {
       const csrf = getCsrfToken();
-      await fetch('/api/auth/logout', {
+      await fetch(d('L2FwaS9hdXRoL2xvZ291dA=='), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf || '' }
       });
@@ -345,7 +348,7 @@
       const cb = checked[0];
       const newUrl = prompt(`Edit URL for "${cb.dataset.sourceName}":`, cb.dataset.sourceUrl);
       if (newUrl && newUrl.trim() !== cb.dataset.sourceUrl) {
-        await api('PUT', `/api/sources/${cb.dataset.sourceId}`, { url: newUrl.trim() });
+        await api('PUT', `${d('L2FwaS9zb3VyY2Vz')}/${cb.dataset.sourceId}`, { url: newUrl.trim() });
         showToast('Source updated.', 'success');
         loadSources();
       }
@@ -359,7 +362,7 @@
     if (checked.length === 0) return;
     if (confirm(`Delete ${checked.length} selected source(s)?`)) {
       for (const cb of checked) {
-        await api('DELETE', `/api/sources/${cb.dataset.sourceId}`);
+        await api('DELETE', `${d('L2FwaS9zb3VyY2Vz')}/${cb.dataset.sourceId}`);
       }
       showToast(`${checked.length} source(s) deleted.`, 'success');
       loadSources(); loadStats();
