@@ -1,26 +1,59 @@
 /**
  * ThreatPulse v2 — Admin Panel Logic
+ * Cookie-based auth (httpOnly JWT) — no localStorage tokens
  */
 'use strict';
 (function() {
-  const token = localStorage.getItem('tp_token');
-  const user = JSON.parse(localStorage.getItem('tp_user') || 'null');
-
-  if (!token || !user || user.role !== 'admin') {
-    alert('Admin access required. Redirecting...');
-    window.location.href = '/';
-    return;
-  }
-
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => document.querySelectorAll(sel);
 
+  let currentUser = null;
+
+  // Read CSRF token from the readable cookie
+  function getCsrfToken() {
+    const match = document.cookie.match(/(?:^|;\s*)tp_csrf=([^;]*)/);
+    return match ? match[1] : null;
+  }
+
   async function api(method, endpoint, body = null) {
-    const opts = { method, headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` } };
+    const opts = { method, headers: { 'Content-Type': 'application/json' } };
+
+    // Add CSRF token for state-changing requests
+    if (method !== 'GET') {
+      const csrf = getCsrfToken();
+      if (csrf) opts.headers['X-CSRF-Token'] = csrf;
+    }
+
     if (body) opts.body = JSON.stringify(body);
+
     const res = await fetch(endpoint, opts);
-    if (res.status === 401 || res.status === 403) { window.location.href = '/'; return; }
+    if (res.status === 401 || res.status === 403) {
+      window.location.href = '/';
+      throw new Error('Access denied');
+    }
     return res.json();
+  }
+
+  // Check auth on load — cookie is sent automatically
+  async function init() {
+    try {
+      const res = await fetch('/api/auth/me');
+      if (!res.ok) throw new Error('Not authenticated');
+      const data = await res.json();
+      if (!data.success || !data.user || data.user.role !== 'admin') {
+        throw new Error('Admin access required');
+      }
+      currentUser = data.user;
+      // Load all panels
+      loadStats();
+      loadUsers();
+      loadInvites();
+      loadSources();
+      loadAudit();
+    } catch (e) {
+      alert('Admin access required. Redirecting to login...');
+      window.location.href = '/';
+    }
   }
 
   function escapeHtml(str) {
@@ -282,9 +315,14 @@
     }
   });
 
-  $('#admin-logout-btn').addEventListener('click', () => {
-    localStorage.removeItem('tp_token');
-    localStorage.removeItem('tp_user');
+  $('#admin-logout-btn').addEventListener('click', async () => {
+    try {
+      const csrf = getCsrfToken();
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf || '' }
+      });
+    } catch (e) {}
     window.location.href = '/';
   });
 
@@ -350,10 +388,6 @@
     });
   })();
 
-  // Init
-  loadStats();
-  loadUsers();
-  loadInvites();
-  loadSources();
-  loadAudit();
+  // Init — starts async auth check, then loads panels
+  init();
 })();
