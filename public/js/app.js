@@ -1224,7 +1224,7 @@
       const reviewBtn = e.target.closest('[data-review-article]');
       if (reviewBtn) {
         const articleId = parseInt(reviewBtn.dataset.reviewArticle);
-        api('POST', `/api/articles/${articleId}/review`).then(() => {
+        api('POST', `${d('L2FwaS9hcnRpY2xlcw==')}/${articleId}/review`).then(() => {
           showToast('Reviewing', 'You are now reviewing this article.', 'info');
           fetchArticles();
         }).catch(err => showToast('Error', err.message, 'error'));
@@ -1234,7 +1234,7 @@
       if (doneBtn) {
         const articleId = parseInt(doneBtn.dataset.reviewDone);
         const notes = prompt('Add review notes (optional):') || '';
-        api('PUT', `/api/articles/${articleId}/review`, { notes }).then(() => {
+        api('PUT', `${d('L2FwaS9hcnRpY2xlcw==')}/${articleId}/review`, { notes }).then(() => {
           showToast('Reviewed', 'Article marked as reviewed.', 'success');
           fetchArticles();
         }).catch(err => showToast('Error', err.message, 'error'));
@@ -1244,7 +1244,7 @@
       if (escalateBtn) {
         const articleId = parseInt(escalateBtn.dataset.escalate);
         const notes = prompt('Why are you escalating this?') || '';
-        api('POST', `/api/articles/${articleId}/escalate`, { notes }).then(() => {
+        api('POST', `${d('L2FwaS9hcnRpY2xlcw==')}/${articleId}/escalate`, { notes }).then(() => {
           showToast('Escalated', 'Article has been escalated.', 'warning');
           fetchArticles();
         }).catch(err => showToast('Error', err.message, 'error'));
@@ -1382,7 +1382,7 @@
       return;
     }
 
-    // Check if we have an httpOnly session cookie by hitting /api/auth/me
+    // Check if we have an httpOnly session cookie by hitting the auth endpoint
     // (the cookie is sent automatically, no JS involved)
     fetch(d('L2FwaS9hdXRoL21l'))
       .then(r => {
