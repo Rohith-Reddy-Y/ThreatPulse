@@ -751,8 +751,8 @@ function getArticleStats(userId = null) {
   ).get(...sourceFilterParam).count;
 
   const lastFetch = d.prepare(
-    `SELECT MAX(fetched_date) as last FROM articles WHERE 1=1 ${userFilter}`
-  ).get(...userFilterParam);
+    `SELECT MAX(s.last_fetched) as last FROM sources s WHERE s.enabled = 1 ${sourceFilter}`
+  ).get(...sourceFilterParam);
 
   const totalArticles = d.prepare(
     `SELECT COUNT(*) as count FROM articles WHERE 1=1 ${userFilter}`
