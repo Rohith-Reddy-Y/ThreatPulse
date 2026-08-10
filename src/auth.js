@@ -420,14 +420,11 @@ function ensureAdminExists() {
       db.createUserNotificationSettings(result.id);
       db.setMustChangePassword(result.id, 1);
 
-      console.log('[Auth] Default admin created ✓');
-      console.log('[Auth] ┌──────────────────────────────────────────────┐');
-      console.log('[Auth] │  FIRST-RUN ADMIN CREDENTIALS (shown once)     │');
-      console.log('[Auth] ├──────────────────────────────────────────────┤');
-      console.log('[Auth] │  Username: admin');
-      console.log(`[Auth] │  Password: ${initialPassword}`);
-      console.log('[Auth] └──────────────────────────────────────────────┘');
-      console.log('[Auth] ⚠️  You will be required to change this password on first login.');
+      console.log('[Auth] Default admin created');
+      console.log('[Auth] FIRST-RUN ADMIN CREDENTIALS (shown once)');
+      console.log(`[Auth] Username: admin`);
+      console.log(`[Auth] Password: ${initialPassword}`);
+      console.log('[Auth] You will be required to change this password on first login.');
 
       // Generate 10 invite codes for the team
       for (let i = 1; i <= 10; i++) {

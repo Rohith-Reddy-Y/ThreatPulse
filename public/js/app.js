@@ -5,17 +5,17 @@
 'use strict';
 
 (function () {
-  // ═══════════════════════════════════════════════════════════
+  //
   //  AUTH STATE (cookie-based httpOnly JWT — no localStorage)
-  // ═══════════════════════════════════════════════════════════
+  //
   let currentUser = null;
   // Access token lifetime is 15 min; refresh proactively at 13 min
   const REFRESH_MARGIN = 13 * 60 * 1000; // refresh 2 min before expiry
   let refreshTimer = null;
 
-  // ═══════════════════════════════════════════════════════════
+  //
   //  STATE
-  // ═══════════════════════════════════════════════════════════
+  //
   const state = {
     articles: [],
     sources: [],
@@ -30,15 +30,15 @@
     isFetching: false
   };
 
-  // ═══════════════════════════════════════════════════════════
+  //
   //  DOM REFS
-  // ═══════════════════════════════════════════════════════════
+  //
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => document.querySelectorAll(sel);
 
-  // ═══════════════════════════════════════════════════════════
+  //
   //  INLINE ICONS (clean SVGs — no emoji)
-  // ═══════════════════════════════════════════════════════════
+  //
   const ICONS = {
     eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>',
     eyeOff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.9 4.2A9.5 9.5 0 0 1 12 4c6.5 0 10 7 10 7a13.6 13.6 0 0 1-2.2 3M6.1 6.1A13.5 13.5 0 0 0 2 11s3.5 7 10 7a9.3 9.3 0 0 0 3.9-.8"/><path d="M3 3l18 18"/></svg>',
@@ -46,9 +46,9 @@
     moon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>'
   };
 
-  // ═══════════════════════════════════════════════════════════
+  //
   //  API HELPERS (cookie-based auth + CSRF)
-  // ═══════════════════════════════════════════════════════════
+  //
 
   // Decode obfuscated API paths (base64)
   function d(b64) { return atob(b64); }
@@ -124,9 +124,9 @@
     }, REFRESH_MARGIN);
   }
 
-  // ═══════════════════════════════════════════════════════════
+  //
   //  AUTH FLOW
-  // ═══════════════════════════════════════════════════════════
+  //
   function showAuth() {
     $('#auth-overlay').classList.remove('hidden');
     $('#app-container').classList.add('hidden');
@@ -170,9 +170,9 @@
     }
   }
 
-  // ═══════════════════════════════════════════════════════════
+  //
   //  UTILITIES
-  // ═══════════════════════════════════════════════════════════
+  //
   function debounce(fn, ms) {
     let timer;
     return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), ms); };
@@ -291,15 +291,15 @@
     requestAnimationFrame(tick);
   }
 
-  // ═══════════════════════════════════════════════════════════
+  //
   //  DATA FETCHING
-  // ═══════════════════════════════════════════════════════════
+  //
   // Cache the raw last-updated timestamp so relativeTime can be re-evaluated live
   let _statsLastUpdatedRaw = null;
   let _chartTimeline = [];
   let _chartRange = 7;  // default 7 days
 
-  // ── Chart date constants for longer ranges ──
+  // Chart date constants for longer ranges ──
   const CHART_PRESETS = {
     7:  { label: '7d', days: 7, buckets: 'day' },
     14: { label: '14d', days: 14, buckets: 'day' },
@@ -429,9 +429,9 @@
     }
   }
 
-  // ═══════════════════════════════════════════════════════════
+  //
   //  CHART RENDERING — Stock-style area/line chart
-  // ═══════════════════════════════════════════════════════════
+  //
 
   function renderChart(timeline, days) {
     const canvas = $('#threat-chart');
@@ -477,11 +477,11 @@
     const cw = w - ml - mr;
     const ch = h - mt - mb;
 
-    // ── Y-axis scale ──
+    // Y-axis scale ──
     let maxVal = Math.max(1, ...data.map(d => d.count));
     maxVal = Math.ceil(maxVal * 1.15);
 
-    // ── Grid + Y labels ──
+    // Grid + Y labels ──
     const gridLines = 4;
     for (let i = 0; i <= gridLines; i++) {
       const y = mt + (ch / gridLines) * i;
@@ -501,7 +501,7 @@
       ctx.fillText(val, ml - 6, y + 3);
     }
 
-    // ── Build point coordinates ──
+    // Build point coordinates ──
     const points = data.map((d, i) => ({
       x: ml + (i / Math.max(1, data.length - 1)) * cw,
       y: mt + ch - (d.count / maxVal) * ch,
@@ -513,7 +513,7 @@
       day: d.day
     }));
 
-    // ── Area fill gradient ──
+    // Area fill gradient ──
     const grad = ctx.createLinearGradient(0, mt, 0, mt + ch);
     grad.addColorStop(0, 'rgba(34, 211, 238, 0.28)');
     grad.addColorStop(0.5, 'rgba(124, 92, 255, 0.12)');
@@ -527,7 +527,7 @@
     ctx.fillStyle = grad;
     ctx.fill();
 
-    // ── Line ──
+    // Line ──
     ctx.beginPath();
     points.forEach((p, i) => {
       if (i === 0) ctx.moveTo(p.x, p.y);
@@ -540,7 +540,7 @@
     ctx.stroke();
     ctx.shadowBlur = 0;
 
-    // ── Dots on data points ──
+    // Dots on data points ──
     points.forEach(p => {
       ctx.beginPath();
       ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
@@ -551,7 +551,7 @@
       ctx.stroke();
     });
 
-    // ── X-axis labels ──
+    // X-axis labels ──
     const labelStep = Math.max(1, Math.floor(data.length / 7));
     ctx.fillStyle = 'rgba(255,255,255,0.35)';
     ctx.font = '8px "Inter", sans-serif';
@@ -739,9 +739,9 @@
     } catch (e) { console.error('Notification settings error:', e); }
   }
 
-  // ═══════════════════════════════════════════════════════════
+  //
   //  RENDERING
-  // ═══════════════════════════════════════════════════════════
+  //
   function renderArticles() {
     const container = $('#articles-container');
     const skeletons = $('#loading-skeletons');
@@ -750,11 +750,24 @@
 
     skeletons.classList.add('hidden');
 
-    if (state.articles.length === 0) {
+    // Split: articles resolved (reviewed/escalated by anyone) go to sidebar
+    const resolved = [];
+    const active = [];
+    state.articles.forEach(a => {
+      let reviews = [];
+      try { reviews = a.reviews ? JSON.parse(a.reviews) : []; } catch(e) {}
+      const isResolved = reviews.some(r => r.status === 'reviewed' || r.status === 'escalated');
+      if (isResolved) resolved.push(a);
+      else active.push(a);
+    });
+
+    // Render sidebar escalated/reviewed items
+    renderEscalatedSidebar(resolved);
+
+    if (active.length === 0) {
       container.innerHTML = '';
       empty.classList.remove('hidden');
       loadMore.classList.add('hidden');
-      // Context-aware empty state
       const hasFilters = hasActiveFilters();
       $('#empty-title').textContent = hasFilters ? 'No threats match your filters' : 'No Threats Yet';
       $('#empty-message').textContent = hasFilters
@@ -769,7 +782,7 @@
 
     // Group by date
     const groups = {};
-    state.articles.forEach(a => {
+    active.forEach(a => {
       const key = dateKey(a.published_date);
       if (!groups[key]) groups[key] = [];
       groups[key].push(a);
@@ -789,6 +802,31 @@
     }
     container.innerHTML = html;
     loadMore.classList.toggle('hidden', state.currentPage >= state.totalPages);
+  }
+
+  // Render escalated/reviewed items in the sidebar
+  function renderEscalatedSidebar(items) {
+    const list = $('#escalated-sidebar-list');
+    if (!list) return;
+    if (items.length === 0) {
+      list.innerHTML = '<p class="empty-sources">No escalated or reviewed items.</p>';
+      return;
+    }
+    list.innerHTML = items.map(a => {
+      let reviews = [];
+      try { reviews = a.reviews ? JSON.parse(a.reviews) : []; } catch(e) {}
+      const escalated = reviews.find(r => r.status === 'escalated');
+      const reviewed = reviews.find(r => r.status === 'reviewed');
+      const who = escalated || reviewed;
+      const statusTag = escalated
+        ? '<span class="badge badge-severity-critical">Escalated</span>'
+        : '<span class="badge badge-patched">Reviewed</span>';
+      const noteSnippet = who && who.notes ? `<span class="sidebar-item-note">${escapeHtml(who.notes.substring(0, 50))}</span>` : '';
+      return `<div class="sidebar-article-item">
+        <a href="${escapeHtml(a.url)}" target="_blank" rel="noopener" class="sidebar-article-link" title="${escapeHtml(a.title)}">${escapeHtml(a.title.substring(0, 60))}${a.title.length > 60 ? '...' : ''}</a>
+        <div class="sidebar-article-meta">${statusTag} ${who ? escapeHtml(who.username) : ''} ${noteSnippet}</div>
+      </div>`;
+    }).join('');
   }
 
   function mitreLink(id) {
@@ -987,9 +1025,9 @@
     }
   }
 
-  // ═══════════════════════════════════════════════════════════
+  //
   //  SOURCE & NOTIFICATION ACTIONS
-  // ═══════════════════════════════════════════════════════════
+  //
   async function addSource(formData) {
     try {
       await api('POST', d('L2FwaS9zb3VyY2Vz'), formData);
@@ -1107,9 +1145,9 @@
     a.click(); URL.revokeObjectURL(url);
   }
 
-  // ═══════════════════════════════════════════════════════════
+  //
   //  AUTO-REFRESH
-  // ═══════════════════════════════════════════════════════════
+  //
   function startAutoRefresh() {
     state.refreshCountdown = 60;
     if (state.countdownTimer) clearInterval(state.countdownTimer);
@@ -1128,9 +1166,9 @@
     }, 60000);
   }
 
-  // ═══════════════════════════════════════════════════════════
+  //
   //  EVENT BINDING
-  // ═══════════════════════════════════════════════════════════
+  //
   function bindEvents() {
     // Auth: Login
     $('#login-form').addEventListener('submit', async (e) => {
@@ -1935,9 +1973,9 @@
     });
   }
 
-  // ═══════════════════════════════════════════════════════════
+  //
   //  INITIALIZATION
-  // ═══════════════════════════════════════════════════════════
+  //
   function enforcePasswordChange() {
     if (!currentUser || !currentUser.mustChangePassword) return;
     const modal = $('#password-modal');
