@@ -851,11 +851,23 @@
       if (myReview) myReviewStatus = myReview.status;
     }
 
+    // Check if ANY user has escalated this article (for dashboard visibility)
+    const escalatedByAnyone = reviews.some(r => r.status === 'escalated');
+    const escalatedReview = reviews.find(r => r.status === 'escalated');
+
     if (reviews.length > 0) {
       reviewHtml = '<div class="article-reviews">';
       reviews.forEach(r => {
-        const timeStr = r.status === 'reviewing' ? `since ${relativeTime(r.started_at)}` : relativeTime(r.completed_at || r.started_at);
-        reviewHtml += `<span class="review-tag review-${r.status}">${escapeHtml(r.username)} · ${timeStr}</span>`;
+        let label;
+        if (r.status === 'reviewing') {
+          label = `${escapeHtml(r.username)} · reviewing`;
+        } else if (r.status === 'escalated') {
+          const noteSnippet = r.notes ? ` — ${escapeHtml(r.notes.substring(0, 60))}` : '';
+          label = `${escapeHtml(r.username)} · escalated${noteSnippet}`;
+        } else {
+          label = `${escapeHtml(r.username)} · reviewed`;
+        }
+        reviewHtml += `<span class="review-tag review-${r.status}">${label}</span>`;
       });
       reviewHtml += '</div>';
     }
@@ -863,30 +875,33 @@
     // Button states based on my review status
     let reviewBtnCls = 'btn-review';
     let reviewBtnTxt = 'Review';
-    let doneBtnDisabled = '';
+    let reviewBtnDisabled = '';
+    let doneBtnDisabled = 'disabled';     // ⬅ DEFAULT: only enable when actively reviewing
     let escalateBtnCls = 'btn-escalate';
     let escalateBtnTxt = 'Escalate';
+    let escalateBtnDisabled = '';
 
     if (myReviewStatus === 'reviewing') {
       reviewBtnCls = 'btn-review reviewing';
       reviewBtnTxt = 'In Review';
-      doneBtnDisabled = '';
+      doneBtnDisabled = '';               // ⬅ enable Done when reviewing
     } else if (myReviewStatus === 'reviewed') {
       reviewBtnTxt = 'Reviewed ✓';
       reviewBtnCls = 'btn-review reviewing';
-      doneBtnDisabled = 'disabled';
+      reviewBtnDisabled = 'disabled';
     } else if (myReviewStatus === 'escalated') {
       escalateBtnCls = 'btn-escalate escalated';
       escalateBtnTxt = 'Escalated';
-      reviewBtnTxt = 'Reviewed ✓';
-      reviewBtnCls = 'btn-review reviewing';
+      escalateBtnDisabled = 'disabled';
+      reviewBtnTxt = 'N/A';
+      reviewBtnDisabled = 'disabled';
       doneBtnDisabled = 'disabled';
     }
 
     // Card CSS class for review state
     let cardExtraCls = '';
     if (myReviewStatus === 'reviewed') cardExtraCls = ' reviewed-by-me';
-    else if (myReviewStatus === 'escalated') cardExtraCls = ' escalated-by-me';
+    else if (escalatedByAnyone) cardExtraCls = ' escalated-by-me';
 
     return `
       <article class="article-card ${article.severity === 'critical' ? 'critical' : ''} ${mitreIds.length ? 'has-ttp' : ''}${cardExtraCls}" data-article-id="${article.id}">
@@ -904,9 +919,9 @@
         ${iocHtml}
         ${reviewHtml}
         <div class="article-actions">
-          <button class="${reviewBtnCls}" data-review-article="${article.id}" title="Start reviewing"${doneBtnDisabled}>${reviewBtnTxt}</button>
+          <button class="${reviewBtnCls}" data-review-article="${article.id}" title="Start reviewing"${reviewBtnDisabled}>${reviewBtnTxt}</button>
           <button class="btn-review-done" data-review-done="${article.id}" title="Mark as reviewed"${doneBtnDisabled}>Done</button>
-          <button class="${escalateBtnCls}" data-escalate="${article.id}" title="Escalate">${escalateBtnTxt}</button>
+          <button class="${escalateBtnCls}" data-escalate="${article.id}" title="Escalate"${escalateBtnDisabled}>${escalateBtnTxt}</button>
         </div>
       </article>`;
   }
