@@ -254,22 +254,47 @@
     updateLastUpdatedDisplay();
   }
 
-  // Dynamic favicon — badge showing today's threat count, resets daily
+  // Dynamic favicon — shield + pulse, with page title badge showing today's count
   let _todayCount = 0;
+  let _faviconFrame = 0;
+  
   function updateFavicon() {
     const count = _todayCount;
-    const color = count > 50 ? '#ff5c7a' : count > 10 ? '#ffab5c' : '#22d3ee';
-    const digits = count > 999 ? '1k' : String(count);
-    const fontSize = digits.length > 2 ? '7' : '8';
+    _faviconFrame++;
+    const cycle = 60;
+    const f = _faviconFrame % cycle;
 
+    function ringAlpha(offset) {
+      const phase = (f + offset) % cycle;
+      const progress = phase / cycle;
+      if (progress < 0.1) return 0;
+      if (progress < 0.7) return 0.8;
+      return 0.8 * (1 - (progress - 0.7) / 0.3);
+    }
+
+    function ringRadius(offset) {
+      const phase = (f + offset) % cycle;
+      const progress = phase / cycle;
+      return 1.2 + progress * 2.5;
+    }
+
+    const color = count > 50 ? '#ff5c7a' : count > 10 ? '#ffab5c' : '#22d3ee';
+
+    // Shield + pulse rings favicon
     const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">'
-      + '<rect width="16" height="16" rx="3" fill="#0d0f1a"/>'
-      + '<rect width="16" height="16" rx="3" fill="none" stroke="' + color + '" stroke-width="0.8" opacity="0.8"/>'
-      + '<text x="8" y="' + (digits.length > 2 ? '11.5' : '12') + '" text-anchor="middle" fill="' + color + '" font-family="Inter,sans-serif" font-weight="700" font-size="' + fontSize + '">' + digits + '</text>'
+      + '<path d="M8 1L3 4v4c0 4 5 7 5 7s5-3 5-7V4L8 1z" fill="none" stroke="' + color + '" stroke-width="0.9" opacity="0.85"/>'
+      + '<circle cx="8" cy="7" r="' + ringRadius(0).toFixed(2) + '" fill="none" stroke="' + color + '" stroke-width="0.4" opacity="' + ringAlpha(0).toFixed(2) + '"/>'
+      + '<circle cx="8" cy="7" r="' + ringRadius(20).toFixed(2) + '" fill="none" stroke="' + color + '" stroke-width="0.4" opacity="' + ringAlpha(20).toFixed(2) + '"/>'
+      + '<circle cx="8" cy="7" r="' + ringRadius(40).toFixed(2) + '" fill="none" stroke="' + color + '" stroke-width="0.4" opacity="' + ringAlpha(40).toFixed(2) + '"/>'
+      + '<circle cx="8" cy="7" r="0.8" fill="' + color + '" opacity="0.9"/>'
       + '</svg>';
 
     const icon = document.querySelector('link[rel=icon]');
     if (icon) icon.href = 'data:image/svg+xml,' + encodeURIComponent(svg);
+
+    // Update page title with count badge
+    const baseTitle = 'ThreatPulse';
+    document.title = count > 0 ? baseTitle + ' (' + count + ')' : baseTitle;
   }
 
   function updateFaviconCount(count) {
@@ -444,10 +469,27 @@
   //  CHART RENDERING — Stock-style area/line chart
   //
 
+  function getChartColors() {
+    const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+    return {
+      grid: isLight ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.04)',
+      axisLabel: isLight ? 'rgba(0,0,0,0.4)' : 'rgba(255,255,255,0.28)',
+      xLabel: isLight ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.35)',
+      dotFill: isLight ? '#f6f8fd' : '#0d0f1a',
+      areaTop: isLight ? 'rgba(8,145,178,0.25)' : 'rgba(34,211,238,0.28)',
+      areaMid: isLight ? 'rgba(109,75,255,0.1)' : 'rgba(124,92,255,0.12)',
+      areaBot: isLight ? 'rgba(109,75,255,0.02)' : 'rgba(124,92,255,0.02)',
+      line: isLight ? '#0891b2' : '#22d3ee',
+      glow: isLight ? 'rgba(8,145,178,0.4)' : 'rgba(34,211,238,0.6)'
+    };
+  }
+
   function renderChart(timeline, days) {
     const canvas = $('#threat-chart');
     const empty = $('#chart-empty');
     if (!canvas) return;
+
+    const colors = getChartColors();
 
     const preset = CHART_PRESETS[days] || CHART_PRESETS[7];
     const cutoff = new Date();
@@ -496,7 +538,7 @@
     const gridLines = 4;
     for (let i = 0; i <= gridLines; i++) {
       const y = mt + (ch / gridLines) * i;
-      ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+      ctx.strokeStyle = colors.grid;
       ctx.setLineDash([1, 8]);
       ctx.lineWidth = 1;
       ctx.beginPath();
@@ -506,7 +548,7 @@
       ctx.setLineDash([]);
 
       const val = Math.round(maxVal - (maxVal / gridLines) * i);
-      ctx.fillStyle = 'rgba(255,255,255,0.28)';
+      ctx.fillStyle = colors.axisLabel;
       ctx.font = '9px "JetBrains Mono", monospace';
       ctx.textAlign = 'right';
       ctx.fillText(val, ml - 6, y + 3);
@@ -526,9 +568,9 @@
 
     // Area fill gradient ──
     const grad = ctx.createLinearGradient(0, mt, 0, mt + ch);
-    grad.addColorStop(0, 'rgba(34, 211, 238, 0.28)');
-    grad.addColorStop(0.5, 'rgba(124, 92, 255, 0.12)');
-    grad.addColorStop(1, 'rgba(124, 92, 255, 0.02)');
+    grad.addColorStop(0, colors.areaTop);
+    grad.addColorStop(0.5, colors.areaMid);
+    grad.addColorStop(1, colors.areaBot);
 
     ctx.beginPath();
     ctx.moveTo(ml, mt + ch);
@@ -538,33 +580,33 @@
     ctx.fillStyle = grad;
     ctx.fill();
 
-    // Line ──
+    // Line
     ctx.beginPath();
     points.forEach((p, i) => {
       if (i === 0) ctx.moveTo(p.x, p.y);
       else ctx.lineTo(p.x, p.y);
     });
-    ctx.strokeStyle = '#22d3ee';
+    ctx.strokeStyle = colors.line;
     ctx.lineWidth = 2;
-    ctx.shadowColor = 'rgba(34, 211, 238, 0.6)';
+    ctx.shadowColor = colors.glow;
     ctx.shadowBlur = 8;
     ctx.stroke();
     ctx.shadowBlur = 0;
 
-    // Dots on data points ──
+    // Dots on data points
     points.forEach(p => {
       ctx.beginPath();
       ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
-      ctx.fillStyle = '#0d0f1a';
+      ctx.fillStyle = colors.dotFill;
       ctx.fill();
-      ctx.strokeStyle = '#22d3ee';
+      ctx.strokeStyle = colors.line;
       ctx.lineWidth = 1.5;
       ctx.stroke();
     });
 
-    // X-axis labels ──
+    // X-axis labels
     const labelStep = Math.max(1, Math.floor(data.length / 7));
-    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.fillStyle = colors.xLabel;
     ctx.font = '8px "Inter", sans-serif';
     ctx.textAlign = 'center';
     data.forEach((d, i) => {
@@ -2008,8 +2050,9 @@
   async function initDashboard() {
     updateClock();
     setInterval(updateClock, 1000);
-    // Dynamic favicon — updated via fetchStats
+    // Dynamic favicon — shield + pulse, updated every 2s
     updateFavicon();
+    setInterval(updateFavicon, 2000);
     enforcePasswordChange();
     await Promise.allSettled([fetchStats(), fetchArticles(), fetchSources(), fetchNotificationSettings()]);
     startAutoRefresh();
