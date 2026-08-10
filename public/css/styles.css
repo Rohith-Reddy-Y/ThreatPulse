@@ -1,9 +1,9 @@
-/* ═══════════════════════════════════════════════════════════
+/*
    ThreatPulse — Cyber Threat Intelligence Dashboard
    Dark Theme · Glassmorphism · Neon Accents
-   ═══════════════════════════════════════════════════════════ */
+ */
 
-/* ─── CUSTOM PROPERTIES ─── */
+/* CUSTOM PROPERTIES */
 /* Dark theme (default) — sleek dark-SaaS · violet → cyan */
 :root {
   color-scheme: dark;
@@ -111,7 +111,7 @@
   --border-accent: rgba(109, 75, 255, 0.3);
 }
 
-/* ─── RESET & BASE ─── */
+/* RESET & BASE */
 *, *::before, *::after {
   margin: 0;
   padding: 0;
@@ -216,7 +216,7 @@ body::after {
   .bg-scan::before { animation: none; }
 }
 
-/* ─── CUSTOM SCROLLBAR ─── */
+/* CUSTOM SCROLLBAR */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -240,12 +240,10 @@ body::after {
   scrollbar-color: rgba(45, 168, 189, 0.2) transparent;
 }
 
-/* ─── UTILITY ─── */
+/* UTILITY */
 .hidden { display: none !important; }
 
-/* ═══════════════════════════════════════════════════════════
-   HEADER
-   ═══════════════════════════════════════════════════════════ */
+/* */
 .header {
   display: flex;
   align-items: center;
@@ -371,9 +369,7 @@ body::after {
 
 .source-icon { font-size: 0.85rem; }
 
-/* ═══════════════════════════════════════════════════════════
-   STATS BAR
-   ═══════════════════════════════════════════════════════════ */
+/* */
 .stats-bar {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -479,9 +475,7 @@ body::after {
 .stat-trend.warning { background: var(--orange-dim); color: var(--orange); }
 .stat-trend.neutral { background: var(--green-dim); color: var(--green); }
 
-/* ═══════════════════════════════════════════════════════════
-   THREAT ACTIVITY CHART
-   ═══════════════════════════════════════════════════════════ */
+/* */
 .chart-section {
   padding: 0 28px 20px;
   animation: fadeInUp 0.7s var(--ease-out) 0.15s both;
@@ -552,9 +546,7 @@ body::after {
   pointer-events: none;
 }
 
-/* ═══════════════════════════════════════════════════════════
-   LOADING PROGRESS BAR
-   ═══════════════════════════════════════════════════════════ */
+/* */
 .loading-bar {
   position: fixed;
   top: 0;
@@ -577,9 +569,7 @@ body::after {
   100% { width: 0%; left: 100%; }
 }
 
-/* ═══════════════════════════════════════════════════════════
-   REVIEW ACTION BUTTONS
-   ═══════════════════════════════════════════════════════════ */
+/* */
 .article-actions {
   display: flex;
   gap: 6px;
@@ -625,9 +615,7 @@ body::after {
   border-left: 2px solid var(--red);
 }
 
-/* ═══════════════════════════════════════════════════════════
-   CUSTOM DATE RANGE PICKER
-   ═══════════════════════════════════════════════════════════ */
+/* */
 .custom-date-picker {
   display: none;
   align-items: center;
@@ -718,7 +706,7 @@ body::after {
 
 .selected-range-tag .remove-range:hover { opacity: 1; }
 
-/* ─── Sidebar Article Items (Escalated & Reviewed) ─── */
+/* Sidebar Article Items (Escalated & Reviewed) */
 .sidebar-article-item {
   padding: 8px 0;
   border-bottom: 1px solid var(--border-subtle);
@@ -763,9 +751,7 @@ body::after {
   font-size: 0.63rem;
 }
 
-/* ═══════════════════════════════════════════════════════════
-   FILTER / SEARCH BAR
-   ═══════════════════════════════════════════════════════════ */
+/* */
 .filter-bar {
   padding: 0 28px 16px;
   display: flex;
@@ -973,7 +959,7 @@ body::after {
   to { opacity: 1; transform: scale(1); }
 }
 
-/* ─── BUTTONS ─── */
+/* BUTTONS */
 .btn {
   display: inline-flex;
   align-items: center;
@@ -1060,9 +1046,7 @@ body::after {
   to { transform: rotate(360deg); }
 }
 
-/* ═══════════════════════════════════════════════════════════
-   MAIN CONTENT LAYOUT
-   ═══════════════════════════════════════════════════════════ */
+/* */
 .main-content {
   display: grid;
   grid-template-columns: 1fr 360px;
@@ -1075,9 +1059,7 @@ body::after {
   min-width: 0;
 }
 
-/* ═══════════════════════════════════════════════════════════
-   SKELETON LOADING
-   ═══════════════════════════════════════════════════════════ */
+/* */
 .skeleton-group {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -1141,9 +1123,7 @@ body::after {
   border-radius: 10px;
 }
 
-/* ═══════════════════════════════════════════════════════════
-   EMPTY STATE
-   ═══════════════════════════════════════════════════════════ */
+/* */
 .empty-state {
   text-align: center;
   padding: 60px 20px;
@@ -1166,9 +1146,7 @@ body::after {
   font-size: 0.85rem;
 }
 
-/* ═══════════════════════════════════════════════════════════
-   DATE SECTIONS & ARTICLE CARDS
-   ═══════════════════════════════════════════════════════════ */
+/* */
 .date-section {
   margin-bottom: 24px;
 }
@@ -1229,7 +1207,7 @@ body::after {
   pointer-events: none;
 }
 
-/* ─── ARTICLE CARD ─── */
+/* ARTICLE CARD */
 .article-card {
   background: var(--bg-card);
   backdrop-filter: blur(12px);
@@ -1491,7 +1469,7 @@ body::after {
   color: var(--text-secondary);
 }
 
-/* ─── IOC Tags ─── */
+/* IOC Tags */
 .article-iocs {
   display: flex;
   flex-wrap: wrap;
@@ -1534,7 +1512,7 @@ body::after {
   text-shadow: 0 0 10px rgba(45, 168, 189, 0.3);
 }
 
-/* ─── LOAD MORE ─── */
+/* LOAD MORE */
 .load-more-container {
   text-align: center;
   padding: 20px 0;
@@ -1544,9 +1522,7 @@ body::after {
   padding: 12px 28px;
 }
 
-/* ═══════════════════════════════════════════════════════════
-   SIDEBAR
-   ═══════════════════════════════════════════════════════════ */
+/* */
 .sidebar {
   display: flex;
   flex-direction: column;
@@ -1583,7 +1559,7 @@ body::after {
   color: var(--cyan);
 }
 
-/* ─── FORMS ─── */
+/* FORMS */
 .form-group {
   margin-bottom: 12px;
 }
@@ -1644,7 +1620,7 @@ body::after {
   margin-bottom: 0;
 }
 
-/* ─── TOGGLE SWITCH ─── */
+/* TOGGLE SWITCH */
 .toggle-switch {
   position: relative;
   width: 40px;
@@ -1690,7 +1666,7 @@ body::after {
   background: #0a0e17;
 }
 
-/* ─── SOURCES LIST ─── */
+/* SOURCES LIST */
 .sources-sections {
   display: flex;
   flex-direction: column;
@@ -1850,7 +1826,7 @@ body::after {
   font-style: italic;
 }
 
-/* ─── NOTIFICATION FORM ─── */
+/* NOTIFICATION FORM */
 .notif-buttons {
   display: flex;
   gap: 8px;
@@ -1862,9 +1838,7 @@ body::after {
   justify-content: center;
 }
 
-/* ═══════════════════════════════════════════════════════════
-   FOOTER
-   ═══════════════════════════════════════════════════════════ */
+/* */
 .footer {
   display: flex;
   align-items: center;
@@ -1931,9 +1905,7 @@ body::after {
   box-shadow: 0 0 8px rgba(255, 51, 102, 0.4);
 }
 
-/* ═══════════════════════════════════════════════════════════
-   TOAST NOTIFICATIONS
-   ═══════════════════════════════════════════════════════════ */
+/* */
 #toast-container {
   position: fixed;
   top: 80px;
@@ -2018,9 +1990,7 @@ body::after {
 .toast.toast-warning { border-left: 3px solid var(--orange); }
 .toast.toast-info { border-left: 3px solid var(--cyan); }
 
-/* ═══════════════════════════════════════════════════════════
-   RESPONSIVE DESIGN
-   ═══════════════════════════════════════════════════════════ */
+/* */
 @media (max-width: 1200px) {
   .main-content {
     grid-template-columns: 1fr 300px;
@@ -2137,7 +2107,7 @@ body::after {
   }
 }
 
-/* ─── ANIMATION DELAYS FOR STAGGERED ENTRANCE ─── */
+/* ANIMATION DELAYS FOR STAGGERED ENTRANCE */
 .article-card:nth-child(1) { animation-delay: 0.05s; }
 .article-card:nth-child(2) { animation-delay: 0.1s; }
 .article-card:nth-child(3) { animation-delay: 0.15s; }
@@ -2149,15 +2119,13 @@ body::after {
 .article-card:nth-child(9) { animation-delay: 0.45s; }
 .article-card:nth-child(10) { animation-delay: 0.5s; }
 
-/* ─── SELECTION STYLE ─── */
+/* SELECTION STYLE */
 ::selection {
   background: rgba(45, 168, 189, 0.25);
   color: var(--text-primary);
 }
 
-/* ═══════════════════════════════════════════════════════════
-   AUTH OVERLAY & LOGIN/REGISTER MODAL
-   ═══════════════════════════════════════════════════════════ */
+/* */
 .auth-overlay {
   position: fixed;
   inset: 0;
@@ -2410,9 +2378,7 @@ body::after {
   transform: none !important;
 }
 
-/* ═══════════════════════════════════════════════════════════
-   USER MENU (HEADER)
-   ═══════════════════════════════════════════════════════════ */
+/* */
 .user-menu-wrapper {
   position: relative;
   margin-left: 18px;
@@ -2549,9 +2515,7 @@ body::after {
   margin: 4px 0;
 }
 
-/* ═══════════════════════════════════════════════════════════
-   REVIEW SYSTEM
-   ═══════════════════════════════════════════════════════════ */
+/* */
 .article-review-bar {
   display: flex;
   align-items: center;
@@ -2732,9 +2696,7 @@ body::after {
   margin-top: 14px;
 }
 
-/* ═══════════════════════════════════════════════════════════
-   SECTOR FILTER CHIPS
-   ═══════════════════════════════════════════════════════════ */
+/* */
 .sector-filters {
   display: flex;
   gap: 8px;
@@ -2769,9 +2731,7 @@ body::after {
   box-shadow: 0 0 10px rgba(45, 168, 189, 0.1);
 }
 
-/* ═══════════════════════════════════════════════════════════
-   THREAT ACTOR DROPDOWN
-   ═══════════════════════════════════════════════════════════ */
+/* */
 .threat-actor-select {
   padding: 8px 32px 8px 12px;
   background: var(--bg-input);
@@ -2795,9 +2755,7 @@ body::after {
   color: var(--text-primary);
 }
 
-/* ═══════════════════════════════════════════════════════════
-   MITRE ATT&CK LINKS
-   ═══════════════════════════════════════════════════════════ */
+/* */
 .mitre-id {
   font-family: var(--font-mono);
   font-size: 0.72rem;
@@ -2816,9 +2774,7 @@ body::after {
   box-shadow: 0 0 10px rgba(168, 85, 247, 0.15);
 }
 
-/* ═══════════════════════════════════════════════════════════
-   ADMIN PANEL STYLES
-   ═══════════════════════════════════════════════════════════ */
+/* */
 .admin-layout {
   min-height: 100vh;
   display: flex;
@@ -3188,15 +3144,13 @@ body::after {
   color: var(--text-primary);
 }
 
-/* ─── FOCUS VISIBLE ─── */
+/* FOCUS VISIBLE */
 :focus-visible {
   outline: 2px solid var(--cyan);
   outline-offset: 2px;
 }
 
-/* ═══════════════════════════════════════════════════════════
-   AUTH OVERLAY & LOGIN
-   ═══════════════════════════════════════════════════════════ */
+/* */
 .auth-overlay {
   position: fixed;
   inset: 0;
@@ -3259,9 +3213,7 @@ body::after {
   font-size: 13px;
 }
 
-/* ═══════════════════════════════════════════════════════════
-   USER MENU
-   ═══════════════════════════════════════════════════════════ */
+/* */
 .user-menu { position: relative; margin-left: 16px; }
 .user-menu-btn {
   display: flex;
@@ -3324,9 +3276,7 @@ body::after {
 .user-dropdown-item.danger:hover { background: rgba(255,51,102,0.1); color: var(--red); }
 .user-dropdown-item.hidden { display: none; }
 
-/* ═══════════════════════════════════════════════════════════
-   REVIEW BADGES & ARTICLE ACTIONS
-   ═══════════════════════════════════════════════════════════ */
+/* */
 .article-reviews {
   display: flex;
   flex-wrap: wrap;
@@ -3383,9 +3333,7 @@ body::after {
 .btn-review-done:hover { border-color: var(--green); color: var(--green); }
 .btn-escalate:hover { border-color: var(--red); color: var(--red); }
 
-/* ═══════════════════════════════════════════════════════════
-   SECTOR & ACTOR BADGES
-   ═══════════════════════════════════════════════════════════ */
+/* */
 .badge-sector {
   background: rgba(168,85,247,0.15);
   color: var(--purple);
@@ -3403,9 +3351,7 @@ body::after {
   margin-left: 6px;
 }
 
-/* ═══════════════════════════════════════════════════════════
-   ADMIN TABLE
-   ═══════════════════════════════════════════════════════════ */
+/* */
 .admin-table {
   width: 100%;
   border-collapse: collapse;
@@ -3431,9 +3377,7 @@ body::after {
 .admin-table tbody tr:hover { background: rgba(45, 168, 189,0.03); }
 .admin-tab.hidden { display: none; }
 
-/* ═══════════════════════════════════════════════════════════
-   MODAL OVERLAY
-   ═══════════════════════════════════════════════════════════ */
+/* */
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -3446,9 +3390,7 @@ body::after {
 }
 .modal-overlay.hidden { display: none; }
 
-/* ═══════════════════════════════════════════════════════════
-   PASSWORD EYE TOGGLE
-   ═══════════════════════════════════════════════════════════ */
+/* */
 .password-field {
   position: relative;
   display: flex;
@@ -3471,9 +3413,7 @@ body::after {
 }
 .eye-toggle:hover { opacity: 1; }
 
-/* ═══════════════════════════════════════════════════════════
-   BULK ACTIONS BAR (Dashboard + Admin)
-   ═══════════════════════════════════════════════════════════ */
+/* */
 .sources-bulk-bar, .bulk-actions {
   display: flex;
   align-items: center;
@@ -3497,9 +3437,7 @@ body::after {
 
 .copy-code:hover { opacity: 0.8; }
 
-/* ═══════════════════════════════════════════════════════════
-   THEME TOGGLE + PROFESSIONAL REFINEMENTS
-   ═══════════════════════════════════════════════════════════ */
+/* */
 .theme-toggle {
   display: inline-flex;
   align-items: center;
@@ -3575,9 +3513,7 @@ body,
   background-color: rgba(109, 75, 255, 0.06);
 }
 
-/* ═══════════════════════════════════════════════════════════
-   DETECTION-ENGINEERING BADGES & FILTERS
-   ═══════════════════════════════════════════════════════════ */
+/* */
 .badge-mitre {
   background: var(--purple-dim);
   color: var(--purple);
@@ -3645,9 +3581,7 @@ body,
   box-shadow: var(--cyan-glow);
 }
 
-/* ═══════════════════════════════════════════════════════════
-   NOTIFICATION CHANNELS
-   ═══════════════════════════════════════════════════════════ */
+/* */
 .notif-channel {
   padding: 12px;
   margin-bottom: 12px;
@@ -3683,9 +3617,7 @@ body,
   margin: 4px 0 14px;
 }
 
-/* ═══════════════════════════════════════════════════════════
-   REDESIGN 2.0 — sleek dark-SaaS layer (overrides)
-   ═══════════════════════════════════════════════════════════ */
+/* */
 
 /* ── Buttons ── */
 .btn-primary {
@@ -3825,9 +3757,7 @@ body,
 ::-webkit-scrollbar-thumb { background: rgba(124,92,255,0.3); }
 ::-webkit-scrollbar-thumb:hover { background: rgba(124,92,255,0.5); }
 
-/* ═══════════════════════════════════════════════════════════
-   INLINE SVG ICON SIZING  (replaces former emoji glyphs)
-   ═══════════════════════════════════════════════════════════ */
+/* */
 .logo-icon { display: inline-flex; align-items: center; line-height: 0; }
 .logo-icon svg { width: 1.6rem; height: 1.6rem; color: var(--cyan); }
 .auth-logo .logo-icon { justify-content: center; }
