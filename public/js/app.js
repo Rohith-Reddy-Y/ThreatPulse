@@ -473,8 +473,8 @@
     const isLight = document.documentElement.getAttribute('data-theme') === 'light';
     return {
       grid: isLight ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.04)',
-      axisLabel: isLight ? 'rgba(0,0,0,0.4)' : 'rgba(255,255,255,0.28)',
-      xLabel: isLight ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.35)',
+      axisLabel: isLight ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.35)',
+      xLabel: isLight ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.42)',
       dotFill: isLight ? '#f6f8fd' : '#0d0f1a',
       areaTop: isLight ? 'rgba(8,145,178,0.25)' : 'rgba(34,211,238,0.28)',
       areaMid: isLight ? 'rgba(109,75,255,0.1)' : 'rgba(124,92,255,0.12)',
@@ -2070,6 +2070,8 @@
       btn.addEventListener('click', () => {
         const cur = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
         apply(cur === 'light' ? 'dark' : 'light');
+        // Re-render chart with new theme colors
+        if (_chartTimeline.length) renderChart(_chartTimeline, _chartRange);
       });
     }
   }
