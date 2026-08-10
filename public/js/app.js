@@ -314,7 +314,17 @@
   // Cache the raw last-updated timestamp so relativeTime can be re-evaluated live
   let _statsLastUpdatedRaw = null;
   let _chartTimeline = [];
-  let _chartRange = 7;
+  let _chartRange = 7;  // default 7 days
+
+  // ── Chart date constants for longer ranges ──
+  const CHART_PRESETS = {
+    7:  { label: '7d', days: 7, buckets: 'day' },
+    14: { label: '14d', days: 14, buckets: 'day' },
+    30: { label: '30d', days: 30, buckets: 'day' },
+    180: { label: '6mo', days: 180, buckets: 'week' },
+    365: { label: '1yr', days: 365, buckets: 'month' },
+    0:  { label: 'All', days: 9999, buckets: 'month' }
+  };
 
   // Loading bar — thin indeterminate progress bar at top of page
   function showLoader() {
@@ -404,13 +414,37 @@
     const srcTrend = $('#stat-sources-trend');
     if (srcTrend) {
       const src = stats.activeSources || 0;
-      srcTrend.textContent = src > 0 ? '● Online' : '● Offline';
-      srcTrend.className = src > 0 ? 'stat-trend neutral' : 'stat-trend danger';
+      const err = stats.erroredSources || 0;
+      if (err > 0) {
+        srcTrend.textContent = `${src} OK · ${err} err`;
+        srcTrend.className = 'stat-trend warning';
+      } else if (src > 0) {
+        srcTrend.textContent = '● Online';
+        srcTrend.className = 'stat-trend neutral';
+      } else {
+        srcTrend.textContent = '● Offline';
+        srcTrend.className = 'stat-trend danger';
+      }
+    }
+
+    // Header: show healthy count + errored
+    const totalEl = $('#total-sources-count');
+    if (totalEl) {
+      const err = stats.erroredSources || 0;
+      if (err > 0) {
+        totalEl.textContent = stats.activeSources || 0;
+        totalEl.style.color = 'var(--orange)';
+        totalEl.title = `${err} source(s) have errors`;
+      } else {
+        totalEl.textContent = stats.activeSources || 0;
+        totalEl.style.color = '';
+        totalEl.title = '';
+      }
     }
   }
 
   // ═══════════════════════════════════════════════════════════
-  //  CHART RENDERING (Canvas — zero dependencies)
+  //  CHART RENDERING — Stock-style area/line chart
   // ═══════════════════════════════════════════════════════════
 
   function renderChart(timeline, days) {
@@ -418,11 +452,20 @@
     const empty = $('#chart-empty');
     if (!canvas) return;
 
-    // Filter to last N days
+    const preset = CHART_PRESETS[days] || CHART_PRESETS[7];
     const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - days);
+    cutoff.setDate(cutoff.getDate() - preset.days);
     const cutoffStr = cutoff.toISOString().split('T')[0];
-    const data = (timeline || []).filter(d => d.day >= cutoffStr);
+
+    // Bucket data if needed (week/month aggregation for longer ranges)
+    let data;
+    if (preset.buckets === 'week') {
+      data = bucketTimeline(timeline, cutoffStr, 'week');
+    } else if (preset.buckets === 'month') {
+      data = bucketTimeline(timeline, cutoffStr, 'month');
+    } else {
+      data = (timeline || []).filter(d => d.day >= cutoffStr);
+    }
 
     if (data.length === 0) {
       canvas.style.display = 'none';
@@ -435,8 +478,8 @@
 
     const dpr = window.devicePixelRatio || 1;
     const rect = canvas.parentElement.getBoundingClientRect();
-    const w = rect.width - 32;  // padding
-    const h = 180;
+    const w = rect.width - 32;
+    const h = 190;
     canvas.width = w * dpr;
     canvas.height = h * dpr;
     canvas.style.width = w + 'px';
@@ -444,76 +487,100 @@
 
     const ctx = canvas.getContext('2d');
     ctx.scale(dpr, dpr);
-
-    // Clear
     ctx.clearRect(0, 0, w, h);
 
-    // Margins
-    const ml = 42, mr = 16, mt = 12, mb = 30;
+    const ml = 44, mr = 12, mt = 14, mb = 32;
     const cw = w - ml - mr;
     const ch = h - mt - mb;
 
-    // Find max value for scaling
+    // ── Y-axis scale ──
     let maxVal = Math.max(1, ...data.map(d => d.count));
-    maxVal = Math.ceil(maxVal * 1.15); // 15% headroom
+    maxVal = Math.ceil(maxVal * 1.15);
 
-    // Grid lines
+    // ── Grid + Y labels ──
     const gridLines = 4;
-    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
-    ctx.lineWidth = 1;
     for (let i = 0; i <= gridLines; i++) {
       const y = mt + (ch / gridLines) * i;
+      ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+      ctx.setLineDash([1, 8]);
+      ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(ml, y);
       ctx.lineTo(w - mr, y);
       ctx.stroke();
+      ctx.setLineDash([]);
 
-      // Y-axis labels
       const val = Math.round(maxVal - (maxVal / gridLines) * i);
-      ctx.fillStyle = 'rgba(255,255,255,0.25)';
+      ctx.fillStyle = 'rgba(255,255,255,0.28)';
       ctx.font = '9px "JetBrains Mono", monospace';
       ctx.textAlign = 'right';
       ctx.fillText(val, ml - 6, y + 3);
     }
 
-    // Bars
-    const barCount = data.length;
-    const barGap = Math.max(2, cw / (barCount * 3));
-    const barW = Math.max(3, (cw - barGap * (barCount - 1)) / barCount);
+    // ── Build point coordinates ──
+    const points = data.map((d, i) => ({
+      x: ml + (i / Math.max(1, data.length - 1)) * cw,
+      y: mt + ch - (d.count / maxVal) * ch,
+      count: d.count,
+      critical: d.critical,
+      high: d.high,
+      medium: d.medium,
+      low: d.low,
+      day: d.day
+    }));
 
-    const gradient = ctx.createLinearGradient(0, mt, 0, mt + ch);
-    gradient.addColorStop(0, 'rgba(34, 211, 238, 0.8)');
-    gradient.addColorStop(1, 'rgba(124, 92, 255, 0.3)');
+    // ── Area fill gradient ──
+    const grad = ctx.createLinearGradient(0, mt, 0, mt + ch);
+    grad.addColorStop(0, 'rgba(34, 211, 238, 0.28)');
+    grad.addColorStop(0.5, 'rgba(124, 92, 255, 0.12)');
+    grad.addColorStop(1, 'rgba(124, 92, 255, 0.02)');
 
-    data.forEach((d, i) => {
-      const x = ml + i * (barW + barGap);
-      const barH = (d.count / maxVal) * ch;
-      const y = mt + ch - barH;
+    ctx.beginPath();
+    ctx.moveTo(ml, mt + ch);
+    points.forEach(p => ctx.lineTo(p.x, p.y));
+    ctx.lineTo(w - mr, mt + ch);
+    ctx.closePath();
+    ctx.fillStyle = grad;
+    ctx.fill();
 
-      ctx.fillStyle = gradient;
-      ctx.fillRect(x, y, barW, barH);
+    // ── Line ──
+    ctx.beginPath();
+    points.forEach((p, i) => {
+      if (i === 0) ctx.moveTo(p.x, p.y);
+      else ctx.lineTo(p.x, p.y);
+    });
+    ctx.strokeStyle = '#22d3ee';
+    ctx.lineWidth = 2;
+    ctx.shadowColor = 'rgba(34, 211, 238, 0.6)';
+    ctx.shadowBlur = 8;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
 
-      // Hover area — invisible wider bar for easier tooltips
-      // (actual tooltip is handled via mousemove below)
+    // ── Dots on data points ──
+    points.forEach(p => {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+      ctx.fillStyle = '#0d0f1a';
+      ctx.fill();
+      ctx.strokeStyle = '#22d3ee';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
     });
 
-    // X-axis labels (show every Nth label to avoid crowding)
-    const labelStep = Math.max(1, Math.floor(barCount / 7));
+    // ── X-axis labels ──
+    const labelStep = Math.max(1, Math.floor(data.length / 7));
     ctx.fillStyle = 'rgba(255,255,255,0.35)';
     ctx.font = '8px "Inter", sans-serif';
     ctx.textAlign = 'center';
     data.forEach((d, i) => {
-      if (i % labelStep === 0 || i === barCount - 1) {
-        const x = ml + i * (barW + barGap) + barW / 2;
-        const label = formatChartDate(d.day);
-        ctx.fillText(label, x, mt + ch + 14);
+      if (i % labelStep === 0 || i === data.length - 1) {
+        const x = ml + (i / Math.max(1, data.length - 1)) * cw;
+        ctx.fillText(formatChartLabel(d.day, preset.buckets), x, mt + ch + 16);
       }
     });
 
-    // Store chart data for tooltip
-    canvas._chartData = { data, barW, barGap, ml, mt, ch, maxVal, cw, mr, mb };
-
-    // Tooltip handler
+    // Store for tooltip
+    canvas._chartData = { points, ml, mt, ch, cw, mr, mb };
     if (!canvas._tooltipBound) {
       canvas._tooltipBound = true;
       canvas.addEventListener('mousemove', chartTooltip);
@@ -524,7 +591,37 @@
     }
   }
 
-  function formatChartDate(dayStr) {
+  // Bucket daily timeline into weeks or months
+  function bucketTimeline(timeline, cutoff, bucketType) {
+    const grouped = {};
+    (timeline || []).forEach(d => {
+      if (d.day < cutoff) return;
+      const date = new Date(d.day + 'T00:00:00');
+      let key;
+      if (bucketType === 'week') {
+        // Monday of the week
+        const dayOfWeek = date.getDay();
+        const monday = new Date(date);
+        monday.setDate(date.getDate() - ((dayOfWeek + 6) % 7));
+        key = monday.toISOString().split('T')[0];
+      } else {
+        key = date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0');
+      }
+      if (!grouped[key]) grouped[key] = { day: key, count: 0, critical: 0, high: 0, medium: 0, low: 0 };
+      grouped[key].count += d.count;
+      grouped[key].critical += d.critical || 0;
+      grouped[key].high += d.high || 0;
+      grouped[key].medium += d.medium || 0;
+      grouped[key].low += d.low || 0;
+    });
+    return Object.values(grouped).sort((a, b) => a.day.localeCompare(b.day));
+  }
+
+  function formatChartLabel(dayStr, buckets) {
+    if (buckets === 'month') {
+      const [y, m] = dayStr.split('-');
+      return new Date(parseInt(y), parseInt(m) - 1, 1).toLocaleDateString('en-US', { month: 'short' });
+    }
     const d = new Date(dayStr + 'T00:00:00');
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   }
@@ -538,26 +635,28 @@
     if (!tip) {
       tip = document.createElement('div');
       tip.id = 'chart-tooltip';
-      tip.className = 'chart-tooltip hidden';
       tip.style.cssText = 'position:absolute;pointer-events:none;background:var(--bg-elevated);border:1px solid var(--border-accent);border-radius:8px;padding:6px 10px;font-size:0.72rem;color:var(--text-primary);z-index:50;white-space:nowrap;box-shadow:0 4px 16px rgba(0,0,0,0.4);';
       canvas.parentElement.appendChild(tip);
     }
 
     const rect = canvas.getBoundingClientRect();
     const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
 
-    const { data, barW, barGap, ml, mt, ch, maxVal, cw } = cd;
+    const { points, ml, mt, ch, cw } = cd;
+    // Find closest point
+    let closest = points[0];
+    let minDist = Infinity;
+    for (const p of points) {
+      const dist = Math.abs(p.x - mx);
+      if (dist < minDist) { minDist = dist; closest = p; }
+    }
+    if (minDist > 30) { tip.classList.add('hidden'); return; }
 
-    const idx = Math.floor((mx - ml) / (barW + barGap));
-    if (idx < 0 || idx >= data.length) { tip.classList.add('hidden'); return; }
-
-    const d = data[idx];
-    tip.innerHTML = `<strong>${formatChartDate(d.day)}</strong><br>Total: ${d.count} | Crit: ${d.critical} | High: ${d.high} | Med: ${d.medium} | Low: ${d.low}`;
+    tip.innerHTML = `<strong>${closest.day}</strong><br>Total: ${closest.count} | Crit: ${closest.critical} | High: ${closest.high} | Med: ${closest.medium} | Low: ${closest.low}`;
     tip.classList.remove('hidden');
 
     const tipRect = tip.getBoundingClientRect();
-    let tx = e.clientX - tipRect.width / 2;
+    let tx = rect.left + closest.x - tipRect.width / 2;
     let ty = rect.top + mt - tipRect.height - 8;
     if (tx < 0) tx = 4;
     if (tx + tipRect.width > window.innerWidth) tx = window.innerWidth - tipRect.width - 4;
@@ -721,6 +820,22 @@
       ? `<span class="badge badge-owner">${escapeHtml(article.owner_name)}</span>`
       : '';
 
+    // IOCs — extracted indicators
+    let iocHtml = '';
+    if (article.iocs) {
+      const parts = article.iocs.split('|');
+      const items = [];
+      parts.forEach(p => {
+        const [type, values] = p.split(':');
+        if (values) {
+          values.split(',').slice(0, 3).forEach(v => {
+            items.push(`<span class="ioc-tag ioc-${type}" title="${type}: ${escapeHtml(v)}">${escapeHtml(v.length > 30 ? v.substring(0,28)+'..' : v)}</span>`);
+          });
+        }
+      });
+      if (items.length) iocHtml = `<div class="article-iocs">${items.join('')}</div>`;
+    }
+
     const desc = article.description ? escapeHtml(article.description.substring(0, 300)) : '';
 
     // Reviews
@@ -786,6 +901,7 @@
         </div>
         ${desc ? `<p class="article-desc">${desc}</p>` : ''}
         ${article.tags ? `<div class="article-tags">${article.tags.split(',').map(t => `<span class="tag">${t.trim()}</span>`).join('')}</div>` : ''}
+        ${iocHtml}
         ${reviewHtml}
         <div class="article-actions">
           <button class="${reviewBtnCls}" data-review-article="${article.id}" title="Start reviewing"${doneBtnDisabled}>${reviewBtnTxt}</button>

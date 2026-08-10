@@ -526,7 +526,7 @@ body::after {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
   padding: 16px;
-  height: 220px;
+  height: 240px;
   transition: border-color 0.3s;
 }
 
@@ -1444,6 +1444,28 @@ body::after {
   border-color: var(--border-accent);
   color: var(--text-secondary);
 }
+
+/* ─── IOC Tags ─── */
+.article-iocs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.ioc-tag {
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 0.63rem;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  cursor: default;
+}
+
+.ioc-ip { background: rgba(34, 211, 238, 0.1); color: var(--cyan); border: 1px solid rgba(34, 211, 238, 0.2); }
+.ioc-domain { background: rgba(124, 92, 255, 0.1); color: var(--purple); border: 1px solid rgba(124, 92, 255, 0.2); }
+.ioc-hash { background: rgba(255, 171, 92, 0.1); color: var(--orange); border: 1px solid rgba(255, 171, 92, 0.2); }
+.ioc-email { background: rgba(61, 220, 151, 0.1); color: var(--green); border: 1px solid rgba(61, 220, 151, 0.2); }
 
 .article-footer {
   display: flex;

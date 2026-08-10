@@ -160,6 +160,7 @@ function initializeSchema() {
     'ALTER TABLE articles ADD COLUMN sector TEXT',
     'ALTER TABLE articles ADD COLUMN threat_actors TEXT',
     'ALTER TABLE articles ADD COLUMN mitre_ids TEXT',
+    'ALTER TABLE articles ADD COLUMN iocs TEXT',
     'ALTER TABLE notification_log ADD COLUMN user_id INTEGER',
   ];
   for (const sql of columnMigrations) {
@@ -599,8 +600,8 @@ function insertArticle(article) {
   const urlHash = hashUrl(article.url);
   try {
     const result = getDb().prepare(`
-      INSERT INTO articles (url_hash, title, description, url, source_name, source_type, source_id, user_id, author, published_date, category, severity, cve_id, is_patched, has_poc, tags, mitre_ids, sector, threat_actors)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO articles (url_hash, title, description, url, source_name, source_type, source_id, user_id, author, published_date, category, severity, cve_id, is_patched, has_poc, tags, mitre_ids, iocs, sector, threat_actors)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       urlHash,
       article.title || 'Untitled',
@@ -619,6 +620,7 @@ function insertArticle(article) {
       article.has_poc || 0,
       article.tags || null,
       article.mitre_ids || null,
+      article.iocs || null,
       article.sector || null,
       article.threat_actors || null
     );
@@ -747,7 +749,11 @@ function getArticleStats(userId = null) {
   const sourceFilter = userId ? 'AND user_id = ?' : '';
   const sourceFilterParam = userId ? [parseInt(userId)] : [];
   const activeSources = d.prepare(
-    `SELECT COUNT(*) as count FROM sources WHERE enabled = 1 ${sourceFilter}`
+    `SELECT COUNT(*) as count FROM sources WHERE enabled = 1 AND last_fetched IS NOT NULL ${sourceFilter}`
+  ).get(...sourceFilterParam).count;
+
+  const erroredSources = d.prepare(
+    `SELECT COUNT(*) as count FROM sources WHERE enabled = 1 AND last_error IS NOT NULL ${sourceFilter}`
   ).get(...sourceFilterParam).count;
 
   const lastFetch = d.prepare(
@@ -777,6 +783,7 @@ function getArticleStats(userId = null) {
     criticalVulns,
     pocsDetected,
     activeSources,
+    erroredSources,
     totalArticles,
     lastUpdated: lastFetch?.last || null,
     timeline

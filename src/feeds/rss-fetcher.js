@@ -8,13 +8,12 @@ const RSSParser = require('rss-parser');
 const { detectSector, detectThreatActors, extractMitreIds } = require('../enrich');
 
 const parser = new RSSParser({
-  timeout: 20000,
+  timeout: 30000,
   headers: {
-    // Present as a real browser — many worthy feeds (Cloudflare/Akamai fronted)
-    // return 403 to non-browser User-Agents.
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     'Accept': 'application/rss+xml, application/atom+xml, application/xml;q=0.9, text/html;q=0.8, */*;q=0.7',
-    'Accept-Language': 'en-US,en;q=0.9'
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Cache-Control': 'no-cache'
   },
   customFields: {
     item: [
@@ -24,6 +23,10 @@ const parser = new RSSParser({
     ]
   }
 });
+
+// Track consecutive failures to auto-disable dead sources
+const failureTracker = new Map();
+const MAX_CONSECUTIVE_FAILURES = 5;
 
 /**
  * Detect category from content/title
@@ -132,6 +135,10 @@ function stripHtml(html) {
 async function fetchRSSFeed(source) {
   try {
     const feed = await parser.parseURL(source.url);
+    
+    // Reset failure counter on success
+    failureTracker.delete(source.id);
+
     const articles = [];
 
     for (const item of (feed.items || [])) {
@@ -164,7 +171,26 @@ async function fetchRSSFeed(source) {
     return { success: true, articles, count: articles.length };
   } catch (error) {
     console.error(`[RSS] Error fetching ${source.name}: ${error.message}`);
-    return { success: false, articles: [], error: error.message };
+
+    // Track consecutive failures — auto-disable after threshold
+    const fails = (failureTracker.get(source.id) || 0) + 1;
+    failureTracker.set(source.id, fails);
+
+    let autoDisabled = false;
+    if (fails >= MAX_CONSECUTIVE_FAILURES) {
+      try {
+        const db = require('../database');
+        db.updateSource(source.id, { enabled: 0 });
+        console.log(`[RSS] Auto-disabled ${source.name} after ${fails} consecutive failures`);
+        autoDisabled = true;
+      } catch(e) {}
+    }
+
+    const errMsg = autoDisabled
+      ? `Auto-disabled after ${fails} failures: ${error.message}`
+      : `(${fails}/${MAX_CONSECUTIVE_FAILURES}) ${error.message}`;
+
+    return { success: false, articles: [], error: errMsg };
   }
 }
 

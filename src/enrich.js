@@ -72,8 +72,11 @@ function extractMitreIds(text) {
   return [...new Set(matches.map(m => m.toUpperCase()))].join(',');
 }
 
+// ── IOC Extraction ──────────────────────────────────────────
+const { extractIOCs, formatIOCsForDB } = require('./feeds/ioc-extractor');
+
 /**
- * Fill in sector / threat_actors / mitre_ids on an article when the fetcher
+ * Fill in sector / threat_actors / mitre_ids / iocs on an article when the fetcher
  * didn't already provide them. Mutates and returns the article.
  */
 function enrichArticle(article) {
@@ -82,7 +85,10 @@ function enrichArticle(article) {
   if (article.sector == null) article.sector = detectSector(text);
   if (article.threat_actors == null) article.threat_actors = detectThreatActors(text);
   if (article.mitre_ids == null) article.mitre_ids = extractMitreIds(text);
+  // Always extract IOCs (overwrites on every enrich — cheap, no side effects)
+  const iocs = extractIOCs(text);
+  article.iocs = formatIOCsForDB(iocs);
   return article;
 }
 
-module.exports = { detectSector, detectThreatActors, extractMitreIds, enrichArticle };
+module.exports = { detectSector, detectThreatActors, extractMitreIds, enrichArticle, extractIOCs, formatIOCsForDB };
