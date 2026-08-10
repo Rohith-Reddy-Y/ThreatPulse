@@ -296,6 +296,7 @@
   //
   // Cache the raw last-updated timestamp so relativeTime can be re-evaluated live
   let _statsLastUpdatedRaw = null;
+  let _lastFetchCheckTime = null;
   let _chartTimeline = [];
   let _chartRange = 7;  // default 7 days
 
@@ -335,6 +336,7 @@
       animateValue($('#stat-sources'), stats.activeSources || 0);
 
       _statsLastUpdatedRaw = stats.lastUpdated || null;
+      _lastFetchCheckTime = Date.now();
       // Update trend values (real data from server)
       updateStatTrends(stats);
 
@@ -353,8 +355,17 @@
   function updateLastUpdatedDisplay() {
     const el = $('#last-updated-time');
     if (!el) return;
+    let timeToShow = _statsLastUpdatedRaw;
+    // If DB time is older than 2 min, prefer our last check time
     if (_statsLastUpdatedRaw) {
-      el.textContent = relativeTime(_statsLastUpdatedRaw);
+      const dbTime = new Date(_statsLastUpdatedRaw).getTime();
+      const checkTime = _lastFetchCheckTime || Date.now();
+      if (Date.now() - dbTime > 120000 && checkTime > dbTime) {
+        timeToShow = new Date(checkTime).toISOString();
+      }
+    }
+    if (timeToShow) {
+      el.textContent = relativeTime(timeToShow);
     } else {
       el.textContent = '--';
     }
@@ -773,8 +784,16 @@
       $('#empty-message').textContent = hasFilters
         ? 'Your current filters returned nothing. Try widening them or clear all.'
         : 'Your dashboard is empty. Add threat intelligence sources from the sidebar to start tracking threats, or click Fetch Now.';
-      $('#clear-filters-btn-empty').style.display = hasFilters ? '' : 'none';
+      const clearBtn = $('#clear-filters-btn-empty');
+      if (clearBtn) {
+        clearBtn.style.display = hasFilters ? '' : 'none';
+        if (hasFilters && !clearBtn._bound) {
+          clearBtn._bound = true;
+          clearBtn.addEventListener('click', clearFilters);
+        }
+      }
       $('#fetch-now-empty').style.display = hasFilters ? 'none' : '';
+      updateClearAllButton();
       return;
     }
 

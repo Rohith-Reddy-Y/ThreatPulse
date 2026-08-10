@@ -904,20 +904,22 @@ body::after {
   color-scheme: light;
 }
 
-/* Dropdown options styling */
+/* Dropdown options styling — match app theme */
 .filter-select option, .form-select option {
-  background-color: #111322 !important;
-  color: #eaedf7 !important;
+  background-color: #0d0f1a;
+  color: #eaedf7;
+  padding: 8px 12px;
+  font-size: 0.8rem;
 }
 
 [data-theme="light"] .filter-select option, [data-theme="light"] .form-select option {
-  background-color: #ffffff !important;
-  color: #171b2e !important;
+  background-color: #ffffff;
+  color: #171b2e;
 }
 
 .filter-select option:checked, .form-select option:checked {
-  background: var(--grad-soft);
-  color: var(--text-primary);
+  background: linear-gradient(135deg, rgba(124,92,255,0.25), rgba(34,211,238,0.15));
+  color: var(--cyan);
 }
 
 .filter-select.has-value {
