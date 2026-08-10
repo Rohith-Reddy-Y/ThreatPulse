@@ -749,7 +749,7 @@ function getArticleStats(userId = null) {
   const sourceFilter = userId ? 'AND user_id = ?' : '';
   const sourceFilterParam = userId ? [parseInt(userId)] : [];
   const activeSources = d.prepare(
-    `SELECT COUNT(*) as count FROM sources WHERE enabled = 1 AND last_fetched IS NOT NULL ${sourceFilter}`
+    `SELECT COUNT(*) as count FROM sources WHERE enabled = 1 AND last_fetched IS NOT NULL AND last_error IS NULL ${sourceFilter}`
   ).get(...sourceFilterParam).count;
 
   const erroredSources = d.prepare(
@@ -764,7 +764,7 @@ function getArticleStats(userId = null) {
     `SELECT COUNT(*) as count FROM articles WHERE 1=1 ${userFilter}`
   ).get(...userFilterParam).count;
 
-  // Timeline data: last 30 days of article counts grouped by day
+  // Timeline data: all article counts grouped by day (frontend handles range)
   const timeline = d.prepare(
     `SELECT date(published_date) as day, COUNT(*) as count,
             SUM(CASE WHEN severity = 'critical' THEN 1 ELSE 0 END) as critical,
@@ -772,7 +772,7 @@ function getArticleStats(userId = null) {
             SUM(CASE WHEN severity = 'medium' THEN 1 ELSE 0 END) as medium,
             SUM(CASE WHEN severity = 'low' THEN 1 ELSE 0 END) as low
      FROM articles
-     WHERE published_date >= date('now', '-30 days') ${userFilter}
+     WHERE 1=1 ${userFilter}
      GROUP BY date(published_date)
      ORDER BY day ASC`
   ).all(...userFilterParam);

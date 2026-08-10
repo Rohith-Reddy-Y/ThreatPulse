@@ -399,6 +399,7 @@ body::after {
   border-radius: var(--radius-lg);
   position: relative;
   overflow: hidden;
+  cursor: pointer;
   transition: all 0.35s var(--ease-out);
 }
 
@@ -634,7 +635,7 @@ body::after {
   padding: 10px 14px;
   background: var(--bg-card);
   border: 1px solid var(--border-subtle);
-  border-radius: 10px;
+  border-radius: 12px;
   margin-top: 8px;
   flex-wrap: wrap;
   animation: fadeInUp 0.25s var(--ease-out);
@@ -842,7 +843,7 @@ body::after {
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   border: 1px solid var(--border-subtle);
-  border-radius: 10px;
+  border-radius: 12px;
   color: var(--text-secondary);
   font-size: 0.8rem;
   font-family: var(--font-body);

@@ -254,44 +254,27 @@
     updateLastUpdatedDisplay();
   }
 
-  // Dynamic radar-pulse favicon — concentric rings expanding
-  let faviconFrame = 0;
+  // Dynamic favicon — badge showing today's threat count, resets daily
+  let _todayCount = 0;
   function updateFavicon() {
-    faviconFrame++;
-    const cycle = 48;
-    const f = faviconFrame % cycle;
+    const count = _todayCount;
+    const color = count > 50 ? '#ff5c7a' : count > 10 ? '#ffab5c' : '#22d3ee';
+    const digits = count > 999 ? '1k' : String(count);
+    const fontSize = digits.length > 2 ? '7' : '8';
 
-    function ringAlpha(offset) {
-      const phase = (f + offset) % cycle;
-      const progress = phase / cycle;
-      if (progress < 0.1) return 0;
-      if (progress < 0.7) return 0.8;
-      return 0.8 * (1 - (progress - 0.7) / 0.3);
-    }
-
-    function ringRadius(offset) {
-      const phase = (f + offset) % cycle;
-      const progress = phase / cycle;
-      return 1.5 + progress * 3;
-    }
-
-    const scanX = (6 + Math.cos(faviconFrame * 0.15) * 5).toFixed(1);
-    const scanY = (6 + Math.sin(faviconFrame * 0.15) * 5).toFixed(1);
-
-    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12">'
-      + '<rect width="12" height="12" rx="2" fill="#0e1219"/>'
-      + '<circle cx="6" cy="6" r="' + ringRadius(0).toFixed(2) + '" fill="none" stroke="#2da8bd" stroke-width="0.6" opacity="' + ringAlpha(0).toFixed(2) + '"/>'
-      + '<circle cx="6" cy="6" r="' + ringRadius(16).toFixed(2) + '" fill="none" stroke="#2da8bd" stroke-width="0.6" opacity="' + ringAlpha(16).toFixed(2) + '"/>'
-      + '<circle cx="6" cy="6" r="' + ringRadius(32).toFixed(2) + '" fill="none" stroke="#2da8bd" stroke-width="0.6" opacity="' + ringAlpha(32).toFixed(2) + '"/>'
-      + '<circle cx="6" cy="6" r="1.3" fill="#2da8bd" opacity="0.95"/>'
-      + '<line x1="6" y1="6" x2="' + scanX + '" y2="' + scanY + '" stroke="#2da8bd" stroke-width="0.4" opacity="0.35"/>'
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">'
+      + '<rect width="16" height="16" rx="3" fill="#0d0f1a"/>'
+      + '<rect width="16" height="16" rx="3" fill="none" stroke="' + color + '" stroke-width="0.8" opacity="0.8"/>'
+      + '<text x="8" y="' + (digits.length > 2 ? '11.5' : '12') + '" text-anchor="middle" fill="' + color + '" font-family="Inter,sans-serif" font-weight="700" font-size="' + fontSize + '">' + digits + '</text>'
       + '</svg>';
 
-    const encoded = 'data:image/svg+xml,' + encodeURIComponent(svg);
+    const icon = document.querySelector('link[rel=icon]');
+    if (icon) icon.href = 'data:image/svg+xml,' + encodeURIComponent(svg);
+  }
 
-    // Update favicon href directly (works across all browsers)
-    var icon = document.querySelector('link[rel=icon]');
-    if (icon) icon.href = encoded;
+  function updateFaviconCount(count) {
+    _todayCount = count;
+    updateFavicon();
   }
 
   function animateValue(el, target) {
@@ -358,6 +341,9 @@
       // Chart data
       _chartTimeline = stats.timeline || [];
       renderChart(_chartTimeline, _chartRange);
+
+      // Update dynamic favicon with today's count
+      updateFaviconCount(stats.threatsToday || 0);
 
       $('#total-sources-count').textContent = stats.activeSources || 0;
       updateLastUpdatedDisplay();
@@ -457,14 +443,12 @@
     cutoff.setDate(cutoff.getDate() - preset.days);
     const cutoffStr = cutoff.toISOString().split('T')[0];
 
-    // Bucket data if needed (week/month aggregation for longer ranges)
-    let data;
+    // Filter out null days and apply date range
+    let data = (timeline || []).filter(d => d.day && d.day >= cutoffStr);
     if (preset.buckets === 'week') {
       data = bucketTimeline(timeline, cutoffStr, 'week');
     } else if (preset.buckets === 'month') {
       data = bucketTimeline(timeline, cutoffStr, 'month');
-    } else {
-      data = (timeline || []).filter(d => d.day >= cutoffStr);
     }
 
     if (data.length === 0) {
@@ -579,14 +563,38 @@
       }
     });
 
-    // Store for tooltip
+    // Store for tooltip + click
     canvas._chartData = { points, ml, mt, ch, cw, mr, mb };
+    canvas.style.cursor = 'pointer';
     if (!canvas._tooltipBound) {
       canvas._tooltipBound = true;
       canvas.addEventListener('mousemove', chartTooltip);
       canvas.addEventListener('mouseleave', () => {
         const tip = document.getElementById('chart-tooltip');
         if (tip) tip.classList.add('hidden');
+      });
+      // Click on chart dot → filter feed to that date
+      canvas.addEventListener('click', (e) => {
+        const cd = canvas._chartData;
+        if (!cd) return;
+        const rect = canvas.getBoundingClientRect();
+        const mx = e.clientX - rect.left;
+        let closest = cd.points[0], minDist = Infinity;
+        for (const p of cd.points) {
+          const dist = Math.abs(p.x - mx);
+          if (dist < minDist) { minDist = dist; closest = p; }
+        }
+        if (minDist > 30) return;
+        // Set date filter to that specific day
+        state.filters.start_date = closest.day + 'T00:00:00.000Z';
+        state.filters.end_date = closest.day + 'T23:59:59.999Z';
+        state.filters.time_range = 'custom';
+        state.currentPage = 1;
+        const timeFilter = $('#time-range-filter');
+        if (timeFilter) timeFilter.value = 'custom';
+        updateClearAllButton();
+        fetchArticles();
+        showToast('Filtered', `Showing threats from ${closest.day}`, 'info');
       });
     }
   }
@@ -1764,6 +1772,29 @@
     // Export
     $('#export-btn').addEventListener('click', exportArticles);
 
+    // Stat cards clickable — filter feed on click
+    $$('.stat-card').forEach(card => {
+      card.addEventListener('click', () => {
+        const stat = card.dataset.stat;
+        clearFilters();
+        if (stat === 'threats') {
+          const today = new Date().toISOString().split('T')[0];
+          state.filters.start_date = today + 'T00:00:00.000Z';
+          state.filters.end_date = today + 'T23:59:59.999Z';
+          state.filters.time_range = 'custom';
+        } else if (stat === 'critical') {
+          state.filters.severity = 'critical';
+          $('#severity-filter').value = 'critical';
+        } else if (stat === 'pocs') {
+          state.filters.has_poc = '1';
+          $('#filter-poc').classList.add('active');
+        }
+        state.currentPage = 1;
+        updateClearAllButton();
+        fetchArticles();
+      });
+    });
+
     // Load more
     $('#load-more-btn').addEventListener('click', () => {
       fetchArticles(state.currentPage + 1, true);
@@ -1920,9 +1951,8 @@
   async function initDashboard() {
     updateClock();
     setInterval(updateClock, 1000);
-    // Start dynamic radar-pulse favicon — updates every 2s
+    // Dynamic favicon — updated via fetchStats
     updateFavicon();
-    setInterval(updateFavicon, 2000);
     enforcePasswordChange();
     await Promise.allSettled([fetchStats(), fetchArticles(), fetchSources(), fetchNotificationSettings()]);
     startAutoRefresh();
