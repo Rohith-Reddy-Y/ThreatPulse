@@ -22,7 +22,7 @@
     currentPage: 1,
     totalPages: 1,
     totalArticles: 0,
-    filters: { category: '', severity: '', source_type: '', search: '', sector: '', threat_actor: '', has_poc: '', has_mitre: '', is_patched: '', time_range: '' },
+    filters: { category: '', severity: '', source_type: '', search: '', sector: '', threat_actor: '', has_poc: '', has_mitre: '', is_patched: '', time_range: '', start_date: '', end_date: '' },
     refreshCountdown: 60,
     refreshTimer: null,
     countdownTimer: null,
@@ -199,6 +199,30 @@
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   }
 
+  // Format a Date as YYYY-MM-DDTHH:MM for datetime-local inputs
+  function toLocalDatetime(date) {
+    const offset = date.getTimezoneOffset();
+    const local = new Date(date.getTime() - offset * 60000);
+    return local.toISOString().slice(0, 16);
+  }
+
+  // Show a tag indicating the custom date range
+  function showSelectedRangeTag(startVal, endVal) {
+    // Remove any existing tag
+    const existing = document.querySelector('.selected-range-tag');
+    if (existing) existing.remove();
+
+    const start = new Date(startVal);
+    const end = new Date(endVal);
+    const fmt = (d) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+    const tag = document.createElement('span');
+    tag.className = 'selected-range-tag';
+    tag.innerHTML = `${fmt(start)} — ${fmt(end)} <span class="remove-range">&times;</span>`;
+    const filterActions = document.querySelector('.filter-actions');
+    if (filterActions) filterActions.prepend(tag);
+  }
+
   function dateKey(dateStr) {
     if (!dateStr) return 'Undated';
     const d = new Date(dateStr);
@@ -226,6 +250,8 @@
     const now = new Date();
     const el = $('#clock-time');
     if (el) el.textContent = now.toLocaleTimeString('en-US', { hour12: true });
+    // Also refresh the relative "Last Updated" display every tick
+    updateLastUpdatedDisplay();
   }
 
   // Dynamic radar-pulse favicon — concentric rings expanding
@@ -285,6 +311,28 @@
   // ═══════════════════════════════════════════════════════════
   //  DATA FETCHING
   // ═══════════════════════════════════════════════════════════
+  // Cache the raw last-updated timestamp so relativeTime can be re-evaluated live
+  let _statsLastUpdatedRaw = null;
+  let _chartTimeline = [];
+  let _chartRange = 7;
+
+  // Loading bar — thin indeterminate progress bar at top of page
+  function showLoader() {
+    let bar = document.getElementById('loading-bar');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'loading-bar';
+      bar.className = 'loading-bar';
+      document.body.prepend(bar);
+    }
+    bar.classList.add('active');
+  }
+
+  function hideLoader() {
+    const bar = document.getElementById('loading-bar');
+    if (bar) bar.classList.remove('active');
+  }
+
   async function fetchStats() {
     try {
       const stats = await api('GET', d('L2FwaS9hcnRpY2xlcy9zdGF0cw=='));
@@ -292,16 +340,236 @@
       animateValue($('#stat-critical'), stats.criticalVulns || 0);
       animateValue($('#stat-pocs'), stats.pocsDetected || 0);
       animateValue($('#stat-sources'), stats.activeSources || 0);
-      if (stats.lastUpdated) {
-        $('#last-updated-time').textContent = relativeTime(stats.lastUpdated);
-      }
+
+      _statsLastUpdatedRaw = stats.lastUpdated || null;
+      // Update trend values (real data from server)
+      updateStatTrends(stats);
+
+      // Chart data
+      _chartTimeline = stats.timeline || [];
+      renderChart(_chartTimeline, _chartRange);
+
       $('#total-sources-count').textContent = stats.activeSources || 0;
+      updateLastUpdatedDisplay();
     } catch (e) { console.error('Stats error:', e); }
+  }
+
+  function updateLastUpdatedDisplay() {
+    const el = $('#last-updated-time');
+    if (!el) return;
+    if (_statsLastUpdatedRaw) {
+      el.textContent = relativeTime(_statsLastUpdatedRaw);
+    } else {
+      el.textContent = '--';
+    }
+  }
+
+  function updateStatTrends(stats) {
+    // Threats Today trend: % change vs yesterday
+    const threatsTrend = $('#stat-threats-trend');
+    if (threatsTrend) {
+      const today = stats.threatsToday || 0;
+      const yesterday = stats.threatsYesterday || 0;
+      if (yesterday === 0 && today === 0) {
+        threatsTrend.textContent = '--';
+        threatsTrend.className = 'stat-trend neutral';
+      } else if (yesterday === 0) {
+        threatsTrend.textContent = `↑ ${today} new`;
+        threatsTrend.className = 'stat-trend up';
+      } else {
+        const pct = Math.round(((today - yesterday) / yesterday) * 100);
+        const arrow = pct >= 0 ? '↑' : '↓';
+        threatsTrend.textContent = `${arrow} ${Math.abs(pct)}%`;
+        threatsTrend.className = pct >= 0 ? 'stat-trend up' : 'stat-trend down';
+      }
+    }
+
+    // Critical Vulns
+    const critTrend = $('#stat-critical-trend');
+    if (critTrend) {
+      const crit = stats.criticalVulns || 0;
+      critTrend.textContent = crit > 0 ? `${crit} this week` : 'none';
+      critTrend.className = crit > 0 ? 'stat-trend danger' : 'stat-trend neutral';
+    }
+
+    // POCs Detected
+    const pocsTrend = $('#stat-pocs-trend');
+    if (pocsTrend) {
+      const pocs = stats.pocsDetected || 0;
+      pocsTrend.textContent = pocs > 0 ? `${pocs} live` : 'none';
+      pocsTrend.className = pocs > 0 ? 'stat-trend warning' : 'stat-trend neutral';
+    }
+
+    // Active Sources
+    const srcTrend = $('#stat-sources-trend');
+    if (srcTrend) {
+      const src = stats.activeSources || 0;
+      srcTrend.textContent = src > 0 ? '● Online' : '● Offline';
+      srcTrend.className = src > 0 ? 'stat-trend neutral' : 'stat-trend danger';
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  //  CHART RENDERING (Canvas — zero dependencies)
+  // ═══════════════════════════════════════════════════════════
+
+  function renderChart(timeline, days) {
+    const canvas = $('#threat-chart');
+    const empty = $('#chart-empty');
+    if (!canvas) return;
+
+    // Filter to last N days
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    const cutoffStr = cutoff.toISOString().split('T')[0];
+    const data = (timeline || []).filter(d => d.day >= cutoffStr);
+
+    if (data.length === 0) {
+      canvas.style.display = 'none';
+      if (empty) empty.classList.remove('hidden');
+      return;
+    }
+
+    canvas.style.display = 'block';
+    if (empty) empty.classList.add('hidden');
+
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.parentElement.getBoundingClientRect();
+    const w = rect.width - 32;  // padding
+    const h = 180;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    canvas.style.width = w + 'px';
+    canvas.style.height = h + 'px';
+
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+
+    // Clear
+    ctx.clearRect(0, 0, w, h);
+
+    // Margins
+    const ml = 42, mr = 16, mt = 12, mb = 30;
+    const cw = w - ml - mr;
+    const ch = h - mt - mb;
+
+    // Find max value for scaling
+    let maxVal = Math.max(1, ...data.map(d => d.count));
+    maxVal = Math.ceil(maxVal * 1.15); // 15% headroom
+
+    // Grid lines
+    const gridLines = 4;
+    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= gridLines; i++) {
+      const y = mt + (ch / gridLines) * i;
+      ctx.beginPath();
+      ctx.moveTo(ml, y);
+      ctx.lineTo(w - mr, y);
+      ctx.stroke();
+
+      // Y-axis labels
+      const val = Math.round(maxVal - (maxVal / gridLines) * i);
+      ctx.fillStyle = 'rgba(255,255,255,0.25)';
+      ctx.font = '9px "JetBrains Mono", monospace';
+      ctx.textAlign = 'right';
+      ctx.fillText(val, ml - 6, y + 3);
+    }
+
+    // Bars
+    const barCount = data.length;
+    const barGap = Math.max(2, cw / (barCount * 3));
+    const barW = Math.max(3, (cw - barGap * (barCount - 1)) / barCount);
+
+    const gradient = ctx.createLinearGradient(0, mt, 0, mt + ch);
+    gradient.addColorStop(0, 'rgba(34, 211, 238, 0.8)');
+    gradient.addColorStop(1, 'rgba(124, 92, 255, 0.3)');
+
+    data.forEach((d, i) => {
+      const x = ml + i * (barW + barGap);
+      const barH = (d.count / maxVal) * ch;
+      const y = mt + ch - barH;
+
+      ctx.fillStyle = gradient;
+      ctx.fillRect(x, y, barW, barH);
+
+      // Hover area — invisible wider bar for easier tooltips
+      // (actual tooltip is handled via mousemove below)
+    });
+
+    // X-axis labels (show every Nth label to avoid crowding)
+    const labelStep = Math.max(1, Math.floor(barCount / 7));
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.font = '8px "Inter", sans-serif';
+    ctx.textAlign = 'center';
+    data.forEach((d, i) => {
+      if (i % labelStep === 0 || i === barCount - 1) {
+        const x = ml + i * (barW + barGap) + barW / 2;
+        const label = formatChartDate(d.day);
+        ctx.fillText(label, x, mt + ch + 14);
+      }
+    });
+
+    // Store chart data for tooltip
+    canvas._chartData = { data, barW, barGap, ml, mt, ch, maxVal, cw, mr, mb };
+
+    // Tooltip handler
+    if (!canvas._tooltipBound) {
+      canvas._tooltipBound = true;
+      canvas.addEventListener('mousemove', chartTooltip);
+      canvas.addEventListener('mouseleave', () => {
+        const tip = document.getElementById('chart-tooltip');
+        if (tip) tip.classList.add('hidden');
+      });
+    }
+  }
+
+  function formatChartDate(dayStr) {
+    const d = new Date(dayStr + 'T00:00:00');
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+
+  function chartTooltip(e) {
+    const canvas = e.target;
+    const cd = canvas._chartData;
+    if (!cd) return;
+
+    let tip = document.getElementById('chart-tooltip');
+    if (!tip) {
+      tip = document.createElement('div');
+      tip.id = 'chart-tooltip';
+      tip.className = 'chart-tooltip hidden';
+      tip.style.cssText = 'position:absolute;pointer-events:none;background:var(--bg-elevated);border:1px solid var(--border-accent);border-radius:8px;padding:6px 10px;font-size:0.72rem;color:var(--text-primary);z-index:50;white-space:nowrap;box-shadow:0 4px 16px rgba(0,0,0,0.4);';
+      canvas.parentElement.appendChild(tip);
+    }
+
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+
+    const { data, barW, barGap, ml, mt, ch, maxVal, cw } = cd;
+
+    const idx = Math.floor((mx - ml) / (barW + barGap));
+    if (idx < 0 || idx >= data.length) { tip.classList.add('hidden'); return; }
+
+    const d = data[idx];
+    tip.innerHTML = `<strong>${formatChartDate(d.day)}</strong><br>Total: ${d.count} | Crit: ${d.critical} | High: ${d.high} | Med: ${d.medium} | Low: ${d.low}`;
+    tip.classList.remove('hidden');
+
+    const tipRect = tip.getBoundingClientRect();
+    let tx = e.clientX - tipRect.width / 2;
+    let ty = rect.top + mt - tipRect.height - 8;
+    if (tx < 0) tx = 4;
+    if (tx + tipRect.width > window.innerWidth) tx = window.innerWidth - tipRect.width - 4;
+    if (ty < 0) ty = rect.bottom + 4;
+    tip.style.left = tx + 'px';
+    tip.style.top = ty + 'px';
   }
 
   async function fetchArticles(page = 1, append = false) {
     if (state.isLoading) return;
     state.isLoading = true;
+    showLoader();
     try {
       const params = new URLSearchParams({ page, limit: 50 });
       if (state.filters.category) params.set('category', state.filters.category);
@@ -314,6 +582,8 @@
       if (state.filters.has_mitre) params.set('has_mitre', state.filters.has_mitre);
       if (state.filters.is_patched !== '') params.set('is_patched', state.filters.is_patched);
       if (state.filters.time_range) params.set('time_range', state.filters.time_range);
+      if (state.filters.start_date) params.set('start_date', state.filters.start_date);
+      if (state.filters.end_date) params.set('end_date', state.filters.end_date);
 
       const data = await api('GET', `${d('L2FwaS9hcnRpY2xlcw==')}?${params}`);
       state.currentPage = data.page;
@@ -327,7 +597,7 @@
       }
       renderArticles();
     } catch (e) { console.error('Articles error:', e); }
-    finally { state.isLoading = false; }
+    finally { state.isLoading = false; hideLoader(); }
   }
 
   async function fetchSources() {
@@ -455,9 +725,16 @@
 
     // Reviews
     let reviewHtml = '';
+    let myReviewStatus = null;
     let reviews = [];
     try { reviews = article.reviews ? JSON.parse(article.reviews) : []; } catch(e) {}
     reviews = reviews.filter(r => r.user_id); // filter out nulls
+
+    // Determine current user's review state for button states
+    if (currentUser && currentUser.id) {
+      const myReview = reviews.find(r => r.user_id === currentUser.id);
+      if (myReview) myReviewStatus = myReview.status;
+    }
 
     if (reviews.length > 0) {
       reviewHtml = '<div class="article-reviews">';
@@ -468,8 +745,36 @@
       reviewHtml += '</div>';
     }
 
+    // Button states based on my review status
+    let reviewBtnCls = 'btn-review';
+    let reviewBtnTxt = 'Review';
+    let doneBtnDisabled = '';
+    let escalateBtnCls = 'btn-escalate';
+    let escalateBtnTxt = 'Escalate';
+
+    if (myReviewStatus === 'reviewing') {
+      reviewBtnCls = 'btn-review reviewing';
+      reviewBtnTxt = 'In Review';
+      doneBtnDisabled = '';
+    } else if (myReviewStatus === 'reviewed') {
+      reviewBtnTxt = 'Reviewed ✓';
+      reviewBtnCls = 'btn-review reviewing';
+      doneBtnDisabled = 'disabled';
+    } else if (myReviewStatus === 'escalated') {
+      escalateBtnCls = 'btn-escalate escalated';
+      escalateBtnTxt = 'Escalated';
+      reviewBtnTxt = 'Reviewed ✓';
+      reviewBtnCls = 'btn-review reviewing';
+      doneBtnDisabled = 'disabled';
+    }
+
+    // Card CSS class for review state
+    let cardExtraCls = '';
+    if (myReviewStatus === 'reviewed') cardExtraCls = ' reviewed-by-me';
+    else if (myReviewStatus === 'escalated') cardExtraCls = ' escalated-by-me';
+
     return `
-      <article class="article-card ${article.severity === 'critical' ? 'critical' : ''} ${mitreIds.length ? 'has-ttp' : ''}" data-article-id="${article.id}">
+      <article class="article-card ${article.severity === 'critical' ? 'critical' : ''} ${mitreIds.length ? 'has-ttp' : ''}${cardExtraCls}" data-article-id="${article.id}">
         <div class="article-header">
           <div class="article-badges">${catBadge}${sevBadge}${ownerBadge}${ttpBadge}${pocBadge}${patchBadge}${sectorBadge}${actorBadge}${mitreBadges}${cveLink}</div>
         </div>
@@ -483,9 +788,9 @@
         ${article.tags ? `<div class="article-tags">${article.tags.split(',').map(t => `<span class="tag">${t.trim()}</span>`).join('')}</div>` : ''}
         ${reviewHtml}
         <div class="article-actions">
-          <button class="btn-review" data-review-article="${article.id}" title="Start reviewing">Review</button>
-          <button class="btn-review-done" data-review-done="${article.id}" title="Mark as reviewed">Done</button>
-          <button class="btn-escalate" data-escalate="${article.id}" title="Escalate">Escalate</button>
+          <button class="${reviewBtnCls}" data-review-article="${article.id}" title="Start reviewing"${doneBtnDisabled}>${reviewBtnTxt}</button>
+          <button class="btn-review-done" data-review-done="${article.id}" title="Mark as reviewed"${doneBtnDisabled}>Done</button>
+          <button class="${escalateBtnCls}" data-escalate="${article.id}" title="Escalate">${escalateBtnTxt}</button>
         </div>
       </article>`;
   }
@@ -621,7 +926,7 @@
   }
 
   function clearFilters() {
-    state.filters = { category: '', severity: '', source_type: '', search: '', sector: '', threat_actor: '', has_poc: '', has_mitre: '', is_patched: '', time_range: '' };
+    state.filters = { category: '', severity: '', source_type: '', search: '', sector: '', threat_actor: '', has_poc: '', has_mitre: '', is_patched: '', time_range: '', start_date: '', end_date: '' };
     state.currentPage = 1;
     const si = $('#search-input'); if (si) si.value = '';
     ['#severity-filter', '#source-type-filter', '#sector-filter', '#threat-actor-filter', '#patch-filter', '#time-range-filter'].forEach(sel => {
@@ -631,6 +936,11 @@
     $$('#category-filters .pill').forEach(p => p.classList.remove('active'));
     const allPill = document.querySelector('#category-filters .pill[data-category=""]');
     if (allPill) allPill.classList.add('active');
+    // Remove custom date picker and range tag
+    const picker = $('#custom-date-picker');
+    if (picker) picker.remove();
+    const tag = document.querySelector('.selected-range-tag');
+    if (tag) tag.remove();
     updateClearAllButton();
     fetchArticles();
   }
@@ -639,7 +949,8 @@
     const f = state.filters;
     return !!(f.category || f.severity || f.source_type || f.search ||
               f.sector || f.threat_actor || f.has_poc || f.has_mitre ||
-              (f.is_patched !== '') || f.time_range);
+              (f.is_patched !== '') || f.time_range ||
+              f.start_date || f.end_date);
   }
 
   function updateClearAllButton() {
@@ -1192,6 +1503,125 @@
       });
     });
 
+    // Chart time range pills
+    document.addEventListener('click', (e) => {
+      const chartPill = e.target.closest('#chart-time-pills .pill');
+      if (chartPill) {
+        $$('#chart-time-pills .pill').forEach(p => p.classList.remove('active'));
+        chartPill.classList.add('active');
+        _chartRange = parseInt(chartPill.dataset.chartRange);
+        renderChart(_chartTimeline, _chartRange);
+      }
+    });
+
+    // Custom date range picker (Task 5)
+    $('#time-range-filter').addEventListener('change', (e) => {
+      const picker = $('#custom-date-picker');
+      if (e.target.value === 'custom') {
+        if (!picker) {
+          // Create the picker dynamically
+          const pickerEl = document.createElement('div');
+          pickerEl.id = 'custom-date-picker';
+          pickerEl.className = 'custom-date-picker visible';
+          const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+          pickerEl.innerHTML = `
+            <label>From</label>
+            <input type="datetime-local" id="custom-date-start">
+            <label>To</label>
+            <input type="datetime-local" id="custom-date-end">
+            <span class="tz-label">${tz}</span>
+            <button class="date-apply-btn" id="custom-date-apply">Apply</button>
+          `;
+          e.target.parentElement.appendChild(pickerEl);
+          // Set defaults: last 7 days
+          const now = new Date();
+          const weekAgo = new Date(now.getTime() - 7*24*60*60*1000);
+          document.getElementById('custom-date-start').value = toLocalDatetime(weekAgo);
+          document.getElementById('custom-date-end').value = toLocalDatetime(now);
+        } else {
+          picker.classList.add('visible');
+        }
+      } else if (picker) {
+        picker.classList.remove('visible');
+      }
+    });
+
+    // Custom date apply
+    document.addEventListener('click', (e) => {
+      if (e.target.id === 'custom-date-apply') {
+        const startEl = $('#custom-date-start');
+        const endEl = $('#custom-date-end');
+        if (startEl && endEl) {
+          state.filters.start_date = new Date(startEl.value).toISOString();
+          state.filters.end_date = new Date(endEl.value).toISOString();
+          state.currentPage = 1;
+          updateClearAllButton();
+          showSelectedRangeTag(startEl.value, endEl.value);
+          fetchArticles();
+        }
+      }
+      // Remove custom range tag
+      if (e.target.classList.contains('remove-range')) {
+        const tag = e.target.closest('.selected-range-tag');
+        if (tag) tag.remove();
+        state.filters.start_date = '';
+        state.filters.end_date = '';
+        $('#time-range-filter').value = '';
+        updateClearAllButton();
+        fetchArticles();
+      }
+    });
+
+    // Review buttons — improved UX (Task 7)
+    document.addEventListener('click', (e) => {
+      const reviewBtn = e.target.closest('[data-review-article]');
+      if (reviewBtn) {
+        const articleId = parseInt(reviewBtn.dataset.reviewArticle);
+        reviewBtn.textContent = 'Starting...';
+        reviewBtn.disabled = true;
+        api('POST', `${d('L2FwaS9hcnRpY2xlcw==')}/${articleId}/review`).then(() => {
+          showToast('Reviewing', 'You are now reviewing this article.', 'info');
+          fetchArticles();
+        }).catch(err => {
+          showToast('Error', err.message, 'error');
+          reviewBtn.textContent = 'Review';
+          reviewBtn.disabled = false;
+        });
+      }
+
+      const doneBtn = e.target.closest('[data-review-done]');
+      if (doneBtn) {
+        const articleId = parseInt(doneBtn.dataset.reviewDone);
+        doneBtn.textContent = 'Saving...';
+        doneBtn.disabled = true;
+        const notes = prompt('Add review notes (optional):') || '';
+        api('PUT', `${d('L2FwaS9hcnRpY2xlcw==')}/${articleId}/review`, { notes }).then(() => {
+          showToast('Reviewed', 'Article marked as reviewed.', 'success');
+          fetchArticles();
+        }).catch(err => {
+          showToast('Error', err.message, 'error');
+          doneBtn.textContent = 'Done';
+          doneBtn.disabled = false;
+        });
+      }
+
+      const escalateBtn = e.target.closest('[data-escalate]');
+      if (escalateBtn) {
+        const articleId = parseInt(escalateBtn.dataset.escalate);
+        escalateBtn.textContent = 'Escalating...';
+        escalateBtn.disabled = true;
+        const notes = prompt('Why are you escalating this? Provide context:') || '';
+        api('POST', `${d('L2FwaS9hcnRpY2xlcw==')}/${articleId}/escalate`, { notes }).then(() => {
+          showToast('Escalated', 'Article has been escalated.', 'warning');
+          fetchArticles();
+        }).catch(err => {
+          showToast('Error', err.message, 'error');
+          escalateBtn.textContent = 'Escalate';
+          escalateBtn.disabled = false;
+        });
+      }
+    });
+
     // Fetch now
     $('#fetch-now-btn').addEventListener('click', fetchNow);
     $('#fetch-now-empty').addEventListener('click', fetchNow);
@@ -1260,36 +1690,6 @@
         if (confirm('Remove this source?')) {
           deleteSource(parseInt(deleteBtn.dataset.deleteSource));
         }
-      }
-
-      // Review actions
-      const reviewBtn = e.target.closest('[data-review-article]');
-      if (reviewBtn) {
-        const articleId = parseInt(reviewBtn.dataset.reviewArticle);
-        api('POST', `${d('L2FwaS9hcnRpY2xlcw==')}/${articleId}/review`).then(() => {
-          showToast('Reviewing', 'You are now reviewing this article.', 'info');
-          fetchArticles();
-        }).catch(err => showToast('Error', err.message, 'error'));
-      }
-
-      const doneBtn = e.target.closest('[data-review-done]');
-      if (doneBtn) {
-        const articleId = parseInt(doneBtn.dataset.reviewDone);
-        const notes = prompt('Add review notes (optional):') || '';
-        api('PUT', `${d('L2FwaS9hcnRpY2xlcw==')}/${articleId}/review`, { notes }).then(() => {
-          showToast('Reviewed', 'Article marked as reviewed.', 'success');
-          fetchArticles();
-        }).catch(err => showToast('Error', err.message, 'error'));
-      }
-
-      const escalateBtn = e.target.closest('[data-escalate]');
-      if (escalateBtn) {
-        const articleId = parseInt(escalateBtn.dataset.escalate);
-        const notes = prompt('Why are you escalating this?') || '';
-        api('POST', `${d('L2FwaS9hcnRpY2xlcw==')}/${articleId}/escalate`, { notes }).then(() => {
-          showToast('Escalated', 'Article has been escalated.', 'warning');
-          fetchArticles();
-        }).catch(err => showToast('Error', err.message, 'error'));
       }
     });
 

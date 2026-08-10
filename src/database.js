@@ -732,6 +732,10 @@ function getArticleStats(userId = null) {
     `SELECT COUNT(*) as count FROM articles WHERE date(published_date) = date('now') ${userFilter}`
   ).get(...userFilterParam).count;
 
+  const threatsYesterday = d.prepare(
+    `SELECT COUNT(*) as count FROM articles WHERE date(published_date) = date('now', '-1 day') ${userFilter}`
+  ).get(...userFilterParam).count;
+
   const criticalVulns = d.prepare(
     `SELECT COUNT(*) as count FROM articles WHERE severity = 'critical' AND date(published_date) >= date('now', '-7 days') ${userFilter}`
   ).get(...userFilterParam).count;
@@ -754,13 +758,28 @@ function getArticleStats(userId = null) {
     `SELECT COUNT(*) as count FROM articles WHERE 1=1 ${userFilter}`
   ).get(...userFilterParam).count;
 
+  // Timeline data: last 30 days of article counts grouped by day
+  const timeline = d.prepare(
+    `SELECT date(published_date) as day, COUNT(*) as count,
+            SUM(CASE WHEN severity = 'critical' THEN 1 ELSE 0 END) as critical,
+            SUM(CASE WHEN severity = 'high' THEN 1 ELSE 0 END) as high,
+            SUM(CASE WHEN severity = 'medium' THEN 1 ELSE 0 END) as medium,
+            SUM(CASE WHEN severity = 'low' THEN 1 ELSE 0 END) as low
+     FROM articles
+     WHERE published_date >= date('now', '-30 days') ${userFilter}
+     GROUP BY date(published_date)
+     ORDER BY day ASC`
+  ).all(...userFilterParam);
+
   return {
     threatsToday,
+    threatsYesterday,
     criticalVulns,
     pocsDetected,
     activeSources,
     totalArticles,
-    lastUpdated: lastFetch?.last || null
+    lastUpdated: lastFetch?.last || null,
+    timeline
   };
 }
 

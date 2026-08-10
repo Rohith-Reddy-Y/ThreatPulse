@@ -473,9 +473,249 @@ body::after {
 }
 
 .stat-trend.up { background: var(--cyan-dim); color: var(--cyan); }
+.stat-trend.down { background: var(--red-dim); color: var(--red); }
 .stat-trend.danger { background: var(--red-dim); color: var(--red); }
 .stat-trend.warning { background: var(--orange-dim); color: var(--orange); }
 .stat-trend.neutral { background: var(--green-dim); color: var(--green); }
+
+/* ═══════════════════════════════════════════════════════════
+   THREAT ACTIVITY CHART
+   ═══════════════════════════════════════════════════════════ */
+.chart-section {
+  padding: 0 28px 20px;
+  animation: fadeInUp 0.7s var(--ease-out) 0.15s both;
+}
+
+.chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.chart-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.chart-title svg {
+  color: var(--cyan);
+}
+
+.chart-time-pills {
+  display: flex;
+  gap: 6px;
+}
+
+.chart-time-pills .pill {
+  padding: 4px 12px;
+  font-size: 0.72rem;
+}
+
+.chart-container {
+  position: relative;
+  background: var(--bg-card);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  height: 220px;
+  transition: border-color 0.3s;
+}
+
+.chart-container:hover {
+  border-color: var(--border-accent);
+}
+
+#threat-chart {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.chart-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  pointer-events: none;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   LOADING PROGRESS BAR
+   ═══════════════════════════════════════════════════════════ */
+.loading-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--violet), var(--cyan));
+  z-index: 200;
+  transition: width 0.4s var(--ease-out);
+  opacity: 0;
+}
+
+.loading-bar.active {
+  opacity: 1;
+  animation: loadingIndeterminate 1.8s ease-in-out infinite;
+}
+
+@keyframes loadingIndeterminate {
+  0% { width: 0%; left: 0; }
+  50% { width: 70%; left: 15%; }
+  100% { width: 0%; left: 100%; }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   REVIEW ACTION BUTTONS
+   ═══════════════════════════════════════════════════════════ */
+.article-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 12px;
+  flex-wrap: wrap;
+}
+
+.btn-review, .btn-review-done, .btn-escalate {
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 600;
+  font-family: var(--font-body);
+  cursor: pointer;
+  transition: all 0.2s var(--ease-out);
+}
+
+.btn-review:hover { border-color: var(--cyan); color: var(--cyan); background: var(--cyan-dim); }
+.btn-review.reviewing { border-color: var(--cyan); color: var(--cyan); background: var(--cyan-dim); cursor: default; }
+
+.btn-review-done:hover { border-color: var(--green); color: var(--green); background: var(--green-dim); }
+
+.btn-escalate:hover { border-color: var(--red); color: var(--red); background: var(--red-dim); }
+.btn-escalate.escalated { border-color: var(--red); color: var(--red); background: var(--red-dim); cursor: default; }
+
+.article-actions .action-done {
+  font-size: 0.68rem;
+  color: var(--green);
+  padding: 5px 8px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.article-card.reviewed-by-me {
+  border-left: 2px solid var(--green);
+}
+.article-card.escalated-by-me {
+  border-left: 2px solid var(--red);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   CUSTOM DATE RANGE PICKER
+   ═══════════════════════════════════════════════════════════ */
+.custom-date-picker {
+  display: none;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+  animation: fadeInUp 0.25s var(--ease-out);
+}
+
+.custom-date-picker.visible {
+  display: flex;
+}
+
+.custom-date-picker input[type="datetime-local"] {
+  padding: 6px 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  font-family: var(--font-mono);
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.custom-date-picker input[type="datetime-local"]:focus {
+  border-color: var(--cyan);
+}
+
+.custom-date-picker label {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-right: 2px;
+}
+
+.custom-date-picker .tz-label {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  padding: 4px 8px;
+  background: var(--bg-input);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+}
+
+.date-apply-btn {
+  padding: 6px 14px;
+  background: var(--grad);
+  color: #0a0b12;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s var(--ease-out);
+}
+
+.date-apply-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(124, 92, 255, 0.3);
+}
+
+.selected-range-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--purple-dim);
+  border: 1px solid rgba(124, 92, 255, 0.3);
+  border-radius: 20px;
+  font-size: 0.7rem;
+  color: var(--purple);
+  font-weight: 600;
+}
+
+.selected-range-tag .remove-range {
+  cursor: pointer;
+  opacity: 0.7;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.selected-range-tag .remove-range:hover { opacity: 1; }
 
 /* ═══════════════════════════════════════════════════════════
    FILTER / SEARCH BAR
@@ -598,9 +838,11 @@ body::after {
 
 .filter-select {
   padding: 8px 32px 8px 12px;
-  background: var(--bg-input);
+  background: rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
+  border-radius: 10px;
   color: var(--text-secondary);
   font-size: 0.8rem;
   font-family: var(--font-body);
@@ -610,7 +852,12 @@ body::after {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238892a8' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 10px center;
-  transition: all 0.25s;
+  transition: all 0.25s var(--ease-out);
+}
+
+.filter-select:hover {
+  border-color: var(--border-accent);
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .filter-select:focus {
