@@ -11,6 +11,7 @@ const express = require('express');
 const path = require('path');
 const db = require('./src/database');
 const apiRoutes = require('./src/routes/api');
+const aiRoutes = require('./src/routes/ai');
 const { handleNotifications } = require('./src/routes/api');
 const aggregator = require('./src/feeds/aggregator');
 const { seedDefaultSources } = require('./src/feeds/default-sources');
@@ -150,6 +151,7 @@ app.use(express.static(path.join(__dirname, 'public'), {
 // API ROUTES
 // ============================================
 app.use('/api', apiRoutes);
+app.use('/api/ai', aiRoutes);
 
 // Make aggregator available to routes
 app.set('aggregator', aggregator);

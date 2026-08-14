@@ -151,6 +151,12 @@ function initializeSchema() {
       created_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS ai_cache (
+      cache_key TEXT PRIMARY KEY,
+      response TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
   `);
 
   // Step 3: ALTER TABLE migrations — add new columns to existing tables
@@ -817,6 +823,10 @@ function searchArticles(query, limit = 50, userId = null) {
   ).all(...params);
 }
 
+function getArticleById(id) {
+  return getDb().prepare('SELECT * FROM articles WHERE id = ?').get(id);
+}
+
 // ============================================
 // ARTICLE REVIEWS
 // ============================================
@@ -1004,6 +1014,7 @@ module.exports = {
   getUnnotifiedArticles,
   markAsNotified,
   searchArticles,
+  getArticleById,
   // Reviews
   startReview,
   completeReview,

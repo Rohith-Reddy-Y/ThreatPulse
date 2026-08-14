@@ -2107,6 +2107,56 @@
         searchInput.focus();
       }
     });
+
+    // ─── Ask ThreatPulse (AI) panel ───
+    $('#ai-fab').addEventListener('click', () => {
+      $('#ai-panel').classList.toggle('hidden');
+      if (!$('#ai-panel').classList.contains('hidden')) $('#ai-question').focus();
+    });
+    $('#ai-panel-close').addEventListener('click', () => {
+      $('#ai-panel').classList.add('hidden');
+    });
+
+    async function askAI() {
+      const question = $('#ai-question').value.trim();
+      if (!question) return;
+      const web = $('#ai-web-toggle').checked;
+      const body = $('#ai-panel-body');
+
+      // Append user message
+      body.insertAdjacentHTML('beforeend', `<div class="ai-message ai-user">${escapeHtml(question)}</div>`);
+      $('#ai-question').value = '';
+      body.scrollTop = body.scrollHeight;
+
+      // Typing indicator
+      body.insertAdjacentHTML('beforeend', `<div class="ai-message ai-bot ai-typing" id="ai-typing">Thinking…</div>`);
+      body.scrollTop = body.scrollHeight;
+
+      try {
+        const result = await api('POST', d('L2FwaS9haS9hc2s='), { question, mode: web ? 'web' : 'rag' });
+        const typing = $('#ai-typing');
+        if (typing) typing.remove();
+
+        if (result.success) {
+          const answer = result.mode === 'rag' ? result.answer : result.answer;
+          const citations = result.citations && result.citations.length
+            ? `\n\n[Citations: ${result.citations.join(', ')}]` : '';
+          body.insertAdjacentHTML('beforeend', `<div class="ai-message ai-bot">${escapeHtml(answer)}${citations}</div>`);
+        } else {
+          body.insertAdjacentHTML('beforeend', `<div class="ai-message ai-error">${escapeHtml(result.error || 'AI request failed')}</div>`);
+        }
+      } catch (err) {
+        const typing = $('#ai-typing');
+        if (typing) typing.remove();
+        body.insertAdjacentHTML('beforeend', `<div class="ai-message ai-error">${escapeHtml(err.message || 'AI request failed')}</div>`);
+      }
+      body.scrollTop = body.scrollHeight;
+    }
+
+    $('#ai-send').addEventListener('click', askAI);
+    $('#ai-question').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); askAI(); }
+    });
   }
 
   //
