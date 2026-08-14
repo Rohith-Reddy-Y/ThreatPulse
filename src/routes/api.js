@@ -403,8 +403,8 @@ router.get('/articles', auth.requireAuth, (req, res) => {
       source_type,
       startDate,
       endDate,
-      // Admin sees all articles; regular users are isolated to their own.
-      userId: req.user.role === 'admin' ? null : req.user.id,
+      // Admin and guests see all articles; regular users are isolated to their own.
+      userId: (req.user.role === 'admin' || req.user.username === 'guest') ? null : req.user.id,
       sector,
       threat_actor: auth.sanitizeString(threat_actor, 100),
       has_poc,
@@ -420,8 +420,8 @@ router.get('/articles', auth.requireAuth, (req, res) => {
 
 router.get('/articles/stats', auth.requireAuth, (req, res) => {
   try {
-    // Admin sees platform-wide totals; users see only their own.
-    const stats = db.getArticleStats(req.user.role === 'admin' ? null : req.user.id);
+    // Admin and guests see platform-wide totals; users see only their own.
+    const stats = db.getArticleStats((req.user.role === 'admin' || req.user.username === 'guest') ? null : req.user.id);
     res.json(stats);
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch stats' });
@@ -435,7 +435,7 @@ router.get('/search', auth.requireAuth, (req, res) => {
     const results = db.searchArticles(
       auth.sanitizeString(q, 200),
       Math.min(parseInt(limit) || 50, 200),
-      req.user.role === 'admin' ? null : req.user.id
+      (req.user.role === 'admin' || req.user.username === 'guest') ? null : req.user.id
     );
     res.json(results);
   } catch (error) {
@@ -488,7 +488,10 @@ router.post('/articles/:id/escalate', auth.requireAuth, (req, res) => {
 
 router.get('/sources', auth.requireAuth, (req, res) => {
   try {
-    const sources = db.getSourcesForUser(req.user.id);
+    // Guests and admins see the full platform source list; users see only their own.
+    const sources = (req.user.role === 'admin' || req.user.username === 'guest')
+      ? db.getAllSources()
+      : db.getSourcesForUser(req.user.id);
     res.json({ sources });
   } catch (error) {
     console.error('[API] Error fetching sources:', error.message);
