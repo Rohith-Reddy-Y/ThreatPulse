@@ -78,25 +78,58 @@ async function generate(systemInstruction, userContent, opts = {}) {
 }
 
 /**
- * Parse a JSON response, tolerating markdown fences and trailing commas.
+ * Parse a JSON response, tolerating markdown fences, trailing commas,
+ * and double-encoded JSON (Gemini sometimes wraps JSON in an extra string layer).
  */
 function parseJson(text) {
   if (!text) return null;
-  try {
-    return JSON.parse(text);
-  } catch {
-    const cleaned = text
-      .replace(/^```(json)?/i, '')
-      .replace(/```$/i, '')
-      .trim();
-    try {
-      return JSON.parse(cleaned);
-    } catch {
-      // Last resort: extract the first {...} block
-      const m = cleaned.match(/\{[\s\S]*\}/);
-      if (m) { try { return JSON.parse(m[0]); } catch { return null; } }
-      return null;
+
+  // Attempt 1: direct
+  const direct = tryParse(text);
+  if (direct !== undefined) {
+    // Gemini with responseMimeType=application/json may return a JSON-encoded string.
+    if (typeof direct === 'string') {
+      const inner = tryParse(direct);
+      if (inner !== undefined) return inner;
     }
+    return direct;
+  }
+
+  // Attempt 2: strip markdown fences + whitespace
+  const cleaned = text
+    .replace(/^```(json)?/i, '')
+    .replace(/```$/i, '')
+    .trim();
+  const c = tryParse(cleaned);
+  if (c !== undefined) {
+    if (typeof c === 'string') {
+      const inner = tryParse(c);
+      if (inner !== undefined) return inner;
+    }
+    return c;
+  }
+
+  // Attempt 3: extract the first {...} block
+  const m = cleaned.match(/\{[\s\S]*\}/);
+  if (m) {
+    const b = tryParse(m[0]);
+    if (b !== undefined) {
+      if (typeof b === 'string') {
+        const inner = tryParse(b);
+        if (inner !== undefined) return inner;
+      }
+      return b;
+    }
+  }
+
+  return null;
+}
+
+function tryParse(s) {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return undefined;
   }
 }
 

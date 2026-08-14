@@ -32,9 +32,13 @@ router.post('/summarize', auth.requireAuth, async (req, res) => {
     const result = await ai.generate(prompts.summaryPrompt(article), article.title);
     if (!result.ok) return res.status(503).json({ success: false, error: result.error });
 
-    const data = ai.parseJson(result.text) || {};
-    cache.set('summary', String(article.id), JSON.stringify(data));
-    res.json({ success: true, ...data });
+    const data = ai.parseJson(result.text);
+    if (data && Object.keys(data).length > 0) {
+      cache.set('summary', String(article.id), JSON.stringify(data));
+      res.json({ success: true, ...data });
+    } else {
+      res.status(502).json({ success: false, error: 'AI returned an empty result' });
+    }
   } catch (e) {
     console.error('[AI] Summarize error:', e.message);
     res.status(500).json({ error: 'AI summary failed' });
@@ -56,9 +60,13 @@ router.post('/triage', auth.requireAuth, async (req, res) => {
     const result = await ai.generate(prompts.triagePrompt(article), article.title);
     if (!result.ok) return res.status(503).json({ success: false, error: result.error });
 
-    const data = ai.parseJson(result.text) || {};
-    cache.set('triage', String(article.id), JSON.stringify(data));
-    res.json({ success: true, ...data });
+    const data = ai.parseJson(result.text);
+    if (data && Object.keys(data).length > 0) {
+      cache.set('triage', String(article.id), JSON.stringify(data));
+      res.json({ success: true, ...data });
+    } else {
+      res.status(502).json({ success: false, error: 'AI returned an empty result' });
+    }
   } catch (e) {
     console.error('[AI] Triage error:', e.message);
     res.status(500).json({ error: 'AI triage failed' });

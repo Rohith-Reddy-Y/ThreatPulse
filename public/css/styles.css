@@ -599,6 +599,21 @@ body::after {
 .btn-escalate:hover { border-color: var(--red); color: var(--red); background: var(--red-dim); }
 .btn-escalate.escalated { border-color: var(--red); color: var(--red); background: var(--red-dim); cursor: default; }
 
+.btn-ai {
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--purple);
+  background: var(--purple-dim);
+  color: var(--purple);
+  font-size: 0.72rem;
+  font-weight: 700;
+  font-family: var(--font-body);
+  cursor: pointer;
+  transition: all 0.2s var(--ease-out);
+}
+.btn-ai:hover { border-color: var(--purple); color: #fff; background: var(--grad); }
+.btn-ai:disabled { opacity: 0.6; cursor: default; }
+
 .article-actions .action-done {
   font-size: 0.68rem;
   color: var(--green);

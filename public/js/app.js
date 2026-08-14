@@ -1093,7 +1093,9 @@
           <button class="${reviewBtnCls}" data-review-article="${article.id}" title="Start reviewing"${reviewBtnDisabled}>${reviewBtnTxt}</button>
           <button class="btn-review-done" data-review-done="${article.id}" title="Mark as reviewed"${doneBtnDisabled}>Done</button>
           <button class="${escalateBtnCls}" data-escalate="${article.id}" title="Escalate"${escalateBtnDisabled}>${escalateBtnTxt}</button>
+          <button class="btn-ai" data-ai-summarize="${article.id}" title="AI summary + triage">AI</button>
         </div>
+        <div class="ai-result" data-ai-result="${article.id}" style="display:none;"></div>
       </article>`;
   }
 
@@ -1931,6 +1933,51 @@
           showToast('Error', err.message, 'error');
           escalateBtn.textContent = 'Escalate';
           escalateBtn.disabled = false;
+        });
+      }
+
+      // AI summary + triage button (per-article)
+      const aiBtn = e.target.closest('[data-ai-summarize]');
+      if (aiBtn) {
+        const articleId = parseInt(aiBtn.dataset.aiSummarize);
+        const resultEl = document.querySelector(`[data-ai-result="${articleId}"]`);
+        aiBtn.textContent = '...';
+        aiBtn.disabled = true;
+
+        if (resultEl && resultEl.style.display !== 'none' && resultEl.dataset.loaded) {
+          // Toggle off
+          resultEl.style.display = 'none';
+          aiBtn.textContent = 'AI';
+          aiBtn.disabled = false;
+          return;
+        }
+
+        const summaryUrl = d('L2FwaS9haS9zdW1tYXJpemU='); // /api/ai/summarize
+        const triageUrl = d('L2FwaS9haS90cmlhZ2U=');       // /api/ai/triage
+        Promise.all([
+          api('POST', summaryUrl, { articleId }),
+          api('POST', triageUrl, { articleId })
+        ]).then(([sum, tri]) => {
+          if (resultEl) {
+            const triageBadge = tri.success && tri.priority
+              ? `<span class="ai-triage-badge ai-triage-${tri.priority}">${tri.priority} · ${tri.relevance || '?'}/100</span>`
+              : '';
+            const summaryText = sum.success && sum.summary
+              ? `<div class="ai-summary-box"><strong>AI Summary:</strong> ${escapeHtml(sum.summary)}${sum.keyTakeaway ? `<br><em>${escapeHtml(sum.keyTakeaway)}</em>` : ''}</div>`
+              : `<div class="ai-message ai-error">${escapeHtml(sum.error || 'Summary failed')}</div>`;
+            resultEl.innerHTML = `${triageBadge}${summaryText}`;
+            resultEl.style.display = 'block';
+            resultEl.dataset.loaded = '1';
+          }
+          aiBtn.textContent = 'AI';
+          aiBtn.disabled = false;
+        }).catch(err => {
+          if (resultEl) {
+            resultEl.innerHTML = `<div class="ai-message ai-error">${escapeHtml(err.message || 'AI failed')}</div>`;
+            resultEl.style.display = 'block';
+          }
+          aiBtn.textContent = 'AI';
+          aiBtn.disabled = false;
         });
       }
     });
