@@ -913,11 +913,62 @@
     return 'https://attack.mitre.org/';
   }
 
+  // Synchrony threat actor classification map (class letter → color/priority)
+  const THREAT_ACTOR_CLASSES = {
+    // A — Critical
+    'Scattered Spider': 'A', 'Nimble Spider': 'A',
+    // B — High
+    'Arcane Kitten': 'B', 'Bitwise Spider': 'B', 'Brain Spider': 'B', 'Carbon Spider': 'B',
+    'Cozy Bear': 'B', 'Donut Spider': 'B', 'Famous Chollima': 'B', 'Frozen Spider': 'B',
+    'Honey Spider': 'B', 'Indrik Spider': 'B', 'Knockout Spider': 'B', 'Labyrinth Chollima': 'B',
+    'Lunar Spider': 'B', 'Mallard Spider': 'B', 'Mangled Spider': 'B', 'Masked Spider': 'B',
+    'Merchant Spider': 'B', 'Monarch Spider': 'B', 'Prophet Spider': 'B', 'Punk Spider': 'B',
+    'Recess Spider': 'B', 'Scully Spider': 'B', 'Silent Chollima': 'B', 'Stardust Chollima': 'B',
+    'Traveling Spider': 'B', 'Veto Spider': 'B', 'Wandering Spider': 'B', 'Wicked Panda': 'B',
+    'Royal Spider': 'B', 'Graceful Spider': 'B', 'Butler Spider': 'B', 'Hook Spider': 'B',
+    'Rice Spider': 'B', 'Lightning Spider': 'B', 'Nitro Spider': 'B', 'Murky Panda': 'B',
+    'Lightbasin Activity Cluster': 'B', 'Comrade Saiga': 'B',
+    // C — Medium
+    'Aquatic Panda': 'C', 'Banished Kitten': 'C', 'Cascade Panda': 'C', 'Chariot Spider': 'C',
+    'Chef Spider': 'C', 'Clockwork Spider': 'C', 'Cookie Spider': 'C', 'Demon Spider': 'C',
+    'Distant Spider': 'C', 'Fancy Bear': 'C', 'Hazard Spider': 'C', 'Hermit Spider': 'C',
+    'Highground Activity Cluster': 'C', 'Jackpot Panda': 'C', 'Nemesis Kitten': 'C', 'Ocean Buffalo': 'C',
+    'Odyssey Spider': 'C', 'Outrider Tiger': 'C', 'Phantom Panda': 'C', 'Ricochet Chollima': 'C',
+    'Salty Spider': 'C', 'Shining Spider': 'C', 'Smoky Spider': 'C', 'Solar Spider': 'C',
+    'Spectral Kitten': 'C', 'Squab Spider': 'C', 'Static Kitten': 'C', 'Tunnel Spider': 'C',
+    'Vampire Spider': 'C', 'Velvet Chollima': 'C', 'Vengeful Kitten': 'C', 'Vice Spider': 'C',
+    'Viking Spider': 'C', 'Alpha Spider': 'C', 'Helix Kitten': 'C', 'Emissary Panda': 'C',
+    'Apothecary Spider': 'C', 'Percussion Spider': 'C', 'Renaissance Spider': 'C', 'Samba Spider': 'C',
+    'Scion Spider': 'C', 'Sly Spider': 'C', 'Sinful Spider': 'C', 'Curly Spider': 'C',
+    'Imperial Kitten': 'C', 'Vault Panda': 'C', 'Radiant Spider': 'C', 'Plump Spider': 'C',
+    // D — Low
+    'Pulsar Kitten': 'D', 'Chaotic Spider': 'D', 'Holiday Spider': 'D', 'Chatty Spider': 'D', 'Haywire Kitten': 'D',
+    // E — Legacy
+    'Anthropoid Spider': 'E', 'Aviator Spider': 'E', 'Black Basta': 'E', 'Blind Spider': 'E',
+    'Charming Kitten': 'E', 'Circuit Panda': 'E', 'Circus Spider': 'E', 'Cobalt Spider': 'E',
+    'Compass Spider': 'E', 'Cyborg Spider': 'E', 'Doppel Spider': 'E', 'Ember Bear': 'E',
+    'Feral Spider': 'E', 'Judgement Panda': 'E', 'Keyhole Panda': 'E', 'Monty Spider': 'E',
+    'Narwhal Spider': 'E', 'Night Spider': 'E', 'Octane Panda': 'E', 'Outlaw Spider': 'E',
+    'Pioneer Kitten': 'E', 'Refined Kitten': 'E', 'Remix Kitten': 'E', 'Riddle Spider': 'E',
+    'Skeleton Spider': 'E', 'TA 511': 'E', 'TA 551': 'E', 'Tiny Spider': 'E', 'Twisted Spider': 'E',
+    'Venom Spider': 'E', 'Voodoo Bear': 'E', 'Wet Panda': 'E', 'Whisper Spider': 'E', 'Wizard Spider': 'E',
+  };
+
+  function actorClass(name) {
+    return THREAT_ACTOR_CLASSES[name] || null;
+  }
+
   function createArticleCard(article) {
     const catBadge = `<span class="badge badge-${article.category}">${escapeHtml(article.category)}</span>`;
     const sevBadge = `<span class="badge badge-severity-${article.severity}">${article.severity}</span>`;
     const sectorBadge = article.sector ? `<span class="badge badge-sector">${escapeHtml(article.sector)}</span>` : '';
-    const actorBadge = article.threat_actors ? article.threat_actors.split(',').map(a => `<span class="badge badge-actor">${escapeHtml(a.trim())}</span>`).join('') : '';
+    // Threat actors render as a distinct label with their Synchrony class badge (A/B/C/D/E)
+    const actorBadge = article.threat_actors ? article.threat_actors.split(',').map(a => {
+      const name = a.trim();
+      const cls = actorClass(name);
+      const clsTag = cls ? `<span class="ta-class ta-class-${cls.toLowerCase()}">${cls}</span>` : '';
+      return `<span class="badge badge-actor" title="${cls ? 'Class ' + cls : 'Threat actor'}">${clsTag}${escapeHtml(name)}</span>`;
+    }).join('') : '';
     const cveLink = article.cve_id ? `<a href="https://nvd.nist.gov/vuln/detail/${article.cve_id}" target="_blank" rel="noopener" class="cve-link">${article.cve_id}</a>` : '';
     const pocBadge = article.has_poc ? '<span class="badge badge-poc">PoC Available</span>' : '';
 

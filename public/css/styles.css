@@ -3453,7 +3453,32 @@ body::after {
   background: rgba(255,149,0,0.12);
   color: var(--orange);
   border: 1px solid rgba(255,149,0,0.3);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 700;
 }
+
+/* Synchrony class letter chip inside the threat-actor badge */
+.ta-class {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  border-radius: 4px;
+  font-size: 0.6rem;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0.5px;
+}
+
+.ta-class-a { background: #ff5c7a; color: #fff; }
+.ta-class-b { background: #ffab5c; color: #1a0f00; }
+.ta-class-c { background: #ffd45c; color: #1a1400; }
+.ta-class-d { background: #3ddc97; color: #06281a; }
+.ta-class-e { background: rgba(255,255,255,0.18); color: var(--text-secondary); }
 
 .source-added-by {
   font-size: 10px;
