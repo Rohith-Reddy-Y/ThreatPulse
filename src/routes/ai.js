@@ -9,6 +9,7 @@ const auth = require('../auth');
 const ai = require('../ai/client');
 const prompts = require('../ai/prompts');
 const cache = require('../ai/cache');
+const websearch = require('../ai/websearch');
 
 // Guest/admin see all articles; regular users only their own.
 function scopeUserId(user) {
@@ -71,10 +72,37 @@ router.post('/ask', auth.requireAuth, async (req, res) => {
     if (!question || !question.trim()) return res.status(400).json({ error: 'question required' });
 
     if (mode === 'web') {
-      // Secondary: web-grounded Q&A for anything outside ThreatPulse
-      const result = await ai.generate(prompts.webQaPrompt(question), question, { webSearch: true, temperature: 0.4 });
+      // Secondary: web-grounded Q&A for anything outside ThreatPulse.
+      // Fetch live results (free, no key), then have the AI synthesize a cited answer.
+      const results = await websearch.search(question, 5);
+      const context = results.map((r, i) =>
+        `[${i + 1}] ${r.title}\nURL: ${r.url}\n${r.snippet}`
+      ).join('\n\n');
+
+      const result = await ai.generate(prompts.webQaPrompt(question), question, { temperature: 0.4 });
       if (!result.ok) return res.status(503).json({ success: false, error: result.error });
-      return res.json({ success: true, mode: 'web', answer: result.text });
+
+      // Feed the search context to the model for a grounded, cited answer
+      const synth = await ai.generate(
+        `You are ThreatPulse's assistant. Answer the user's question using ONLY the search results below.
+If they are insufficient, say so and use your own knowledge, clearly marking which is which.
+List source URLs under "Sources:" at the end.\n\nSEARCH RESULTS:\n${context || '(none)'}\n\nQUESTION: ${question}`,
+        question,
+        { temperature: 0.4 }
+      );
+
+      if (synth.ok) {
+        return res.json({ success: true, mode: 'web', answer: synth.text, sources: results });
+      }
+      // Fallback: raw search results without synthesis
+      return res.json({
+        success: true,
+        mode: 'web',
+        answer: results.length
+          ? 'Here are relevant results:\n\n' + results.map(r => `- ${r.title}: ${r.url}`).join('\n')
+          : 'No web results found. The AI may still answer from its own knowledge if GEMINI_API_KEY is set.',
+        sources: results
+      });
     }
 
     // Primary: RAG over own article DB

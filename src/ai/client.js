@@ -4,7 +4,7 @@
  */
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
-const MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash';
 const API_KEY = process.env.GEMINI_API_KEY || null;
 const TIMEOUT_MS = 30000;
 const MAX_RETRIES = 2;
@@ -54,13 +54,6 @@ async function generate(systemInstruction, userContent, opts = {}) {
       responseMimeType: 'application/json'
     }
   };
-
-  // Gemini web-search grounding is enabled via tools
-  if (opts.webSearch) {
-    request.tools = [{ googleSearch: {} }];
-    // Web-grounded answers are free-form; force JSON wrapper via prompt instead
-    request.generationConfig.responseMimeType = 'text/plain';
-  }
 
   let lastError = null;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
