@@ -2123,7 +2123,20 @@
 
       function buildOptions() {
         list.innerHTML = '';
-        [...select.options].forEach(opt => {
+        // Iterate direct children to preserve <optgroup> structure
+        [...select.children].forEach(child => {
+          if (child.tagName === 'OPTGROUP') {
+            const header = document.createElement('div');
+            header.className = 'custom-select-group';
+            header.textContent = child.label;
+            list.appendChild(header);
+            [...child.children].forEach(opt => appendOption(opt));
+          } else if (child.tagName === 'OPTION') {
+            appendOption(child);
+          }
+        });
+
+        function appendOption(opt) {
           const item = document.createElement('div');
           item.className = 'custom-select-option' + (opt.selected ? ' selected' : '');
           item.textContent = opt.textContent;
@@ -2138,7 +2151,7 @@
             select.dispatchEvent(new Event('change', { bubbles: true }));
           });
           list.appendChild(item);
-        });
+        }
       }
 
       buildOptions();

@@ -24,16 +24,52 @@ function detectSector(text) {
 
 // ── Known threat actors ──────────────────────────────────────
 // Distinctive names — safe to match on a plain word boundary.
+// Includes the full Synchrony Tracked Threat Actor Library (127 actors across
+// A-Critical, B-High, C-Medium, D-Low, E-Legacy) plus common public aliases.
 const DISTINCTIVE_ACTORS = [
-  'Scattered Spider', 'Lazarus Group', 'Lazarus', 'APT28', 'APT29', 'APT41', 'APT27', 'APT33', 'APT34', 'APT35', 'APT38', 'APT40',
-  'Fancy Bear', 'Cozy Bear', 'BlackCat', 'ALPHV', 'LockBit', 'Cl0p', 'Clop',
+  // A — Critical
+  'Scattered Spider', 'Nimble Spider',
+  // B — High
+  'Arcane Kitten', 'Bitwise Spider', 'Brain Spider', 'Carbon Spider', 'Cozy Bear',
+  'Donut Spider', 'Famous Chollima', 'Frozen Spider', 'Honey Spider', 'Indrik Spider',
+  'Knockout Spider', 'Labyrinth Chollima', 'Lunar Spider', 'Mallard Spider',
+  'Mangled Spider', 'Masked Spider', 'Merchant Spider', 'Monarch Spider',
+  'Prophet Spider', 'Punk Spider', 'Recess Spider', 'Scully Spider', 'Silent Chollima',
+  'Stardust Chollima', 'Traveling Spider', 'Veto Spider', 'Wandering Spider',
+  'Wicked Panda', 'Royal Spider', 'Graceful Spider', 'Butler Spider', 'Hook Spider',
+  'Rice Spider', 'Lightning Spider', 'Nitro Spider', 'Murky Panda',
+  'Lightbasin Activity Cluster', 'Comrade Saiga',
+  // C — Medium
+  'Aquatic Panda', 'Banished Kitten', 'Cascade Panda', 'Chariot Spider', 'Chef Spider',
+  'Clockwork Spider', 'Cookie Spider', 'Demon Spider', 'Distant Spider', 'Fancy Bear',
+  'Hazard Spider', 'Hermit Spider', 'Highground Activity Cluster', 'Jackpot Panda',
+  'Nemesis Kitten', 'Ocean Buffalo', 'Odyssey Spider', 'Outrider Tiger', 'Phantom Panda',
+  'Ricochet Chollima', 'Salty Spider', 'Shining Spider', 'Smoky Spider', 'Solar Spider',
+  'Spectral Kitten', 'Squab Spider', 'Static Kitten', 'Tunnel Spider', 'Vampire Spider',
+  'Velvet Chollima', 'Vengeful Kitten', 'Vice Spider', 'Viking Spider', 'Alpha Spider',
+  'Helix Kitten', 'Emissary Panda', 'Apothecary Spider', 'Percussion Spider',
+  'Renaissance Spider', 'Samba Spider', 'Scion Spider', 'Sly Spider', 'Sinful Spider',
+  'Curly Spider', 'Imperial Kitten', 'Vault Panda', 'Radiant Spider', 'Plump Spider',
+  // D — Low
+  'Pulsar Kitten', 'Chaotic Spider', 'Holiday Spider', 'Chatty Spider', 'Haywire Kitten',
+  // E — Legacy
+  'Anthropoid Spider', 'Aviator Spider', 'Black Basta', 'Blind Spider', 'Charming Kitten',
+  'Circuit Panda', 'Circus Spider', 'Cobalt Spider', 'Compass Spider', 'Cyborg Spider',
+  'Doppel Spider', 'Ember Bear', 'Feral Spider', 'Judgement Panda', 'Keyhole Panda',
+  'Monty Spider', 'Narwhal Spider', 'Night Spider', 'Octane Panda', 'Outlaw Spider',
+  'Pioneer Kitten', 'Refined Kitten', 'Remix Kitten', 'Riddle Spider', 'Skeleton Spider',
+  'TA 511', 'TA 551', 'Tiny Spider', 'Twisted Spider', 'Venom Spider', 'Voodoo Bear',
+  'Wet Panda', 'Whisper Spider', 'Wizard Spider',
+  // Common public aliases (kept for broader matching)
+  'Lazarus Group', 'Lazarus', 'APT28', 'APT29', 'APT41', 'APT27', 'APT33', 'APT34', 'APT35', 'APT38', 'APT40',
+  'BlackCat', 'ALPHV', 'LockBit', 'Cl0p', 'Clop',
   'Volt Typhoon', 'Salt Typhoon', 'Flax Typhoon', 'Sandworm', 'FIN7', 'FIN11', 'FIN12',
-  'REvil', 'Conti', 'DarkSide', 'Black Basta', 'Rhysida',
-  'Turla', 'Kimsuky', 'Charming Kitten', 'MuddyWater', 'OilRig', 'Hafnium',
+  'REvil', 'Conti', 'DarkSide', 'Rhysida',
+  'Turla', 'Kimsuky', 'MuddyWater', 'OilRig', 'Hafnium',
   'UNC2452', 'UNC3886', 'Star Blizzard', 'Midnight Blizzard', 'Forest Blizzard',
   'BlackTech', 'Mustang Panda', 'Gamaredon', 'Lapsus', 'Vice Society',
   'BianLian', 'NoEscape', 'Hunters International', 'INC Ransom', 'RansomHub',
-  'Qilin', 'DragonForce', 'Scattered Lapsus', 'BlackByte', 'Snatch',
+  'Qilin', 'DragonForce', 'BlackByte', 'Snatch',
 ];
 
 // Ambiguous names that are also ordinary English words — only tag these when the
