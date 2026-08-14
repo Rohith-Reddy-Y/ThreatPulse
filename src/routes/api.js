@@ -197,6 +197,23 @@ router.get('/auth/me', auth.requireAuth, (req, res) => {
   });
 });
 
+// Guest session — lets anonymous visitors use the dashboard without signing in
+router.post('/auth/guest', (req, res) => {
+  try {
+    const result = auth.getOrCreateGuestUser();
+    if (!result.success) {
+      return res.status(500).json({ success: false, error: result.error });
+    }
+    security.setAccessTokenCookie(res, result.accessToken);
+    security.setRefreshTokenCookie(res, result.refreshToken);
+    security.setCsrfCookie(res);
+    res.json({ success: true, user: result.user });
+  } catch (error) {
+    console.error('[API] Guest access error:', error.message);
+    res.status(500).json({ success: false, error: 'Failed to initialize guest session' });
+  }
+});
+
 // Refresh access + refresh tokens using the refresh-token cookie
 router.post('/auth/refresh', (req, res) => {
   const refreshToken = req.cookies?.tp_refresh;

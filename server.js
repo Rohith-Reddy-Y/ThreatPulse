@@ -34,7 +34,7 @@ app.use('/api', (req, res, next) => {
   // Exempt login, register, forgot-password, reset-password, and refresh
   // from CSRF — these are the endpoints that establish/give tokens
   const csrfExempt = ['/auth/login', '/auth/register', '/auth/forgot-password',
-                      '/auth/reset-password', '/auth/refresh'];
+                      '/auth/reset-password', '/auth/refresh', '/auth/guest'];
   if (csrfExempt.some(p => req.path === p)) return next();
   return csrfMiddleware(req, res, next);
 });

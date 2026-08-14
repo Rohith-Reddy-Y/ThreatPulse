@@ -560,6 +560,39 @@ function resetPassword(token, newPassword) {
   return { success: true, message: 'Password has been reset successfully' };
 }
 
+// ============================================
+// GUEST ACCESS (open public dashboard — no sign-in required)
+// ============================================
+// A single shared "guest" account lets anonymous visitors use the dashboard
+// without registering. Everyone shares the same guest workspace.
+const GUEST_USERNAME = 'guest';
+
+function getOrCreateGuestUser() {
+  let guest = db.getUserByUsername(GUEST_USERNAME);
+  if (!guest) {
+    const salt = generateSalt();
+    // Unusable random password — guests never log in with a password
+    const passwordHash = hashPassword(crypto.randomBytes(32).toString('hex'), salt);
+    const result = db.createUser(GUEST_USERNAME, 'Guest', passwordHash, salt, 'analyst', null, null);
+    if (!result.success) return { success: false, error: result.error };
+    db.createUserNotificationSettings(result.id);
+    guest = db.getUserById(result.id);
+  }
+  if (!guest) return { success: false, error: 'Failed to initialize guest account' };
+
+  const userObj = { id: guest.id, username: guest.username, role: 'analyst' };
+  const accessToken = createToken({ userId: userObj.id, username: userObj.username, role: 'analyst' });
+  const refreshToken = createRefreshToken(userObj);
+  db.logAudit(guest.id, 'guest_access', 'Guest session created', null);
+
+  return {
+    success: true,
+    accessToken,
+    refreshToken,
+    user: { id: guest.id, username: guest.username, displayName: guest.display_name, role: 'analyst', email: null }
+  };
+}
+
 module.exports = {
   registerUser,
   loginUser,
@@ -570,6 +603,7 @@ module.exports = {
   ensureAdminExists,
   forgotPassword,
   resetPassword,
+  getOrCreateGuestUser,
   sanitizeString,
   validateUrl,
   validatePasswordStrength,

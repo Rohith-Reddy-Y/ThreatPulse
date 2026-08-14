@@ -158,6 +158,9 @@
         <span id="auth-toggle-text">Don't have an account?</span>
         <button type="button" class="btn btn-ghost" id="auth-toggle-btn">Register</button>
       </div>
+      <div class="auth-toggle" id="guest-back" style="display:none;margin-top:10px;">
+        <button type="button" class="btn btn-ghost" id="guest-back-btn" style="font-size:12px;opacity:0.8;">← Continue as Guest</button>
+      </div>
     </div>
   </div>
 
@@ -205,6 +208,7 @@
             <span class="user-dropdown-role" id="dropdown-role">analyst</span>
           </div>
           <hr class="dropdown-divider">
+          <button class="user-dropdown-item hidden" id="sign-in-btn">Sign In / Register</button>
           <a href="/admin" class="user-dropdown-item admin-link hidden" id="admin-link">Admin Panel</a>
           <button class="user-dropdown-item" id="change-email-btn">Change Email</button>
           <button class="user-dropdown-item" id="change-password-btn">Change Password</button>

@@ -158,15 +158,28 @@
 
   function updateUserMenu() {
     if (!currentUser) return;
+    const isGuest = currentUser.username === 'guest';
     const avatar = currentUser.displayName ? currentUser.displayName.charAt(0).toUpperCase() : 'U';
     $('#user-avatar').textContent = avatar;
-    $('#user-display-name').textContent = currentUser.displayName || currentUser.username;
-    $('#dropdown-name').textContent = currentUser.displayName || currentUser.username;
-    $('#dropdown-role').textContent = currentUser.role;
+    $('#user-display-name').textContent = isGuest ? 'Guest' : (currentUser.displayName || currentUser.username);
+    $('#dropdown-name').textContent = isGuest ? 'Guest' : (currentUser.displayName || currentUser.username);
+    $('#dropdown-role').textContent = isGuest ? 'visitor' : currentUser.role;
     if (currentUser.role === 'admin') {
       $('#admin-link').classList.remove('hidden');
     } else {
       $('#admin-link').classList.add('hidden');
+    }
+    // Guests see a "Sign In / Register" entry; hide account-only options
+    if (isGuest) {
+      $('#sign-in-btn').classList.remove('hidden');
+      $('#change-email-btn').classList.add('hidden');
+      $('#change-password-btn').classList.add('hidden');
+      $('#logout-btn').classList.add('hidden');
+    } else {
+      $('#sign-in-btn').classList.add('hidden');
+      $('#change-email-btn').classList.remove('hidden');
+      $('#change-password-btn').classList.remove('hidden');
+      $('#logout-btn').classList.remove('hidden');
     }
   }
 
@@ -1567,6 +1580,20 @@
     // Logout
     $('#logout-btn').addEventListener('click', logout);
 
+    // Sign In / Register (guests) — show auth overlay without killing the guest session
+    $('#sign-in-btn').addEventListener('click', () => {
+      $('#user-dropdown').classList.add('hidden');
+      showAuth();
+      // Show "Continue as Guest" back option only if we already have a guest session
+      const isGuest = currentUser && currentUser.username === 'guest';
+      $('#guest-back').style.display = isGuest ? '' : 'none';
+    });
+
+    // Continue as Guest — return to the dashboard from the auth overlay
+    $('#guest-back-btn').addEventListener('click', () => {
+      hideAuth();
+    });
+
     // Change email
     $('#change-email-btn').addEventListener('click', () => {
       $('#email-error').classList.add('hidden');
@@ -2161,6 +2188,25 @@
         if (!r.ok) throw new Error('Not authenticated');
         return r.json();
       })
+      .then(data => {
+        if (data.success && data.user) {
+          currentUser = data.user;
+          updateUserMenu();
+          scheduleAutoRefresh();
+          hideAuth();
+          initDashboard();
+        } else {
+          enterGuestSession();
+        }
+      })
+      .catch(() => enterGuestSession());
+  }
+
+  // Anonymous visitors land straight on the dashboard via a shared guest account.
+  // They can still sign in / register from the header to use their own workspace.
+  function enterGuestSession() {
+    fetch(d('L2FwaS9hdXRoL2d1ZXN0'), { method: 'POST' })
+      .then(r => r.json())
       .then(data => {
         if (data.success && data.user) {
           currentUser = data.user;
