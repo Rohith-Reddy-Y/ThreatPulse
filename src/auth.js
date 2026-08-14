@@ -237,10 +237,14 @@ function registerUser(username, displayName, password, inviteCode, email = null)
   const pwCheck = validatePasswordStrength(password);
   if (!pwCheck.valid) return { success: false, error: pwCheck.error };
 
-  // Verify invite code
-  const codeResult = db.validateInviteCode(inviteCode);
-  if (!codeResult.valid) {
-    return { success: false, error: codeResult.error };
+  // Verify invite code — but only when open registration is disabled.
+  // Open registration (default) lets anyone sign up with no invite code.
+  const requireInvite = process.env.REQUIRE_INVITE_CODE === 'true';
+  if (requireInvite) {
+    const codeResult = db.validateInviteCode(inviteCode);
+    if (!codeResult.valid) {
+      return { success: false, error: codeResult.error };
+    }
   }
 
   // Check if username exists
@@ -255,17 +259,20 @@ function registerUser(username, displayName, password, inviteCode, email = null)
     return { success: false, error: 'Email already registered' };
   }
 
-  // Create user
+  // Create user (invite code stored only if one was actually used)
   const salt = generateSalt();
   const passwordHash = hashPassword(password, salt);
-  const result = db.createUser(username, displayName, passwordHash, salt, 'analyst', inviteCode, email);
+  const cleanInvite = requireInvite ? inviteCode : null;
+  const result = db.createUser(username, displayName, passwordHash, salt, 'analyst', cleanInvite, email);
 
   if (!result.success) {
     return { success: false, error: result.error };
   }
 
-  // Mark invite code as used
-  db.useInviteCode(inviteCode, result.id);
+  // Mark invite code as used (only when one was required/used)
+  if (requireInvite) {
+    db.useInviteCode(inviteCode, result.id);
+  }
 
   // Create default notification settings for this user
   db.createUserNotificationSettings(result.id);

@@ -1375,11 +1375,8 @@
         errEl.classList.remove('hidden');
         return;
       }
-      if (!inviteCode) {
-        errEl.textContent = 'Please enter your invite code';
-        errEl.classList.remove('hidden');
-        return;
-      }
+      // Invite code is optional (open registration) — only required if the
+      // field is visible (i.e. REQUIRE_INVITE_CODE is on).
 
       $('#register-btn').disabled = true;
       $('#register-btn').textContent = 'Creating account…';
