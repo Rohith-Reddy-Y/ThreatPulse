@@ -806,14 +806,14 @@ const maskSecret = (v) => (v ? String(v).slice(0, 8) + '...' + String(v).slice(-
 
 router.get('/admin/ai-settings', auth.requireAuth, auth.requireAdmin, (req, res) => {
   try {
-    const gemini = db.getSetting('gemini_api_key');
+    const groq = db.getSetting('groq_api_key');
     const tavily = db.getSetting('tavily_api_key');
     res.json({
-      gemini_api_key: maskSecret(gemini),
+      groq_api_key: maskSecret(groq),
       tavily_api_key: maskSecret(tavily),
-      gemini_set: !!(gemini || process.env.GEMINI_API_KEY),
+      groq_set: !!(groq || process.env.GROQ_API_KEY),
       tavily_set: !!(tavily || process.env.TAVILY_API_KEY),
-      model: process.env.GEMINI_MODEL || 'gemini-3.5-flash'
+      model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile'
     });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch AI settings' });
@@ -829,7 +829,7 @@ router.put('/admin/ai-settings', auth.requireAuth, auth.requireAdmin, (req, res)
       else if (v === '') db.setSetting(key, null);          // empty -> clear
       // masked value ("...") -> leave unchanged
     };
-    apply('gemini_api_key', req.body?.gemini_api_key);
+    apply('groq_api_key', req.body?.groq_api_key);
     apply('tavily_api_key', req.body?.tavily_api_key);
     db.logAudit(req.user.id, 'ai_settings_update', 'Updated AI API keys', req.ip);
     res.json({ success: true });

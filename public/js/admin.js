@@ -253,30 +253,30 @@
     `).join('');
   }
 
-  // AI settings (Gemini + Tavily keys, stored server-side)
+  // AI settings (Groq + Tavily keys, stored server-side)
   async function loadAiSettings() {
     try {
       const data = await api('GET', d('L2FwaS9hZG1pbi9haS1zZXR0aW5ncw=='));
       if (!data) return;
-      if (data.gemini_api_key) $('#ai-gemini-key').placeholder = 'Current: ' + data.gemini_api_key + ' - paste a new key to replace';
+      if (data.groq_api_key) $('#ai-groq-key').placeholder = 'Current: ' + data.groq_api_key + ' - paste a new key to replace';
       if (data.tavily_api_key) $('#ai-tavily-key').placeholder = 'Current: ' + data.tavily_api_key + ' - paste a new key to replace';
       const setBadge = (el, set) => { el.textContent = set ? 'set' : 'not set'; el.className = 'badge ' + (set ? 'badge-advisory' : 'badge-breach'); };
-      setBadge($('#ai-gemini-status'), data.gemini_set);
+      setBadge($('#ai-groq-status'), data.groq_set);
       setBadge($('#ai-tavily-status'), data.tavily_set);
       if (data.model) $('#ai-model').textContent = data.model;
     } catch (e) { /* non-fatal */ }
   }
 
   async function saveAiSettings() {
-    const gemini = $('#ai-gemini-key').value;
+    const groq = $('#ai-groq-key').value;
     const tavily = $('#ai-tavily-key').value;
-    if (!gemini && !tavily) { showToast('Enter at least one key to save', 'error'); return; }
+    if (!groq && !tavily) { showToast('Enter at least one key to save', 'error'); return; }
     const btn = $('#ai-save-btn');
     btn.disabled = true; btn.textContent = 'Saving...';
     try {
-      const result = await api('PUT', d('L2FwaS9hZG1pbi9haS1zZXR0aW5ncw=='), { gemini_api_key: gemini, tavily_api_key: tavily });
+      const result = await api('PUT', d('L2FwaS9hZG1pbi9haS1zZXR0aW5ncw=='), { groq_api_key: groq, tavily_api_key: tavily });
       if (result && result.success) {
-        $('#ai-gemini-key').value = '';
+        $('#ai-groq-key').value = '';
         $('#ai-tavily-key').value = '';
         showToast('AI settings saved. AI features are live.', 'success');
         loadAiSettings();

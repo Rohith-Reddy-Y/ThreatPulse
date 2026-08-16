@@ -118,11 +118,12 @@ router.post('/ask', auth.requireAuth, async (req, res) => {
 
 // ── STATUS (is AI configured?) ──
 router.get('/status', auth.requireAuth, (req, res) => {
-  const envKey = process.env.GEMINI_API_KEY;
-  const dbKey = db.getSetting('gemini_api_key');
+  const envKey = process.env.GROQ_API_KEY;
+  const dbKey = db.getSetting('groq_api_key');
   res.json({
     enabled: ai.isEnabled(),
     model: ai.MODEL,
+    provider: 'groq',
     keySource: envKey ? 'env' : (dbKey ? 'database' : 'none')
   });
 });
