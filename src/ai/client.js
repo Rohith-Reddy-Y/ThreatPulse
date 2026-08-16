@@ -31,29 +31,26 @@ async function generate(systemInstruction, userContent, opts = {}) {
   }
 
   const temperature = opts.temperature ?? 0.3;
+  // Structured callers (summary/triage/ioc/rag) want JSON; the web-Q&A
+  // chat wants plain text. Default to JSON, opt out with { json: false }.
+  const jsonMode = opts.json !== false;
 
   const model = genAI.getGenerativeModel(
     { model: MODEL },
     { apiVersion: 'v1beta' }
   );
 
-  const parts = [];
-  if (opts.webSearch) {
-    // Ground the response in live Google Search
-    parts.push({ text: userContent });
-  } else {
-    parts.push({ text: userContent });
-  }
-
   const request = {
-    contents: [{ role: 'user', parts }],
+    contents: [{ role: 'user', parts: [{ text: userContent }] }],
     systemInstruction,
     generationConfig: {
       temperature,
-      maxOutputTokens: 2048,
-      responseMimeType: 'application/json'
+      maxOutputTokens: 2048
     }
   };
+  if (jsonMode) {
+    request.generationConfig.responseMimeType = 'application/json';
+  }
 
   let lastError = null;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {

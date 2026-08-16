@@ -1954,27 +1954,22 @@
 
         const summaryUrl = d('L2FwaS9haS9zdW1tYXJpemU='); // /api/ai/summarize
         const triageUrl = d('L2FwaS9haS90cmlhZ2U=');       // /api/ai/triage
-        Promise.all([
+        Promise.allSettled([
           api('POST', summaryUrl, { articleId }),
           api('POST', triageUrl, { articleId })
-        ]).then(([sum, tri]) => {
+        ]).then(([sumRes, triRes]) => {
+          const sum = sumRes.status === 'fulfilled' ? sumRes.value : { success: false, error: (sumRes.reason && sumRes.reason.message) || 'Summary failed' };
+          const tri = triRes.status === 'fulfilled' ? triRes.value : { success: false, error: (triRes.reason && triRes.reason.message) || 'Triage failed' };
           if (resultEl) {
             const triageBadge = tri.success && tri.priority
               ? `<span class="ai-triage-badge ai-triage-${tri.priority}">${tri.priority} · ${tri.relevance || '?'}/100</span>`
-              : '';
+              : (tri.error ? `<div class="ai-message ai-error">Triage: ${escapeHtml(tri.error)}</div>` : '');
             const summaryText = sum.success && sum.summary
               ? `<div class="ai-summary-box"><strong>AI Summary:</strong> ${escapeHtml(sum.summary)}${sum.keyTakeaway ? `<br><em>${escapeHtml(sum.keyTakeaway)}</em>` : ''}</div>`
-              : `<div class="ai-message ai-error">${escapeHtml(sum.error || 'Summary failed')}</div>`;
+              : `<div class="ai-message ai-error">Summary: ${escapeHtml(sum.error || 'Summary failed')}</div>`;
             resultEl.innerHTML = `${triageBadge}${summaryText}`;
             resultEl.style.display = 'block';
             resultEl.dataset.loaded = '1';
-          }
-          aiBtn.textContent = 'AI';
-          aiBtn.disabled = false;
-        }).catch(err => {
-          if (resultEl) {
-            resultEl.innerHTML = `<div class="ai-message ai-error">${escapeHtml(err.message || 'AI failed')}</div>`;
-            resultEl.style.display = 'block';
           }
           aiBtn.textContent = 'AI';
           aiBtn.disabled = false;
@@ -2185,10 +2180,20 @@
         if (typing) typing.remove();
 
         if (result.success) {
-          const answer = result.mode === 'rag' ? result.answer : result.answer;
-          const citations = result.citations && result.citations.length
-            ? `\n\n[Citations: ${result.citations.join(', ')}]` : '';
-          body.insertAdjacentHTML('beforeend', `<div class="ai-message ai-bot">${escapeHtml(answer)}${citations}</div>`);
+          const answerHtml = escapeHtml(result.answer || '').replace(/\n/g, '<br>');
+          let extra = '';
+          if (result.mode === 'rag' && result.citations && result.citations.length) {
+            extra = `<br><br>[Citations: ${result.citations.join(', ')}]`;
+          } else if (result.mode === 'web' && result.sources && result.sources.length) {
+            const links = result.sources.map(s => {
+              const url = /^https?:\/\//i.test(s.url || '') ? s.url : '';
+              return url
+                ? `&bull; <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(s.title)}</a>`
+                : `&bull; ${escapeHtml(s.title)}`;
+            }).join('<br>');
+            extra = `<br><br><strong>Sources:</strong><br>${links}`;
+          }
+          body.insertAdjacentHTML('beforeend', `<div class="ai-message ai-bot">${answerHtml}${extra}</div>`);
         } else {
           body.insertAdjacentHTML('beforeend', `<div class="ai-message ai-error">${escapeHtml(result.error || 'AI request failed')}</div>`);
         }

@@ -823,6 +823,59 @@ function searchArticles(query, limit = 50, userId = null) {
   ).all(...params);
 }
 
+// Common English stopwords + threat-intel filler words so natural-language
+// questions ("what critical vulns appeared this week involving ransomware?")
+// reduce to the terms that actually discriminate articles.
+const RAG_STOPWORDS = new Set(
+  ('a an and are as at be been but by can could did do does for from had has have how i in into is it its me my of on or our out over so than that the their them these they this those to up was we were what when where which who why will with you your ' +
+   'recently latest now today week month year appeared appear involving involve show showed shows shown tell told give gave find found list mention about us using use used during after before between against').split(' ')
+);
+
+function extractKeywords(question) {
+  const words = String(question || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length > 2 && !RAG_STOPWORDS.has(w));
+  return [...new Set(words)].slice(0, 12);
+}
+
+// RAG retrieval: tokenize the question into keywords, fetch candidates that
+// match ANY keyword, then rank by how many keywords each article matches.
+// This handles natural-language questions where a full-phrase LIKE would
+// match nothing.
+function searchArticlesRag(question, limit = 8, userId = null) {
+  const keywords = extractKeywords(question);
+  if (!keywords.length) return [];
+
+  const userFilter = userId ? 'AND user_id = ?' : '';
+  const select = getDb().prepare(
+    `SELECT * FROM articles WHERE (title LIKE ? OR description LIKE ? OR cve_id LIKE ? OR tags LIKE ? OR author LIKE ?) ${userFilter} ORDER BY published_date DESC LIMIT 20`
+  );
+
+  const seen = new Map();
+  for (const kw of keywords) {
+    const term = `%${kw}%`;
+    const params = userId
+      ? [term, term, term, term, term, userId]
+      : [term, term, term, term, term];
+    const rows = select.all(...params);
+    for (const r of rows) {
+      if (!seen.has(r.id)) seen.set(r.id, r);
+    }
+    if (seen.size >= limit * 5) break;
+  }
+
+  return [...seen.values()]
+    .map(a => {
+      const hay = `${a.title || ''} ${a.description || ''} ${a.tags || ''} ${a.cve_id || ''}`.toLowerCase();
+      const score = keywords.reduce((s, kw) => s + (hay.includes(kw) ? 1 : 0), 0);
+      return { ...a, score };
+    })
+    .sort((x, y) => (y.score - x.score) || (new Date(y.published_date || 0) - new Date(x.published_date || 0)))
+    .slice(0, limit);
+}
+
 function getArticleById(id) {
   return getDb().prepare('SELECT * FROM articles WHERE id = ?').get(id);
 }
@@ -1014,6 +1067,7 @@ module.exports = {
   getUnnotifiedArticles,
   markAsNotified,
   searchArticles,
+  searchArticlesRag,
   getArticleById,
   // Reviews
   startReview,

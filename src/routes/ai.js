@@ -87,35 +87,24 @@ router.post('/ask', auth.requireAuth, async (req, res) => {
         `[${i + 1}] ${r.title}\nURL: ${r.url}\n${r.snippet}`
       ).join('\n\n');
 
-      const result = await ai.generate(prompts.webQaPrompt(question), question, { temperature: 0.4 });
-      if (!result.ok) return res.status(503).json({ success: false, error: result.error });
-
-      // Feed the search context to the model for a grounded, cited answer
-      const synth = await ai.generate(
-        `You are ThreatPulse's assistant. Answer the user's question using ONLY the search results below.
-If they are insufficient, say so and use your own knowledge, clearly marking which is which.
-List source URLs under "Sources:" at the end.\n\nSEARCH RESULTS:\n${context || '(none)'}\n\nQUESTION: ${question}`,
-        question,
-        { temperature: 0.4 }
-      );
-
-      if (synth.ok) {
+      const synth = await ai.generate(prompts.webQaPrompt(question, context), question, { temperature: 0.4, json: false });
+      if (synth.ok && synth.text && synth.text.trim()) {
         return res.json({ success: true, mode: 'web', answer: synth.text, sources: results });
       }
-      // Fallback: raw search results without synthesis
+      // Fallback: raw search results without synthesis (works even with no AI key)
       return res.json({
         success: true,
         mode: 'web',
         answer: results.length
           ? 'Here are relevant results:\n\n' + results.map(r => `- ${r.title}: ${r.url}`).join('\n')
-          : 'No web results found. The AI may still answer from its own knowledge if GEMINI_API_KEY is set.',
+          : 'No web results found. Set GEMINI_API_KEY to let the AI answer from its own knowledge.',
         sources: results
       });
     }
 
     // Primary: RAG over own article DB
     const userId = scopeUserId(req.user);
-    const articles = db.searchArticles(question, 8, userId);
+    const articles = db.searchArticlesRag(question, 8, userId);
     const result = await ai.generate(prompts.ragPrompt(question, articles), question);
     if (!result.ok) return res.status(503).json({ success: false, error: result.error });
 
