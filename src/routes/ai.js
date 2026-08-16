@@ -73,46 +73,95 @@ router.post('/triage', auth.requireAuth, async (req, res) => {
   }
 });
 
-// ── ASK (RAG over own DB, or web-grounded) ──
+// ── ASK (RAG over own DB, or web-grounded) — thread-aware with shared memory ──
+function safeParseJson(s) {
+  try { return JSON.parse(s); } catch { return null; }
+}
+
 router.post('/ask', auth.requireAuth, async (req, res) => {
   try {
-    const { question, mode = 'rag' } = req.body;
+    const { question, mode = 'rag', threadId } = req.body;
     if (!question || !question.trim()) return res.status(400).json({ error: 'question required' });
 
+    // Threads are always per-user (the guest account has its own shared threads).
+    const userId = req.user.id;
+    let tid = threadId ? parseInt(threadId) : null;
+    if (tid) {
+      const t = db.getThread(tid, userId);
+      if (!t) return res.status(404).json({ error: 'Thread not found' });
+    } else {
+      tid = db.createThread(userId, question.trim().slice(0, 60) || 'New chat');
+    }
+
+    // Shared memory: load recent turns so the model keeps the topic across
+    // RAG/web toggles and follow-up questions.
+    const history = db.getThreadMessages(tid, userId, 12);
+
+    // Persist the user's message first.
+    db.addMessage(tid, 'user', question.trim(), mode);
+
     if (mode === 'web') {
-      // Secondary: web-grounded Q&A for anything outside ThreatPulse.
-      // Fetch live results (free, no key), then have the AI synthesize a cited answer.
       const results = await websearch.search(question, 5);
       const context = results.map((r, i) =>
         `[${i + 1}] ${r.title}\nURL: ${r.url}\n${r.snippet}`
       ).join('\n\n');
 
-      const synth = await ai.generate(prompts.webQaPrompt(question, context), question, { temperature: 0.4, json: false });
+      const synth = await ai.generate(prompts.webQaPrompt(question, context, history), question, { temperature: 0.4, json: false });
       if (synth.ok && synth.text && synth.text.trim()) {
-        return res.json({ success: true, mode: 'web', answer: synth.text, sources: results });
+        db.addMessage(tid, 'assistant', synth.text.trim(), 'web', results);
+        return res.json({ success: true, mode: 'web', threadId: tid, answer: synth.text.trim(), sources: results });
       }
-      // Fallback: raw search results without synthesis (works even with no AI key)
-      return res.json({
-        success: true,
-        mode: 'web',
-        answer: results.length
-          ? 'Here are relevant results:\n\n' + results.map(r => `- ${r.title}: ${r.url}`).join('\n')
-          : 'No web results found. Set GEMINI_API_KEY to let the AI answer from its own knowledge.',
-        sources: results
-      });
+      // Fallback: raw search results (works even if the LLM is down/rate-limited)
+      const fallback = results.length
+        ? 'Here are relevant results:\n\n' + results.map(r => `- ${r.title}: ${r.url}`).join('\n')
+        : 'No web results found. The AI could not generate an answer.';
+      db.addMessage(tid, 'assistant', fallback, 'web', results);
+      return res.json({ success: true, mode: 'web', threadId: tid, answer: fallback, sources: results });
     }
 
     // Primary: RAG over own article DB
-    const userId = scopeUserId(req.user);
-    const articles = db.searchArticlesRag(question, 8, userId);
-    const result = await ai.generate(prompts.ragPrompt(question, articles), question);
+    const scopedUserId = scopeUserId(req.user);
+    const articles = db.searchArticlesRag(question, 8, scopedUserId);
+    const result = await ai.generate(prompts.ragPrompt(question, articles, history), question);
     if (!result.ok) return res.status(503).json({ success: false, error: result.error });
 
     const data = ai.parseJson(result.text) || {};
-    res.json({ success: true, mode: 'rag', ...data });
+    const answer = data.answer || '(no answer)';
+    db.addMessage(tid, 'assistant', answer, 'rag', null);
+    res.json({ success: true, mode: 'rag', threadId: tid, ...data });
   } catch (e) {
     console.error('[AI] Ask error:', e.message);
     res.status(500).json({ error: 'AI ask failed' });
+  }
+});
+
+// ── CHAT THREADS (persistent history, per-user isolation) ──
+router.get('/threads', auth.requireAuth, (req, res) => {
+  try {
+    res.json({ threads: db.getThreads(req.user.id) });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to fetch threads' });
+  }
+});
+
+router.get('/threads/:id', auth.requireAuth, (req, res) => {
+  try {
+    const thread = db.getThread(parseInt(req.params.id), req.user.id);
+    if (!thread) return res.status(404).json({ error: 'Thread not found' });
+    thread.messages = thread.messages.map(m => ({ ...m, sources: m.sources ? safeParseJson(m.sources) : null }));
+    res.json({ thread });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to fetch thread' });
+  }
+});
+
+router.delete('/threads/:id', auth.requireAuth, (req, res) => {
+  try {
+    const result = db.deleteThread(parseInt(req.params.id), req.user.id);
+    if (!result.success) return res.status(404).json(result);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to delete thread' });
   }
 });
 

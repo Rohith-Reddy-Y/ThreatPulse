@@ -162,6 +162,25 @@ function initializeSchema() {
       key TEXT PRIMARY KEY,
       value TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS ai_threads (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER,
+      title TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS ai_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      thread_id INTEGER NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      mode TEXT,
+      sources TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (thread_id) REFERENCES ai_threads(id) ON DELETE CASCADE
+    );
   `);
 
   // Step 3: ALTER TABLE migrations — add new columns to existing tables
@@ -1043,6 +1062,55 @@ function setSetting(key, value) {
   ).run(key, String(value));
 }
 
+// ============================================
+// AI CHAT THREADS (persistent, per-user, isolated)
+// ============================================
+function createThread(userId, title) {
+  const r = getDb().prepare('INSERT INTO ai_threads (user_id, title) VALUES (?, ?)')
+    .run(userId, title || 'New chat');
+  return r.lastInsertRowid;
+}
+
+function getThreads(userId) {
+  return getDb().prepare(
+    `SELECT t.id, t.title, t.created_at, t.updated_at,
+            (SELECT COUNT(*) FROM ai_messages m WHERE m.thread_id = t.id) AS message_count
+     FROM ai_threads t WHERE t.user_id = ? ORDER BY t.updated_at DESC`
+  ).all(userId);
+}
+
+function getThread(threadId, userId) {
+  const thread = getDb().prepare('SELECT * FROM ai_threads WHERE id = ? AND user_id = ?').get(threadId, userId);
+  if (!thread) return null;
+  thread.messages = getDb().prepare(
+    'SELECT id, role, content, mode, sources, created_at FROM ai_messages WHERE thread_id = ? ORDER BY id ASC'
+  ).all(threadId);
+  return thread;
+}
+
+function getThreadMessages(threadId, userId, limit = 12) {
+  const t = getDb().prepare('SELECT id FROM ai_threads WHERE id = ? AND user_id = ?').get(threadId, userId);
+  if (!t) return [];
+  return getDb().prepare(
+    'SELECT role, content FROM ai_messages WHERE thread_id = ? ORDER BY id DESC LIMIT ?'
+  ).all(threadId, limit).reverse();
+}
+
+function addMessage(threadId, role, content, mode = null, sources = null) {
+  const r = getDb().prepare(
+    'INSERT INTO ai_messages (thread_id, role, content, mode, sources) VALUES (?, ?, ?, ?, ?)'
+  ).run(threadId, role, content, mode, sources ? JSON.stringify(sources) : null);
+  getDb().prepare("UPDATE ai_threads SET updated_at = datetime('now') WHERE id = ?").run(threadId);
+  return r.lastInsertRowid;
+}
+
+function deleteThread(threadId, userId) {
+  const t = getDb().prepare('SELECT id FROM ai_threads WHERE id = ? AND user_id = ?').get(threadId, userId);
+  if (!t) return { success: false, error: 'Thread not found' };
+  getDb().prepare('DELETE FROM ai_threads WHERE id = ?').run(threadId);
+  return { success: true };
+}
+
 module.exports = {
   getDb,
   initializeSchema,
@@ -1114,5 +1182,12 @@ module.exports = {
   // Utils
   hashUrl,
   getSetting,
-  setSetting
+  setSetting,
+  // AI chat threads
+  createThread,
+  getThreads,
+  getThread,
+  getThreadMessages,
+  addMessage,
+  deleteThread
 };

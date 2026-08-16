@@ -2151,13 +2151,74 @@
     });
 
     // ─── Ask ThreatPulse (AI) panel ───
+    let aiThreadId = null;
+
     $('#ai-fab').addEventListener('click', () => {
       $('#ai-panel').classList.toggle('hidden');
-      if (!$('#ai-panel').classList.contains('hidden')) $('#ai-question').focus();
+      if (!$('#ai-panel').classList.contains('hidden')) {
+        $('#ai-question').focus();
+        loadAiThreads();
+      }
     });
     $('#ai-panel-close').addEventListener('click', () => {
       $('#ai-panel').classList.add('hidden');
     });
+
+    function renderSources(sources) {
+      if (!sources || !sources.length) return '';
+      const links = sources.map(s => {
+        const url = /^https?:\/\//i.test(s.url || '') ? s.url : '';
+        return url
+          ? `&bull; <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(s.title)}</a>`
+          : `&bull; ${escapeHtml(s.title)}`;
+      }).join('<br>');
+      return `<br><br><strong>Sources:</strong><br>${links}`;
+    }
+
+    function loadAiThreads() {
+      api('GET', d('L2FwaS9haS90aHJlYWRz')).then(data => {
+        const list = $('#ai-thread-list');
+        const threads = (data && data.threads) || [];
+        if (!threads.length) {
+          list.innerHTML = '<div class="ai-thread-empty">No chats yet.</div>';
+          return;
+        }
+        list.innerHTML = threads.map(t => `
+          <div class="ai-thread-item ${t.id === aiThreadId ? 'active' : ''}" data-thread-id="${t.id}">
+            <span class="ai-thread-title">${escapeHtml(t.title || 'New chat')}</span>
+            <button class="ai-thread-delete" data-delete-thread="${t.id}" title="Delete chat">&times;</button>
+          </div>
+        `).join('');
+      }).catch(() => {});
+    }
+
+    function openThread(id) {
+      aiThreadId = id;
+      api('GET', `${d('L2FwaS9haS90aHJlYWRz')}/${id}`).then(data => {
+        const thread = data && data.thread;
+        if (!thread) return;
+        const body = $('#ai-panel-body');
+        body.innerHTML = '';
+        (thread.messages || []).forEach(m => {
+          if (m.role === 'user') {
+            body.insertAdjacentHTML('beforeend', `<div class="ai-message ai-user">${escapeHtml(m.content)}</div>`);
+          } else {
+            const answerHtml = escapeHtml(m.content || '').replace(/\n/g, '<br>');
+            body.insertAdjacentHTML('beforeend', `<div class="ai-message ai-bot">${answerHtml}${renderSources(m.sources)}</div>`);
+          }
+        });
+        body.scrollTop = body.scrollHeight;
+        loadAiThreads();
+      }).catch(() => {});
+    }
+
+    function newChat() {
+      aiThreadId = null;
+      $('#ai-panel-body').innerHTML = '<div class="ai-message ai-bot">Ask me about threats in your feed, or toggle web search for anything else.</div>';
+      $('#ai-web-toggle').checked = false;
+      loadAiThreads();
+      $('#ai-question').focus();
+    }
 
     async function askAI() {
       const question = $('#ai-question').value.trim();
@@ -2175,25 +2236,23 @@
       body.scrollTop = body.scrollHeight;
 
       try {
-        const result = await api('POST', d('L2FwaS9haS9hc2s='), { question, mode: web ? 'web' : 'rag' });
+        const payload = { question, mode: web ? 'web' : 'rag' };
+        if (aiThreadId) payload.threadId = aiThreadId;
+        const result = await api('POST', d('L2FwaS9haS9hc2s='), payload);
         const typing = $('#ai-typing');
         if (typing) typing.remove();
 
         if (result.success) {
+          aiThreadId = result.threadId || aiThreadId;
           const answerHtml = escapeHtml(result.answer || '').replace(/\n/g, '<br>');
           let extra = '';
           if (result.mode === 'rag' && result.citations && result.citations.length) {
             extra = `<br><br>[Citations: ${result.citations.join(', ')}]`;
-          } else if (result.mode === 'web' && result.sources && result.sources.length) {
-            const links = result.sources.map(s => {
-              const url = /^https?:\/\//i.test(s.url || '') ? s.url : '';
-              return url
-                ? `&bull; <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(s.title)}</a>`
-                : `&bull; ${escapeHtml(s.title)}`;
-            }).join('<br>');
-            extra = `<br><br><strong>Sources:</strong><br>${links}`;
+          } else if (result.mode === 'web') {
+            extra = renderSources(result.sources);
           }
           body.insertAdjacentHTML('beforeend', `<div class="ai-message ai-bot">${answerHtml}${extra}</div>`);
+          loadAiThreads();
         } else {
           body.insertAdjacentHTML('beforeend', `<div class="ai-message ai-error">${escapeHtml(result.error || 'AI request failed')}</div>`);
         }
@@ -2208,6 +2267,23 @@
     $('#ai-send').addEventListener('click', askAI);
     $('#ai-question').addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); askAI(); }
+    });
+    $('#ai-new-chat').addEventListener('click', newChat);
+    $('#ai-thread-list').addEventListener('click', (e) => {
+      const del = e.target.closest('[data-delete-thread]');
+      if (del) {
+        e.stopPropagation();
+        const id = parseInt(del.dataset.deleteThread);
+        if (confirm('Delete this chat?')) {
+          api('DELETE', `${d('L2FwaS9haS90aHJlYWRz')}/${id}`).then(() => {
+            if (aiThreadId === id) newChat();
+            else loadAiThreads();
+          }).catch(() => {});
+        }
+        return;
+      }
+      const item = e.target.closest('[data-thread-id]');
+      if (item) openThread(parseInt(item.dataset.threadId));
     });
   }
 

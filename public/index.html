@@ -772,14 +772,22 @@
       </span>
       <button class="ai-panel-close" id="ai-panel-close" title="Close">&times;</button>
     </div>
-    <div class="ai-panel-body" id="ai-panel-body">
-      <div class="ai-message ai-bot">Ask me about threats in your feed, or toggle web search for anything else.</div>
-    </div>
-    <div class="ai-panel-input">
-      <label class="ai-web-toggle"><input type="checkbox" id="ai-web-toggle"> Search the web</label>
-      <div class="ai-input-row">
-        <input type="text" id="ai-question" placeholder="Ask a question..." autocomplete="off">
-        <button class="btn btn-primary" id="ai-send">Ask</button>
+    <div class="ai-panel-main">
+      <div class="ai-threads">
+        <button class="ai-new-chat" id="ai-new-chat">+ New chat</button>
+        <div class="ai-thread-list" id="ai-thread-list"></div>
+      </div>
+      <div class="ai-chat">
+        <div class="ai-panel-body" id="ai-panel-body">
+          <div class="ai-message ai-bot">Ask me about threats in your feed, or toggle web search for anything else.</div>
+        </div>
+        <div class="ai-panel-input">
+          <label class="ai-web-toggle"><input type="checkbox" id="ai-web-toggle"> Search the web</label>
+          <div class="ai-input-row">
+            <input type="text" id="ai-question" placeholder="Ask a question..." autocomplete="off">
+            <button class="btn btn-primary" id="ai-send">Ask</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>
