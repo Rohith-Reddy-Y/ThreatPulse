@@ -86,15 +86,23 @@ async function generate(systemInstruction, userContent, opts = {}) {
       return { ok: true, text };
     } catch (e) {
       lastError = e;
-      // 429 / 503 → retry with backoff; others → give up immediately
       const msg = e.message || '';
+      // Daily/monthly quota exhausted — NOT retryable, surface a clean message.
+      if (/quota/i.test(msg) && /exceeded|limit/i.test(msg)) {
+        return { ok: false, error: 'Gemini free-tier daily limit reached (20 requests/day). It resets tomorrow — or upgrade your plan for higher limits.' };
+      }
+      // 429 / 503 → retry with backoff; others → give up immediately
       const retryable = /429|503|timeout|overloaded|resource exhausted/i.test(msg);
       if (!retryable || attempt === MAX_RETRIES) break;
       await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
     }
   }
 
-  return { ok: false, error: lastError?.message || 'AI request failed' };
+  // Clean, human-readable final error — never dump raw provider JSON at the user.
+  const raw = lastError?.message || 'AI request failed';
+  if (/429/i.test(raw)) return { ok: false, error: 'Gemini is rate-limiting requests right now. Try again in a minute.' };
+  if (/invalid|api key|authentication|permission/i.test(raw)) return { ok: false, error: 'Gemini API key is invalid or unauthorized. Check it in Admin → AI Settings.' };
+  return { ok: false, error: raw };
 }
 
 /**
