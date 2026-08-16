@@ -48,6 +48,7 @@
       <button class="pill" data-admin-tab="invites">Invite Codes</button>
       <button class="pill" data-admin-tab="sources">All Sources</button>
       <button class="pill" data-admin-tab="audit">Audit Log</button>
+      <button class="pill" data-admin-tab="ai">AI Settings</button>
     </div>
 
     <!-- Users Tab -->
@@ -99,6 +100,20 @@
             <tbody id="audit-tbody"></tbody>
           </table>
         </div>
+      </div>
+    </div>
+
+    <!-- AI Settings Tab -->
+    <div class="admin-tab hidden" id="tab-ai">
+      <div class="sidebar-card" style="max-width:640px;">
+        <h3 class="sidebar-title">AI Settings (Gemini + Web Search)</h3>
+        <p style="color:var(--text-muted);font-size:12px;margin:0 0 16px;">Paste your API keys and they take effect immediately - no SSH or restart needed. Keys are stored in the local database and masked after saving.</p>
+        <label class="form-label" for="ai-gemini-key" style="font-size:13px;">Gemini API key <span id="ai-gemini-status" class="badge badge-breach">not set</span></label>
+        <input type="password" id="ai-gemini-key" class="filter-select" placeholder="Paste your Gemini API key..." autocomplete="off" style="width:100%;margin-bottom:12px;">
+        <label class="form-label" for="ai-tavily-key" style="font-size:13px;">Tavily API key (web search, optional) <span id="ai-tavily-status" class="badge badge-breach">not set</span></label>
+        <input type="password" id="ai-tavily-key" class="filter-select" placeholder="Paste your Tavily API key..." autocomplete="off" style="width:100%;margin-bottom:12px;">
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:16px;">Model: <span id="ai-model" style="color:var(--cyan);">gemini-3.5-flash</span></div>
+        <button class="btn btn-primary" id="ai-save-btn">Save AI Settings</button>
       </div>
     </div>
   </main>

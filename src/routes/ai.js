@@ -118,7 +118,13 @@ router.post('/ask', auth.requireAuth, async (req, res) => {
 
 // ── STATUS (is AI configured?) ──
 router.get('/status', auth.requireAuth, (req, res) => {
-  res.json({ enabled: ai.isEnabled(), model: ai.MODEL });
+  const envKey = process.env.GEMINI_API_KEY;
+  const dbKey = db.getSetting('gemini_api_key');
+  res.json({
+    enabled: ai.isEnabled(),
+    model: ai.MODEL,
+    keySource: envKey ? 'env' : (dbKey ? 'database' : 'none')
+  });
 });
 
 module.exports = router;

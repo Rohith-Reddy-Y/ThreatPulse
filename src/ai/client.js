@@ -5,29 +5,52 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash';
-const API_KEY = process.env.GEMINI_API_KEY || null;
 const TIMEOUT_MS = 30000;
 const MAX_RETRIES = 2;
 
+// The API key can come from the environment OR from admin-configured settings
+// (stored in the DB via the admin panel "AI Settings"). Env wins; DB is the
+// fallback so an admin can configure the key through the UI without SSH.
+let db = null;
+try { db = require('../database'); } catch (e) { db = null; }
+
+let cachedKey = null;
 let genAI = null;
-if (API_KEY) {
-  genAI = new GoogleGenerativeAI(API_KEY);
+
+function getApiKey() {
+  const envKey = process.env.GEMINI_API_KEY;
+  if (envKey) return envKey;
+  if (db) {
+    try { return db.getSetting('gemini_api_key') || null; } catch (e) { return null; }
+  }
+  return null;
+}
+
+function getClient() {
+  const key = getApiKey();
+  if (!key) return null;
+  if (key !== cachedKey) {
+    cachedKey = key;
+    genAI = new GoogleGenerativeAI(key);
+  }
+  return genAI;
 }
 
 function isEnabled() {
-  return !!API_KEY && !!genAI;
+  return !!getClient();
 }
 
 /**
  * Generate content with JSON-mode output and exponential-backoff retries.
  * @param {string} systemInstruction
  * @param {string} userContent
- * @param {object} opts { temperature, webSearch }
+ * @param {object} opts { temperature, json }
  * @returns {Promise<{ok:boolean, text:string|null, error?:string}>}
  */
 async function generate(systemInstruction, userContent, opts = {}) {
-  if (!isEnabled()) {
-    return { ok: false, error: 'AI not configured (missing GEMINI_API_KEY)' };
+  const client = getClient();
+  if (!client) {
+    return { ok: false, error: 'AI not configured (missing GEMINI_API_KEY). Set it in .env or Admin -> AI Settings.' };
   }
 
   const temperature = opts.temperature ?? 0.3;
@@ -35,7 +58,7 @@ async function generate(systemInstruction, userContent, opts = {}) {
   // chat wants plain text. Default to JSON, opt out with { json: false }.
   const jsonMode = opts.json !== false;
 
-  const model = genAI.getGenerativeModel(
+  const model = client.getGenerativeModel(
     { model: MODEL },
     { apiVersion: 'v1beta' }
   );

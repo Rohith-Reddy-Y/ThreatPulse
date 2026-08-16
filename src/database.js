@@ -157,6 +157,11 @@ function initializeSchema() {
       response TEXT,
       created_at TEXT DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
   `);
 
   // Step 3: ALTER TABLE migrations — add new columns to existing tables
@@ -1018,6 +1023,26 @@ function deleteVerificationCode(id) {
   getDb().prepare('DELETE FROM verification_codes WHERE id = ?').run(id);
 }
 
+// ============================================
+// APP SETTINGS (admin-configurable key/value, e.g. AI API keys)
+// ============================================
+function getSetting(key) {
+  try {
+    const row = getDb().prepare('SELECT value FROM app_settings WHERE key = ?').get(key);
+    return row ? row.value : null;
+  } catch (e) { return null; }
+}
+
+function setSetting(key, value) {
+  if (value == null || value === '') {
+    getDb().prepare('DELETE FROM app_settings WHERE key = ?').run(key);
+    return;
+  }
+  getDb().prepare(
+    'INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
+  ).run(key, String(value));
+}
+
 module.exports = {
   getDb,
   initializeSchema,
@@ -1087,5 +1112,7 @@ module.exports = {
   validateVerificationCode,
   deleteVerificationCode,
   // Utils
-  hashUrl
+  hashUrl,
+  getSetting,
+  setSetting
 };

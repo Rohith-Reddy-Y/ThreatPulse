@@ -53,6 +53,7 @@
       loadInvites();
       loadSources();
       loadAudit();
+      loadAiSettings();
     } catch (e) {
       alert('Admin access required. Redirecting to login...');
       window.location.href = '/';
@@ -252,6 +253,42 @@
     `).join('');
   }
 
+  // AI settings (Gemini + Tavily keys, stored server-side)
+  async function loadAiSettings() {
+    try {
+      const data = await api('GET', d('L2FwaS9hZG1pbi9haS1zZXR0aW5ncw=='));
+      if (!data) return;
+      if (data.gemini_api_key) $('#ai-gemini-key').placeholder = 'Current: ' + data.gemini_api_key + ' - paste a new key to replace';
+      if (data.tavily_api_key) $('#ai-tavily-key').placeholder = 'Current: ' + data.tavily_api_key + ' - paste a new key to replace';
+      const setBadge = (el, set) => { el.textContent = set ? 'set' : 'not set'; el.className = 'badge ' + (set ? 'badge-advisory' : 'badge-breach'); };
+      setBadge($('#ai-gemini-status'), data.gemini_set);
+      setBadge($('#ai-tavily-status'), data.tavily_set);
+      if (data.model) $('#ai-model').textContent = data.model;
+    } catch (e) { /* non-fatal */ }
+  }
+
+  async function saveAiSettings() {
+    const gemini = $('#ai-gemini-key').value;
+    const tavily = $('#ai-tavily-key').value;
+    if (!gemini && !tavily) { showToast('Enter at least one key to save', 'error'); return; }
+    const btn = $('#ai-save-btn');
+    btn.disabled = true; btn.textContent = 'Saving...';
+    try {
+      const result = await api('PUT', d('L2FwaS9hZG1pbi9haS1zZXR0aW5ncw=='), { gemini_api_key: gemini, tavily_api_key: tavily });
+      if (result && result.success) {
+        $('#ai-gemini-key').value = '';
+        $('#ai-tavily-key').value = '';
+        showToast('AI settings saved. AI features are live.', 'success');
+        loadAiSettings();
+      } else {
+        showToast(result?.error || 'Save failed', 'error');
+      }
+    } catch (e) {
+      showToast(e.message || 'Save failed', 'error');
+    }
+    btn.disabled = false; btn.textContent = 'Save AI Settings';
+  }
+
   // Event listeners
   document.addEventListener('click', async (e) => {
     const toggleBtn = e.target.closest('[data-toggle-user]');
@@ -317,6 +354,8 @@
       loadInvites();
     }
   });
+
+  $('#ai-save-btn').addEventListener('click', saveAiSettings);
 
   $('#admin-logout-btn').addEventListener('click', async () => {
     try {

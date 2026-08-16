@@ -801,6 +801,44 @@ router.get('/admin/reset-tokens', auth.requireAuth, auth.requireAdmin, (req, res
   }
 });
 
+// Admin: AI settings — configure Gemini/Tavily keys from the UI (no SSH needed)
+const maskSecret = (v) => (v ? String(v).slice(0, 8) + '...' + String(v).slice(-4) : null);
+
+router.get('/admin/ai-settings', auth.requireAuth, auth.requireAdmin, (req, res) => {
+  try {
+    const gemini = db.getSetting('gemini_api_key');
+    const tavily = db.getSetting('tavily_api_key');
+    res.json({
+      gemini_api_key: maskSecret(gemini),
+      tavily_api_key: maskSecret(tavily),
+      gemini_set: !!(gemini || process.env.GEMINI_API_KEY),
+      tavily_set: !!(tavily || process.env.TAVILY_API_KEY),
+      model: process.env.GEMINI_MODEL || 'gemini-3.5-flash'
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch AI settings' });
+  }
+});
+
+router.put('/admin/ai-settings', auth.requireAuth, auth.requireAdmin, (req, res) => {
+  try {
+    const apply = (key, value) => {
+      if (typeof value !== 'string') return;
+      const v = value.trim();
+      if (v && !v.includes('...')) db.setSetting(key, v);   // real value -> save
+      else if (v === '') db.setSetting(key, null);          // empty -> clear
+      // masked value ("...") -> leave unchanged
+    };
+    apply('gemini_api_key', req.body?.gemini_api_key);
+    apply('tavily_api_key', req.body?.tavily_api_key);
+    db.logAudit(req.user.id, 'ai_settings_update', 'Updated AI API keys', req.ip);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('[API] Save AI settings error:', error.message);
+    res.status(500).json({ error: 'Failed to save AI settings' });
+  }
+});
+
 // ============================================
 // NOTIFICATION HANDLER
 // ============================================

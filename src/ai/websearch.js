@@ -9,8 +9,20 @@ const TAVILY_URL = 'https://api.tavily.com/search';
 const WIKI_URL = 'https://en.wikipedia.org/w/api.php';
 const UA = 'ThreatPulse/1.0 (cyber threat intelligence dashboard)';
 
+// Tavily key can come from the environment OR admin-configured DB settings.
+let db = null;
+try { db = require('../database'); } catch (e) { db = null; }
+
+function getTavilyKey() {
+  if (process.env.TAVILY_API_KEY) return process.env.TAVILY_API_KEY;
+  if (db) {
+    try { return db.getSetting('tavily_api_key') || null; } catch (e) { return null; }
+  }
+  return null;
+}
+
 function hasTavily() {
-  return !!process.env.TAVILY_API_KEY;
+  return !!getTavilyKey();
 }
 
 /**
@@ -30,7 +42,7 @@ async function search(query, max = 5) {
 async function searchTavily(query, max = 5) {
   try {
     const resp = await axios.post(TAVILY_URL, {
-      api_key: process.env.TAVILY_API_KEY,
+      api_key: getTavilyKey(),
       query,
       max_results: max,
       search_depth: 'basic',
