@@ -1,4 +1,11 @@
-const CACHE_NAME = 'threatpulse-cache-v1';
+// Network-first service worker.
+// The old cache-first strategy served index.html/app.js from cache forever (only a
+// CACHE_NAME bump would update them), so a redeploy — including new CSP hashes for
+// the inline scripts — never reached users. It also cached error responses and tried
+// to fetch cross-origin fonts itself, which the page's CSP (connect-src 'self')
+// blocks inside the worker. Now: same-origin GET static assets only, network first,
+// cache used purely as an offline fallback; /api/ is never touched.
+const CACHE_NAME = 'threatpulse-cache-v2';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -7,58 +14,36 @@ const STATIC_ASSETS = [
   '/manifest.json'
 ];
 
-// Install event - cache static assets
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      console.log('[Service Worker] Caching static assets');
-      return cache.addAll(STATIC_ASSETS);
-    })
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC_ASSETS)).catch(() => {})
   );
   self.skipWaiting();
 });
 
-// Activate event - clean up old caches
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
-        cacheNames.map((cacheName) => {
-          if (cacheName !== CACHE_NAME) {
-            console.log('[Service Worker] Deleting old cache:', cacheName);
-            return caches.delete(cacheName);
-          }
-        })
-      );
-    })
+    caches.keys().then((names) => Promise.all(
+      names.filter((n) => n !== CACHE_NAME).map((n) => caches.delete(n))
+    ))
   );
   self.clients.claim();
 });
 
-// Fetch event - serve from cache, fallback to network
 self.addEventListener('fetch', (event) => {
-  // Ignore API requests - always go to network
-  if (event.request.url.includes('/api/')) {
-    event.respondWith(fetch(event.request));
-    return;
-  }
+  const req = event.request;
+  if (req.method !== 'GET') return;
+  const url = new URL(req.url);
+  // Let the browser handle cross-origin (fonts) and API requests directly
+  if (url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return;
 
-  // Cache-first strategy for static assets
   event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
-      if (cachedResponse) {
-        return cachedResponse;
+    fetch(req).then((res) => {
+      if (res.ok && res.type === 'basic') {
+        const copy = res.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(req, copy)).catch(() => {});
       }
-      return fetch(event.request).then((networkResponse) => {
-        // Cache new assets dynamically
-        if (event.request.method === 'GET' && !event.request.url.includes('/api/')) {
-          const responseToCache = networkResponse.clone();
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(event.request, responseToCache);
-          });
-        }
-        return networkResponse;
-      });
-    })
+      return res;
+    }).catch(() => caches.match(req).then((cached) => cached || Response.error()))
   );
 });

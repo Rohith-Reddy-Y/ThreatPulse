@@ -29,18 +29,39 @@
 
     if (body) opts.body = JSON.stringify(body);
 
-    const res = await fetch(endpoint, opts);
+    let res = await fetch(endpoint, opts);
+    // The access token lives 15 min and this page never refreshed it, so any
+    // action after 15 min idle bounced the admin to '/'. Refresh once and retry.
+    if (res.status === 401 && await refreshSession()) {
+      if (method !== 'GET') {
+        const csrf = getCsrfToken();
+        if (csrf) opts.headers['X-CSRF-Token'] = csrf;
+      }
+      res = await fetch(endpoint, opts);
+    }
     if (res.status === 401 || res.status === 403) {
       window.location.href = '/';
       throw new Error('Access denied');
     }
-    return res.json();
+    try { return await res.json(); } catch { return { success: false, error: `Request failed (${res.status})` }; }
+  }
+
+  let refreshPromise = null;
+  function refreshSession() {
+    if (!refreshPromise) {
+      refreshPromise = fetch(d('L2FwaS9hdXRoL3JlZnJlc2g='), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken() || '' }
+      }).then(r => r.ok).catch(() => false).finally(() => { refreshPromise = null; });
+    }
+    return refreshPromise;
   }
 
   // Check auth on load — cookie is sent automatically
   async function init() {
     try {
-      const res = await fetch(d('L2FwaS9hdXRoL21l'));
+      let res = await fetch(d('L2FwaS9hdXRoL21l'));
+      if (res.status === 401 && await refreshSession()) res = await fetch(d('L2FwaS9hdXRoL21l'));
       if (!res.ok) throw new Error('Not authenticated');
       const data = await res.json();
       if (!data.success || !data.user || data.user.role !== 'admin') {
@@ -60,9 +81,15 @@
     }
   }
 
+  // Must escape quotes too — results go into attribute values (title, data-*)
   function escapeHtml(str) {
-    if (!str) return '';
-    const d = document.createElement('div'); d.textContent = str; return d.innerHTML;
+    if (str === null || str === undefined || str === '') return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   function relativeTime(dateStr) {
@@ -295,8 +322,9 @@
     if (toggleBtn) {
       const id = parseInt(toggleBtn.dataset.toggleUser);
       const isActive = toggleBtn.dataset.active === '1';
-      await api('PUT', `${d('L2FwaS9hZG1pbi91c2Vycw==')}/${id}`, { is_active: isActive ? 0 : 1 });
-      showToast(`User ${isActive ? 'disabled' : 'enabled'}.`, 'success');
+      const result = await api('PUT', `${d('L2FwaS9hZG1pbi91c2Vycw==')}/${id}`, { is_active: isActive ? 0 : 1 });
+      if (result && result.success) showToast(`User ${isActive ? 'disabled' : 'enabled'}.`, 'success');
+      else showToast(result?.error || 'Failed to update user', 'error');
       loadUsers();
     }
 
@@ -331,8 +359,13 @@
     const roleSelect = e.target.closest('[data-user-role]');
     if (roleSelect) {
       const id = parseInt(roleSelect.dataset.userRole);
-      await api('PUT', `${d('L2FwaS9hZG1pbi91c2Vycw==')}/${id}`, { role: roleSelect.value });
-      showToast('Role updated.', 'success');
+      const result = await api('PUT', `${d('L2FwaS9hZG1pbi91c2Vycw==')}/${id}`, { role: roleSelect.value });
+      if (result && result.success) {
+        showToast('Role updated.', 'success');
+      } else {
+        showToast(result?.error || 'Failed to update role', 'error');
+        loadUsers(); // revert the select to the real role
+      }
     }
 
     const groupCheckbox = e.target.closest('.group-select-all');
@@ -352,6 +385,8 @@
     if (result && result.success) {
       showToast(`Invite code: ${result.code}`, 'success');
       loadInvites();
+    } else {
+      showToast(result?.error || 'Failed to create invite code', 'error');
     }
   });
 
@@ -387,8 +422,9 @@
       const cb = checked[0];
       const newUrl = prompt(`Edit URL for "${cb.dataset.sourceName}":`, cb.dataset.sourceUrl);
       if (newUrl && newUrl.trim() !== cb.dataset.sourceUrl) {
-        await api('PUT', `${d('L2FwaS9zb3VyY2Vz')}/${cb.dataset.sourceId}`, { url: newUrl.trim() });
-        showToast('Source updated.', 'success');
+        const result = await api('PUT', `${d('L2FwaS9zb3VyY2Vz')}/${cb.dataset.sourceId}`, { url: newUrl.trim() });
+        if (result && result.success) showToast('Source updated.', 'success');
+        else showToast(result?.error || 'Failed to update source', 'error');
         loadSources();
       }
     } else {
@@ -400,10 +436,14 @@
     const checked = document.querySelectorAll('.source-checkbox:checked');
     if (checked.length === 0) return;
     if (confirm(`Delete ${checked.length} selected source(s)?`)) {
+      let ok = 0, lastErr = '';
       for (const cb of checked) {
-        await api('DELETE', `${d('L2FwaS9zb3VyY2Vz')}/${cb.dataset.sourceId}`);
+        const result = await api('DELETE', `${d('L2FwaS9zb3VyY2Vz')}/${cb.dataset.sourceId}`);
+        if (result && result.success) ok++; else lastErr = result?.error || 'failed';
       }
-      showToast(`${checked.length} source(s) deleted.`, 'success');
+      if (ok) showToast(`${ok} source(s) deleted.`, 'success');
+      if (ok < checked.length) showToast(`${checked.length - ok} source(s) not deleted: ${lastErr}`, 'error');
+      $('#sources-bulk-actions').classList.add('hidden');
       loadSources(); loadStats();
     }
   });

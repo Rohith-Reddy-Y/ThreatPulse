@@ -4194,3 +4194,19 @@ body,
 .ai-triage-routine { background: var(--cyan-dim); color: var(--cyan); }
 .ai-triage-informational { background: var(--green-dim); color: var(--green); }
 
+
+/* ─── Fixes ─── */
+/* Guests share one account and get 403 on these actions — hide the controls */
+body.guest-mode .guest-hidden { display: none !important; }
+
+/* Source name link hover (was inline onmouseover/onmouseout, blocked by CSP) */
+.source-info-name a { color: inherit; text-decoration: none; }
+.source-info-name a:hover,
+.source-info-name a:focus-visible { color: var(--cyan); }
+
+/* Native select is visually hidden behind the custom dropdown but still
+   receives keyboard focus — show where focus is */
+.custom-select-wrapper select:focus-visible + .custom-select-display {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
