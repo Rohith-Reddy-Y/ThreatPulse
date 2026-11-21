@@ -34,17 +34,44 @@ function isPrivateIPv4(ip) {
   );
 }
 
+/** Expand an IPv6 address (any spelling, optional dotted-IPv4 tail) to 8 hextets. */
+function ipv6Hextets(ip) {
+  let v = ip.toLowerCase().replace(/%.*$/, '');
+  const tail = v.match(/^(.*:)(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (tail) {
+    const [a, b, c, d] = tail.slice(2).map(Number);
+    v = `${tail[1]}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+  const halves = v.split('::');
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(':') : [];
+  const rest = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  const fill = halves.length === 2 ? 8 - head.length - rest.length : 0;
+  const parts = [...head, ...Array(Math.max(fill, 0)).fill('0'), ...rest];
+  if (parts.length !== 8) return null;
+  return parts.map(h => parseInt(h, 16));
+}
+
+const v4From = (hi, lo) => `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
+
 function isPrivateIp(ip) {
   if (net.isIPv4(ip)) return isPrivateIPv4(ip);
   if (net.isIPv6(ip)) {
-    const v = ip.toLowerCase();
-    if (v === '::' || v === '::1') return true;
-    const mapped = v.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-    if (mapped) return isPrivateIPv4(mapped[1]);
-    if (v.startsWith('::ffff:')) return true;            // hex-form mapped — refuse
-    if (/^fe[89ab]/.test(v)) return true;                 // fe80::/10 link-local
-    if (/^f[cd]/.test(v)) return true;                    // fc00::/7 unique-local
-    if (v.startsWith('ff')) return true;                  // multicast
+    const h = ipv6Hextets(ip);
+    if (!h) return true;
+    const zero = (from, to) => h.slice(from, to).every(x => x === 0);
+    // ::/96 — unspecified, loopback and deprecated IPv4-compatible (::127.0.0.1)
+    if (zero(0, 6)) return true;
+    // IPv4-mapped ::ffff:a.b.c.d (any spelling) and IPv4-translated ::ffff:0:a.b.c.d
+    if (zero(0, 5) && h[5] === 0xffff) return isPrivateIPv4(v4From(h[6], h[7]));
+    if (zero(0, 4) && h[4] === 0xffff && h[5] === 0) return isPrivateIPv4(v4From(h[6], h[7]));
+    // NAT64 64:ff9b::/96 and 6to4 2002::/16 embed an IPv4 destination
+    if (h[0] === 0x64 && h[1] === 0xff9b && zero(2, 6)) return isPrivateIPv4(v4From(h[6], h[7]));
+    if (h[0] === 0x2002) return isPrivateIPv4(v4From(h[1], h[2]));
+    if ((h[0] & 0xffc0) === 0xfe80) return true;          // fe80::/10 link-local
+    if ((h[0] & 0xffc0) === 0xfec0) return true;          // fec0::/10 site-local (deprecated)
+    if ((h[0] & 0xfe00) === 0xfc00) return true;          // fc00::/7 unique-local
+    if ((h[0] & 0xff00) === 0xff00) return true;          // multicast
     return false;
   }
   return true; // not an IP at all → treat as unsafe
@@ -98,22 +125,37 @@ async function safeGet(url, config = {}) {
     e.code = 'EBLOCKED';
     throw e;
   }
-  return axios.get(url, {
-    maxRedirects: 5,
-    maxContentLength: 10 * 1024 * 1024,
-    ...config,
-    httpAgent: safeHttpAgent,
-    httpsAgent: safeHttpsAgent,
-    proxy: false,
-    beforeRedirect: (opts) => {
-      const href = opts.href || `${opts.protocol}//${opts.hostname}${opts.port ? ':' + opts.port : ''}${opts.path || ''}`;
-      if (!isSafeUrl(href)) {
-        const e = new Error('Blocked redirect to a non-public address');
-        e.code = 'EBLOCKED';
-        throw e;
+  // axios' `timeout` is a socket-idle timer: a server that drips a byte every
+  // few seconds keeps the request (and the whole fetch cycle, which waits for
+  // it) alive forever. Enforce a hard overall deadline as well.
+  const deadlineMs = (config.timeout || 30000) * 2;
+  const signal = config.signal || AbortSignal.timeout(deadlineMs);
+  try {
+    return await axios.get(url, {
+      maxRedirects: 5,
+      maxContentLength: 10 * 1024 * 1024,
+      ...config,
+      signal,
+      httpAgent: safeHttpAgent,
+      httpsAgent: safeHttpsAgent,
+      proxy: false,
+      beforeRedirect: (opts) => {
+        const href = opts.href || `${opts.protocol}//${opts.hostname}${opts.port ? ':' + opts.port : ''}${opts.path || ''}`;
+        if (!isSafeUrl(href)) {
+          const e = new Error('Blocked redirect to a non-public address');
+          e.code = 'EBLOCKED';
+          throw e;
+        }
       }
+    });
+  } catch (err) {
+    if (!config.signal && signal.aborted && !(err && err.response)) {
+      const e = new Error(`Request exceeded the ${Math.round(deadlineMs / 1000)}s deadline`);
+      e.code = 'ETIMEDOUT';
+      throw e;
     }
-  });
+    throw err;
+  }
 }
 
 module.exports = { isPrivateIp, isSafeUrl, safeLookup, safeGet };
