@@ -47,6 +47,123 @@ function readScope(user) {
   return user.id;
 }
 
+// ============================================
+// INPUT HELPERS
+// ============================================
+// Express parses query strings with qs: "?a=1&a=2" is an array and "?a[b]=1" an
+// object. Filters expect one string; anything else is treated as absent (binding
+// an array/object made better-sqlite3 throw -> HTTP 500).
+function qstr(v, max = 200) {
+  return typeof v === 'string' ? auth.sanitizeString(v, max) : undefined;
+}
+
+function clampInt(v, def, min, max) {
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) ? Math.min(Math.max(n, min), max) : def;
+}
+
+// Public base URL for links in emails. Without BASE_URL the Host header used to
+// be trusted, which lets anyone point a victim's reset link at their own host;
+// Render sets RENDER_EXTERNAL_URL automatically, so prefer that.
+function publicBaseUrl(req) {
+  const configured = process.env.BASE_URL || process.env.RENDER_EXTERNAL_URL;
+  if (configured) return configured.replace(/\/+$/, '');
+  console.warn('[Auth] ⚠️  BASE_URL not set — link uses the request Host header.');
+  return `${req.protocol}://${req.get('host')}`;
+}
+
+// Source types the aggregator knows. 'browser' drives a headless Chrome at the
+// URL (redirects/DNS are not re-validated there) and 'darkweb' spends the
+// server's abuse.ch quota, so only admins may choose them. ('blog'/'other' are
+// offered by the dashboard form.)
+const SOURCE_TYPES = ['rss', 'blog', 'api', 'other', 'website', 'custom'];
+const ADMIN_SOURCE_TYPES = [...SOURCE_TYPES, 'browser', 'darkweb'];
+const MAX_SOURCES_PER_USER = (() => {
+  const v = parseInt(process.env.MAX_SOURCES_PER_USER, 10);
+  return Number.isFinite(v) && v > 0 ? v : 100;
+})();
+
+// Returns an error string, or null when type/category are acceptable.
+function checkSourceTypeAndCategory(user, type, category) {
+  if (type !== undefined) {
+    const allowed = user.role === 'admin' ? ADMIN_SOURCE_TYPES : SOURCE_TYPES;
+    if (typeof type !== 'string' || !allowed.includes(type)) return `Invalid source type. Allowed: ${allowed.join(', ')}`;
+  }
+  if (category !== undefined) {
+    if (typeof category !== 'string' || !/^[a-z0-9_-]{1,30}$/i.test(category)) return 'Invalid category';
+  }
+  return null;
+}
+
+// One address only: commas/semicolons/angle brackets would let a user fan alert
+// and test emails out to arbitrary recipient lists.
+const EMAIL_RE = /^[^\s@,;<>"()\\]+@[^\s@,;<>"()\\]+\.[^\s@,;<>"()\\]+$/;
+const SEVERITIES = ['critical', 'high', 'medium', 'low'];
+const isMasked = (v) => typeof v === 'string' && v.includes('...');
+
+// Notification settings: validate each field the dashboard form sends.
+// Returns { error } or { clean } (only the fields that were supplied).
+function validateNotificationSettings(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return { error: 'Invalid settings' };
+  const clean = {};
+  const has = (k) => Object.prototype.hasOwnProperty.call(body, k) && body[k] !== undefined;
+  const str = (k, max) => {
+    const v = body[k];
+    if (v === null || v === '') return '';
+    if (typeof v === 'number' && Number.isFinite(v)) return String(v);
+    if (typeof v !== 'string') return null;
+    const s = auth.sanitizeString(v, max + 1);
+    return s.length > max ? null : s;
+  };
+  for (const k of ['email_enabled', 'telegram_enabled', 'teams_enabled', 'whatsapp_enabled', 'digest_mode']) {
+    if (!has(k)) continue;
+    const v = body[k];
+    if (![0, 1, true, false, '0', '1'].includes(v)) return { error: `${k} must be 0 or 1` };
+    clean[k] = (v === true || v === 1 || v === '1') ? 1 : 0;
+  }
+  const rules = {
+    email: [255, (s) => EMAIL_RE.test(s), 'Notification email must be a single valid address'],
+    telegram_chat_id: [64, (s) => /^(-?\d{1,20}|@[A-Za-z0-9_]{4,64})$/.test(s), 'Invalid Telegram chat id'],
+    telegram_bot_token: [256, (s) => isMasked(s) || /^[0-9]+:[A-Za-z0-9_-]+$/.test(s), 'Invalid Telegram bot token'],
+    teams_webhook: [2048, (s) => auth.validateUrl(s) && /^https?:\/\//i.test(s), 'Teams webhook must be a public http(s) URL'],
+    whatsapp_number: [32, (s) => /^\+?[0-9 ()-]{5,32}$/.test(s), 'Invalid WhatsApp number'],
+    whatsapp_apikey: [128, (s) => isMasked(s) || /^[A-Za-z0-9_-]+$/.test(s), 'Invalid WhatsApp API key'],
+    severity_threshold: [10, (s) => SEVERITIES.includes(s), 'Invalid severity threshold'],
+    keywords_filter: [1000, () => true, 'Keywords filter is too long (max 1000 characters)'],
+  };
+  for (const [k, [max, ok, msg]] of Object.entries(rules)) {
+    if (!has(k)) continue;
+    const s = str(k, max);
+    if (s === null) return { error: msg };
+    if (s === '') {
+      if (k === 'severity_threshold') return { error: msg };
+      clean[k] = null;   // empty clears the channel
+      continue;
+    }
+    if (!ok(s)) return { error: msg };
+    clean[k] = s;
+  }
+  return { clean };
+}
+
+// Per-user throttle for test notifications: each one sends a real email /
+// webhook / chat message to an address the user typed (not verified).
+const NOTIFY_TEST_MAX = 10;
+const NOTIFY_TEST_WINDOW_MS = 10 * 60 * 1000;
+const notifyTestThrottle = new Map();
+
+function consumeNotifyTest(userId) {
+  const now = Date.now();
+  if (notifyTestThrottle.size > 10000) {
+    for (const [k, e] of notifyTestThrottle) if (now >= e.resetAt) notifyTestThrottle.delete(k);
+  }
+  let e = notifyTestThrottle.get(userId);
+  if (!e || now >= e.resetAt) { e = { count: 0, resetAt: now + NOTIFY_TEST_WINDOW_MS }; notifyTestThrottle.set(userId, e); }
+  if (e.count >= NOTIFY_TEST_MAX) return Math.ceil((e.resetAt - now) / 1000);
+  e.count++;
+  return 0;
+}
+
 // Manual fetch cooldown (non-admins) — a full fetch is heavy on a small VM.
 let lastManualFetch = 0;
 const MANUAL_FETCH_COOLDOWN_MS = 5 * 60 * 1000;
@@ -134,10 +251,9 @@ router.post('/auth/forgot-password', async (req, res) => {
 
     // If user was found, send reset email
     if (result._token && result._email) {
-      // Prefer the configured BASE_URL; falling back to the Host header lets an attacker
-      // poison reset links, so warn loudly when it's missing.
-      if (!process.env.BASE_URL) console.warn('[Auth] ⚠️  BASE_URL not set — reset link uses the request Host header.');
-      const baseUrl = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
+      // Prefer the configured public URL; falling back to the Host header lets an
+      // attacker poison reset links (publicBaseUrl warns when it has to).
+      const baseUrl = publicBaseUrl(req);
       const resetLink = `${baseUrl}/?reset=${result._token}`;
       
       // Always log the reset link so admins can find it via `docker logs`
@@ -364,8 +480,13 @@ router.post('/auth/verify-change', auth.requireAuth, denyGuest, (req, res) => {
     if (!type || !code) {
       return res.status(400).json({ success: false, error: 'Verification type and code are required' });
     }
+    // Arrays/objects used to reach the SQL bind and come back as a 500
+    if (!['email_change', 'password_change'].includes(type) ||
+        !((typeof code === 'string' && /^\d{6}$/.test(code.trim())) || (Number.isInteger(code) && code >= 100000 && code <= 999999))) {
+      return res.status(400).json({ success: false, error: 'Invalid or expired verification code' });
+    }
 
-    const verification = db.validateVerificationCode(req.user.id, type, code);
+    const verification = db.validateVerificationCode(req.user.id, type, String(code).trim());
     if (!verification) {
       return res.status(400).json({ success: false, error: 'Invalid or expired verification code' });
     }
@@ -385,7 +506,7 @@ router.post('/auth/verify-change', auth.requireAuth, denyGuest, (req, res) => {
           const confirm = [{
             title: '✉️ Your ThreatPulse email was changed',
             description: `Hi ${req.user.displayName}, the email on your ThreatPulse account was updated to ${newEmail} on ${when}. If you made this change, no action is needed.`,
-            url: process.env.BASE_URL || `${req.protocol}://${req.get('host')}`,
+            url: publicBaseUrl(req),
             source_name: 'ThreatPulse Security',
             published_date: new Date().toISOString(),
             category: 'advisory', severity: 'high',
@@ -426,36 +547,39 @@ router.post('/auth/verify-change', auth.requireAuth, denyGuest, (req, res) => {
 
 router.get('/articles', auth.requireAuth, (req, res) => {
   try {
-    const { page, limit, category, severity, search, source_type, start_date, end_date, time_range, sector, threat_actor, has_poc, has_mitre, is_patched } = req.query;
+    const q = req.query || {};
+    const time_range = qstr(q.time_range, 10);
 
     // Translate time_range shorthand to start/end dates
-    let startDate = start_date;
-    let endDate = end_date;
+    let startDate = qstr(q.start_date, 40);
+    let endDate = qstr(q.end_date, 40);
     if (time_range && time_range !== 'custom' && time_range !== 'all') {
       const now = new Date();
       endDate = now.toISOString();
       const ranges = { '1h': 60*60*1000, '6h': 6*60*60*1000, '12h': 12*60*60*1000, '24h': 24*60*60*1000, '7d': 7*24*60*60*1000, '30d': 30*24*60*60*1000 };
-      if (ranges[time_range]) {
+      // own keys only: "constructor"/"__proto__" used to resolve to Object.prototype
+      // members -> Invalid Date -> RangeError -> 500
+      if (Object.prototype.hasOwnProperty.call(ranges, time_range)) {
         startDate = new Date(now.getTime() - ranges[time_range]).toISOString();
       }
     }
 
     const result = db.getArticles({
-      page: parseInt(page) || 1,
-      limit: Math.min(parseInt(limit) || 50, 200),
-      category,
-      severity,
-      search: auth.sanitizeString(search, 200),
-      source_type,
+      page: clampInt(q.page, 1, 1, 1000000),
+      limit: clampInt(q.limit, 50, 1, 200),
+      category: qstr(q.category, 50),
+      severity: qstr(q.severity, 20),
+      search: qstr(q.search, 200),
+      source_type: qstr(q.source_type, 20),
       startDate,
       endDate,
       // Admin sees all articles; guests only built-in system content; users their own.
       userId: readScope(req.user),
-      sector,
-      threat_actor: auth.sanitizeString(threat_actor, 100),
-      has_poc,
-      has_mitre,
-      is_patched
+      sector: qstr(q.sector, 100),
+      threat_actor: qstr(q.threat_actor, 100),
+      has_poc: qstr(q.has_poc, 5),
+      has_mitre: qstr(q.has_mitre, 5),
+      is_patched: qstr(q.is_patched, 5)
     });
     res.json(result);
   } catch (error) {
@@ -481,7 +605,7 @@ router.get('/search', auth.requireAuth, (req, res) => {
     if (!query) return res.json([]);   // whitespace-only used to match everything
     const results = db.searchArticles(
       query,
-      Math.min(parseInt(limit) || 50, 200),
+      clampInt(limit, 50, 1, 200),
       readScope(req.user)
     );
     res.json(results);
@@ -570,7 +694,10 @@ router.get('/sources', auth.requireAuth, (req, res) => {
 
 router.post('/sources', auth.requireAuth, denyGuest, (req, res) => {
   try {
-    const { url, name, type = 'rss', category = 'news' } = req.body;
+    const { url, name } = req.body;
+    // Empty/absent -> defaults (the form always sends both)
+    const type = req.body.type === undefined || req.body.type === '' ? 'rss' : req.body.type;
+    const category = req.body.category === undefined || req.body.category === '' ? 'news' : req.body.category;
     const cleanUrl = auth.sanitizeString(url, 2048);
     const cleanName = auth.sanitizeString(name, 128);
 
@@ -579,12 +706,22 @@ router.post('/sources', auth.requireAuth, denyGuest, (req, res) => {
     if (!auth.validateUrl(cleanUrl)) {
       return res.status(400).json({ error: 'Invalid URL. Only http/https URLs to public hosts are allowed.' });
     }
+    const typeErr = checkSourceTypeAndCategory(req.user, type, category);
+    if (typeErr) return res.status(400).json({ error: typeErr });
+    // Every source is fetched each cycle for everyone: an uncapped list let one
+    // account stretch the shared fetch cycle indefinitely.
+    if (req.user.role !== 'admin') {
+      const count = db.getDb().prepare('SELECT COUNT(*) AS c FROM sources WHERE user_id = ?').get(req.user.id).c;
+      if (count >= MAX_SOURCES_PER_USER) {
+        return res.status(400).json({ error: `Source limit reached (max ${MAX_SOURCES_PER_USER} per account)` });
+      }
+    }
 
     const result = db.addSource({
       name: cleanName,
       url: cleanUrl,
-      type: auth.sanitizeString(type, 20),
-      category: auth.sanitizeString(category, 30),
+      type,
+      category,
       added_by: 'user',
       user_id: req.user.id
     });
@@ -624,6 +761,12 @@ router.put('/sources/:id', auth.requireAuth, denyGuest, (req, res) => {
     if (updates.name !== undefined) {
       updates.name = auth.sanitizeString(updates.name, 128);
       if (!updates.name) return res.status(400).json({ error: 'Name is required' });
+    }
+    // type/category used to be stored unchecked (any length; arrays/objects -> 500)
+    const typeErr = checkSourceTypeAndCategory(req.user, updates.type, updates.category);
+    if (typeErr) return res.status(400).json({ error: typeErr });
+    if (updates.enabled !== undefined && ![0, 1, true, false, '0', '1'].includes(updates.enabled)) {
+      return res.status(400).json({ error: 'enabled must be 0 or 1' });
     }
 
     const result = db.updateSource(sourceId, updates);
@@ -719,7 +862,12 @@ router.get('/notifications/settings', auth.requireAuth, (req, res) => {
 
 router.put('/notifications/settings', auth.requireAuth, denyGuest, (req, res) => {
   try {
-    const result = db.updateNotificationSettings(req.body, req.user.id);
+    // Fields used to be stored unvalidated: arrays/objects -> 500, megabyte
+    // strings, comma-separated recipient lists for alert/test emails, internal
+    // webhook URLs, unknown severity thresholds.
+    const { error, clean } = validateNotificationSettings(req.body);
+    if (error) return res.status(400).json({ success: false, error });
+    const result = db.updateNotificationSettings(clean, req.user.id);
     res.json(result);
   } catch (error) {
     res.status(500).json({ error: 'Failed to save settings' });
@@ -731,6 +879,11 @@ router.post('/notifications/test', auth.requireAuth, denyGuest, async (req, res)
     const { type } = req.body;
     const settings = db.getNotificationSettings(req.user.id);
     if (!settings) return res.status(400).json({ error: 'No notification settings configured' });
+    const wait = consumeNotifyTest(req.user.id);
+    if (wait) {
+      res.setHeader('Retry-After', String(wait));
+      return res.status(429).json({ success: false, error: 'Too many test notifications. Please wait a few minutes.' });
+    }
 
     const testArticle = {
       title: '🔔 ThreatPulse Test Notification',
@@ -783,7 +936,7 @@ router.put('/admin/users/:id', auth.requireAuth, auth.requireAdmin, (req, res) =
     const updates = {};
 
     if (body.display_name !== undefined) {
-      const name = typeof body.display_name === 'string' ? body.display_name.trim() : '';
+      const name = auth.sanitizeString(body.display_name, 65);
       if (name.length < 2 || name.length > 64) {
         return res.status(400).json({ success: false, error: 'Display name must be 2-64 characters' });
       }
@@ -873,13 +1026,13 @@ router.get('/admin/invite-codes', auth.requireAuth, auth.requireAdmin, (req, res
 
 router.get('/admin/articles', auth.requireAuth, auth.requireAdmin, (req, res) => {
   try {
-    const { page, limit, category, severity, search } = req.query;
+    const q = req.query || {};
     const result = db.getArticles({
-      page: parseInt(page) || 1,
-      limit: Math.min(parseInt(limit) || 50, 200),
-      category,
-      severity,
-      search
+      page: clampInt(q.page, 1, 1, 1000000),
+      limit: clampInt(q.limit, 50, 1, 200),
+      category: qstr(q.category, 50),
+      severity: qstr(q.severity, 20),
+      search: qstr(q.search, 200)
       // No userId filter — god view
     });
     res.json(result);
@@ -919,7 +1072,8 @@ router.get('/admin/stats', auth.requireAuth, auth.requireAdmin, (req, res) => {
 
 router.get('/admin/audit-log', auth.requireAuth, auth.requireAdmin, (req, res) => {
   try {
-    const limit = Math.min(parseInt(req.query.limit) || 100, 500);
+    // A negative LIMIT means "no limit" in SQLite
+    const limit = clampInt(req.query.limit, 100, 1, 500);
     res.json({ log: db.getAuditLog(limit) });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch audit log' });
@@ -957,6 +1111,14 @@ router.get('/admin/ai-settings', auth.requireAuth, auth.requireAdmin, (req, res)
 
 router.put('/admin/ai-settings', auth.requireAuth, auth.requireAdmin, (req, res) => {
   try {
+    // Keys go into an Authorization header: refuse anything that isn't a plausible
+    // key (megabyte strings, whitespace/CR/LF, control characters).
+    for (const key of ['groq_api_key', 'tavily_api_key']) {
+      const v = req.body?.[key];
+      if (typeof v === 'string' && (v.trim().length > 512 || /[\s\u0000-\u001f\u007f]/.test(v.trim()))) {
+        return res.status(400).json({ success: false, error: `Invalid ${key}` });
+      }
+    }
     const apply = (key, value) => {
       if (typeof value !== 'string') return;
       const v = value.trim();

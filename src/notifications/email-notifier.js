@@ -199,11 +199,11 @@ async function sendVerificationEmail(recipientEmail, username, type, code, smtpC
         </div>
         <div style="background: rgba(15,20,35,0.9); border-radius: 12px; padding: 24px; border: 1px solid #1a2332; text-align: center;">
           <p style="font-size: 15px; color: #8899aa; margin-bottom: 20px;">
-            Hi ${username},<br>
+            Hi ${esc(username)},<br>
             Please use the verification code below to complete your ${type === 'email_change' ? 'email' : 'password'} change.
           </p>
           <div style="background: #111424; border: 1px solid #7c5cff; border-radius: 8px; padding: 16px; font-size: 32px; font-weight: 700; letter-spacing: 6px; color: #22d3ee; margin: 20px auto; max-width: 200px;">
-            ${code}
+            ${esc(code)}
           </div>
           <p style="font-size: 12px; color: #556677; margin-top: 20px;">
             This code will expire in 15 minutes. If you did not request this change, please ignore this email.
