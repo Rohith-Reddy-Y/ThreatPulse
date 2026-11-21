@@ -38,6 +38,15 @@ function denyGuest(req, res, next) {
   next();
 }
 
+// Read scope for article/source/stat queries: admins see everything (null),
+// the shared guest account sees built-in system content only, and every other
+// user sees only their own rows.
+function readScope(user) {
+  if (user.role === 'admin') return null;
+  if (user.username === 'guest') return db.SYSTEM_SCOPE;
+  return user.id;
+}
+
 // Manual fetch cooldown (non-admins) — a full fetch is heavy on a small VM.
 let lastManualFetch = 0;
 const MANUAL_FETCH_COOLDOWN_MS = 5 * 60 * 1000;
@@ -440,8 +449,8 @@ router.get('/articles', auth.requireAuth, (req, res) => {
       source_type,
       startDate,
       endDate,
-      // Admin and guests see all articles; regular users are isolated to their own.
-      userId: (req.user.role === 'admin' || req.user.username === 'guest') ? null : req.user.id,
+      // Admin sees all articles; guests only built-in system content; users their own.
+      userId: readScope(req.user),
       sector,
       threat_actor: auth.sanitizeString(threat_actor, 100),
       has_poc,
@@ -457,8 +466,8 @@ router.get('/articles', auth.requireAuth, (req, res) => {
 
 router.get('/articles/stats', auth.requireAuth, (req, res) => {
   try {
-    // Admin and guests see platform-wide totals; users see only their own.
-    const stats = db.getArticleStats((req.user.role === 'admin' || req.user.username === 'guest') ? null : req.user.id);
+    // Admin sees platform-wide totals; guests system content only; users their own.
+    const stats = db.getArticleStats(readScope(req.user));
     res.json(stats);
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch stats' });
@@ -473,7 +482,7 @@ router.get('/search', auth.requireAuth, (req, res) => {
     const results = db.searchArticles(
       query,
       Math.min(parseInt(limit) || 50, 200),
-      (req.user.role === 'admin' || req.user.username === 'guest') ? null : req.user.id
+      readScope(req.user)
     );
     res.json(results);
   } catch (error) {
@@ -544,10 +553,14 @@ router.post('/articles/:id/escalate', auth.requireAuth, denyGuest, (req, res) =>
 
 router.get('/sources', auth.requireAuth, (req, res) => {
   try {
-    // Guests and admins see the full platform source list; users see only their own.
-    const sources = (req.user.role === 'admin' || req.user.username === 'guest')
+    // Admins see the full platform source list, guests only the built-in system
+    // sources (never other users' private feed URLs); users see only their own.
+    const scope = readScope(req.user);
+    const sources = scope === null
       ? db.getAllSources()
-      : db.getSourcesForUser(req.user.id);
+      : scope === db.SYSTEM_SCOPE
+        ? db.getSystemSources()
+        : db.getSourcesForUser(scope);
     res.json({ sources });
   } catch (error) {
     console.error('[API] Error fetching sources:', error.message);

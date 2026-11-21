@@ -416,6 +416,57 @@ function clampInt(v, def, min, max) {
 }
 
 // ============================================
+// SYSTEM-ONLY SCOPE (shared anonymous guest account)
+// ============================================
+// Every anonymous visitor shares the one 'guest' account, so guests may only see
+// the built-in platform content — never another user's private sources (feed
+// URLs), their articles, review notes or names. Pass SYSTEM_SCOPE as the userId
+// of the read functions below to get that view (null = everything, for admins;
+// a numeric id = that user's own rows).
+//
+// "System" is identified by sources.added_by = 'system' (what seedDefaultSources
+// stores; user-added sources are stored with added_by = 'user'), NOT by
+// user_id IS NULL: on a restarted DB the orphan migration in initializeSchema
+// (step 6) re-assigns system sources and their articles to the admin's user_id,
+// which would otherwise make them indistinguishable from the admin's own
+// private content. Articles are system content when their source is a system
+// source (RSS, NVD/CISA KEV, abuse.ch, RansomWatch ... all carry the source's
+// id), or — for rows with no source at all — when they are also unowned.
+const SYSTEM_SCOPE = 'system';
+
+function isSystemScope(userId) {
+  return userId === SYSTEM_SCOPE;
+}
+
+function systemSourceClause(alias = 'sources') {
+  return `${alias}.added_by = 'system'`;
+}
+
+function systemArticleClause(alias = 'articles') {
+  return `(${alias}.source_id IN (SELECT id FROM sources WHERE added_by = 'system')` +
+    ` OR (${alias}.source_id IS NULL AND ${alias}.user_id IS NULL))`;
+}
+
+// Guests must not learn which account owns system content (on a migrated DB
+// that is the admin) nor see anyone's reviews/notes. Keeps the row shape.
+function redactForSystemScope(row) {
+  if (!row) return row;
+  if ('user_id' in row) row.user_id = null;
+  if ('owner_name' in row) row.owner_name = null;
+  if ('reviews' in row) row.reviews = '[]';
+  if ('added_by_name' in row) row.added_by_name = 'System';
+  return row;
+}
+
+function isSystemArticle(articleOrId) {
+  const id = typeof articleOrId === 'object' && articleOrId ? articleOrId.id : articleOrId;
+  if (id === undefined || id === null) return false;
+  return !!getDb().prepare(
+    `SELECT 1 FROM articles WHERE articles.id = ? AND ${systemArticleClause('articles')}`
+  ).get(id);
+}
+
+// ============================================
 // USER CRUD
 // ============================================
 
@@ -609,6 +660,13 @@ function getValidInviteCodes() {
 
 function getAllSources() {
   return getDb().prepare('SELECT * FROM sources ORDER BY added_by DESC, name ASC').all();
+}
+
+// Built-in platform sources only (the guest view). Same columns as getAllSources.
+function getSystemSources() {
+  return getDb().prepare(
+    `SELECT * FROM sources WHERE ${systemSourceClause('sources')} ORDER BY added_by DESC, name ASC`
+  ).all().map(redactForSystemScope);
 }
 
 // Fully isolated: each user sees ONLY their own sources.
@@ -820,8 +878,12 @@ function getArticles({ page = 1, limit = 50, category, severity, search, source_
   let params = [];
 
   // User scoping: fully isolated — each user sees only their own articles.
-  // (Admin bypasses this by calling getArticles without userId.)
-  if (userId) {
+  // (Admin bypasses this by calling getArticles without userId; the shared
+  // guest account passes SYSTEM_SCOPE and sees built-in content only.)
+  const systemOnly = isSystemScope(userId);
+  if (systemOnly) {
+    where.push(systemArticleClause('articles'));
+  } else if (userId) {
     where.push('articles.user_id = ?');
     params.push(userId);
   }
@@ -889,14 +951,17 @@ function getArticles({ page = 1, limit = 50, category, severity, search, source_
      FROM articles ${whereClause} ORDER BY articles.published_date DESC LIMIT ? OFFSET ?`
   ).all(...params, limit, offset);
 
+  if (systemOnly) articles.forEach(redactForSystemScope);
   return { articles, total, page, totalPages };
 }
 
 function getArticleStats(userId = null) {
   const d = getDb();
-  // Fully isolated per user; admin passes no userId to see totals across everyone.
-  const userFilter = userId ? 'AND user_id = ?' : '';
-  const userFilterParam = userId ? [parseInt(userId)] : [];
+  // Fully isolated per user; admin passes no userId to see totals across everyone;
+  // SYSTEM_SCOPE (guest) counts built-in sources and their articles only.
+  const systemOnly = isSystemScope(userId);
+  const userFilter = systemOnly ? `AND ${systemArticleClause('articles')}` : userId ? 'AND user_id = ?' : '';
+  const userFilterParam = (!systemOnly && userId) ? [parseInt(userId)] : [];
 
   const threatsToday = d.prepare(
     `SELECT COUNT(*) as count FROM articles WHERE date(published_date) = date('now') ${userFilter}`
@@ -920,8 +985,8 @@ function getArticleStats(userId = null) {
     `SELECT COUNT(*) as count FROM articles WHERE has_poc = 1 AND date(published_date) >= date('now', '-7 days') ${userFilter}`
   ).get(...userFilterParam).count;
 
-  const sourceFilter = userId ? 'AND user_id = ?' : '';
-  const sourceFilterParam = userId ? [parseInt(userId)] : [];
+  const sourceFilter = systemOnly ? `AND ${systemSourceClause('sources')}` : userId ? 'AND user_id = ?' : '';
+  const sourceFilterParam = (!systemOnly && userId) ? [parseInt(userId)] : [];
   const activeSources = d.prepare(
     `SELECT COUNT(*) as count FROM sources WHERE enabled = 1 AND last_fetched IS NOT NULL AND last_error IS NULL ${sourceFilter}`
   ).get(...sourceFilterParam).count;
@@ -931,7 +996,7 @@ function getArticleStats(userId = null) {
   ).get(...sourceFilterParam).count;
 
   const lastFetch = d.prepare(
-    `SELECT MAX(s.last_fetched) as last FROM sources s WHERE s.enabled = 1 ${sourceFilter}`
+    `SELECT MAX(sources.last_fetched) as last FROM sources WHERE sources.enabled = 1 ${sourceFilter}`
   ).get(...sourceFilterParam);
 
   const totalArticles = d.prepare(
@@ -983,13 +1048,15 @@ function markAsNotified(articleIds) {
 function searchArticles(query, limit = 50, userId = null) {
   const term = likeContains(query);
   limit = clampInt(limit, 50, 1, 200);
-  const userFilter = userId ? `AND user_id = ?` : '';
-  const params = userId
+  const systemOnly = isSystemScope(userId);
+  const userFilter = systemOnly ? `AND ${systemArticleClause('articles')}` : userId ? `AND user_id = ?` : '';
+  const params = (!systemOnly && userId)
     ? [term, term, term, term, term, userId, limit]
     : [term, term, term, term, term, limit];
-  return getDb().prepare(
+  const rows = getDb().prepare(
     `SELECT * FROM articles WHERE (title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR cve_id LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\' OR author LIKE ? ESCAPE '\\') ${userFilter} ORDER BY published_date DESC LIMIT ?`
   ).all(...params);
+  return systemOnly ? rows.map(redactForSystemScope) : rows;
 }
 
 // Common English stopwords + threat-intel filler words so natural-language
@@ -1017,7 +1084,8 @@ function searchArticlesRag(question, limit = 8, userId = null) {
   const keywords = extractKeywords(question);
   if (!keywords.length) return [];
 
-  const userFilter = userId ? 'AND user_id = ?' : '';
+  const systemOnly = isSystemScope(userId);
+  const userFilter = systemOnly ? `AND ${systemArticleClause('articles')}` : userId ? 'AND user_id = ?' : '';
   const select = getDb().prepare(
     `SELECT * FROM articles WHERE (title LIKE ? OR description LIKE ? OR cve_id LIKE ? OR tags LIKE ? OR author LIKE ?) ${userFilter} ORDER BY published_date DESC LIMIT 20`
   );
@@ -1025,10 +1093,11 @@ function searchArticlesRag(question, limit = 8, userId = null) {
   const seen = new Map();
   for (const kw of keywords) {
     const term = `%${kw}%`;
-    const params = userId
+    const params = (!systemOnly && userId)
       ? [term, term, term, term, term, userId]
       : [term, term, term, term, term];
     const rows = select.all(...params);
+    if (systemOnly) rows.forEach(redactForSystemScope);
     for (const r of rows) {
       if (!seen.has(r.id)) seen.set(r.id, r);
     }
@@ -1289,6 +1358,7 @@ module.exports = {
   getValidInviteCodes,
   // Sources
   getAllSources,
+  getSystemSources,
   getSourcesForUser: getSourcesForUserFixed,
   getEnabledSources,
   getEnabledSourcesForUser,
@@ -1308,6 +1378,8 @@ module.exports = {
   searchArticles,
   searchArticlesRag,
   getArticleById,
+  isSystemArticle,
+  SYSTEM_SCOPE,
   // Reviews
   startReview,
   completeReview,
