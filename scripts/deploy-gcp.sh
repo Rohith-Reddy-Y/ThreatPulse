@@ -16,9 +16,11 @@
 # ============================================================================
 set -euo pipefail
 
-VM_NAME="threatpulse"
+# Override to reuse an existing VM, e.g.:
+#   PROJECT=my-proj VM_NAME=my-vm ZONE=us-central1-c bash scripts/deploy-gcp.sh
+VM_NAME="${VM_NAME:-threatpulse}"
 REGION="us-central1"          # free tier: us-west1, us-central1 or us-east1 only
-ZONE="${REGION}-a"
+ZONE="${ZONE:-${REGION}-a}"
 FW_RULE="threatpulse-allow-web"
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -37,7 +39,7 @@ done
 
 # ── 2. Project + billing ────────────────────────────────────────────────────
 say "Selecting a Google Cloud project"
-PROJECT="$(gcloud config get-value project 2>/dev/null || true)"
+PROJECT="${PROJECT:-$(gcloud config get-value project 2>/dev/null || true)}"
 if [ -z "$PROJECT" ] || [ "$PROJECT" = "(unset)" ]; then
   PROJECT="threatpulse-$(tr -dc 'a-z0-9' </dev/urandom | head -c 6)"
   say "Creating project $PROJECT"
@@ -87,6 +89,15 @@ if ! gcloud compute instances describe "$VM_NAME" --zone="$ZONE" >/dev/null 2>&1
     --boot-disk-size=30GB --boot-disk-type=pd-standard \
     --tags=threatpulse >/dev/null
 fi
+# Make sure the firewall rule applies (also for a pre-existing VM).
+gcloud compute instances add-tags "$VM_NAME" --zone="$ZONE" --tags=threatpulse >/dev/null
+
+MT="$(gcloud compute instances describe "$VM_NAME" --zone="$ZONE" --format='value(machineType.basename())')"
+[ "$MT" = "e2-micro" ] || warn "VM $VM_NAME is $MT — only e2-micro is in the free tier."
+gcloud compute disks list --filter="zone~$ZONE AND users~/$VM_NAME\$" --format='value(name,sizeGb,type.basename())' | while read -r d sz t; do
+  { [ "$t" = "pd-standard" ] && [ "${sz:-0}" -le 30 ]; } || warn "Disk $d is ${sz}GB $t — free tier covers only up to 30 GB pd-standard (expect ~\$0.10/GB-month otherwise)."
+done
+
 IP="$(gcloud compute instances describe "$VM_NAME" --zone="$ZONE" --format='value(networkInterfaces[0].accessConfigs[0].natIP)')"
 [ -n "$IP" ] || die "VM has no external IP."
 DOMAIN="${IP//./-}.sslip.io"
