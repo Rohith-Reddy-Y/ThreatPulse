@@ -198,11 +198,20 @@ router.post('/auth/reset-password', (req, res) => {
   }
 });
 
-router.post('/auth/logout', auth.requireAuth, (req, res) => {
-  auth.logoutUser(req);
-  security.clearAuthCookies(res);
-  db.logAudit(req.user.id, 'logout', null, req.ip);
-  res.json({ success: true });
+// No requireAuth: the access token is often already expired when the user logs
+// out, and the refresh token must still be revoked and the cookies cleared.
+// (Still CSRF-protected — /auth/logout is not in the exemption list.)
+router.post('/auth/logout', (req, res) => {
+  try {
+    const { userId } = auth.logoutUser(req);
+    security.clearAuthCookies(res);
+    if (userId != null) db.logAudit(userId, 'logout', null, req.ip);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('[API] Logout error:', error.message);
+    security.clearAuthCookies(res);
+    res.status(500).json({ success: false, error: 'Logout failed' });
+  }
 });
 
 router.get('/auth/me', auth.requireAuth, (req, res) => {
@@ -219,7 +228,7 @@ router.post('/auth/guest', (req, res) => {
   try {
     const result = auth.getOrCreateGuestUser();
     if (!result.success) {
-      return res.status(500).json({ success: false, error: result.error });
+      return res.status(result.disabled ? 403 : 500).json({ success: false, error: result.error });
     }
     security.setAccessTokenCookie(res, result.accessToken);
     security.setRefreshTokenCookie(res, result.refreshToken);
@@ -273,7 +282,7 @@ router.put('/auth/password', auth.requireAuth, denyGuest, async (req, res) => {
 
     // Generate verification code (6 digits)
     const code = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 mins
+    const expiresAt = auth.sqliteDateTime(Date.now() + 15 * 60 * 1000); // 15 mins
 
     // Hash the new password and store it as newHash:newSalt in target_value
     const newSalt = auth.generateSalt();
@@ -289,6 +298,7 @@ router.put('/auth/password', auth.requireAuth, denyGuest, async (req, res) => {
     //    could never complete the change and would be locked out).
     if (user.must_change_password || !emailReady) {
       db.updateUserPassword(req.user.id, newHash, newSalt); // also clears must_change_password
+      auth.revokeUserSessions(req.user.id, req.cookies?.tp_refresh); // log out other sessions
       db.logAudit(req.user.id, 'password_change',
         user.must_change_password ? 'Forced first-login password change' : 'Password changed (email verification unavailable)', req.ip);
       return res.json({ success: true, verificationRequired: false, message: 'Password updated successfully' });
@@ -325,7 +335,7 @@ router.put('/auth/email', auth.requireAuth, denyGuest, async (req, res) => {
 
     // Generate verification code (6 digits)
     const code = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 mins
+    const expiresAt = auth.sqliteDateTime(Date.now() + 15 * 60 * 1000); // 15 mins
 
     db.createVerificationCode(req.user.id, 'email_change', email, code, expiresAt);
 
@@ -387,6 +397,7 @@ router.post('/auth/verify-change', auth.requireAuth, denyGuest, (req, res) => {
       const [newHash, newSalt] = verification.target_value.split(':');
 
       db.updateUserPassword(req.user.id, newHash, newSalt); // also clears must_change_password
+      auth.revokeUserSessions(req.user.id, req.cookies?.tp_refresh); // log out other sessions
       db.logAudit(req.user.id, 'password_change', 'Password changed via verification code', req.ip);
       db.deleteVerificationCode(verification.id);
 
@@ -727,10 +738,46 @@ router.get('/admin/users', auth.requireAuth, auth.requireAdmin, (req, res) => {
 
 router.put('/admin/users/:id', auth.requireAuth, auth.requireAdmin, (req, res) => {
   try {
-    const userId = parseInt(req.params.id);
-    const result = db.updateUser(userId, req.body);
+    const userId = parseInt(req.params.id, 10);
+    if (!Number.isInteger(userId)) return res.status(400).json({ success: false, error: 'Invalid user id' });
+    const body = req.body || {};
+    const updates = {};
+
+    if (body.display_name !== undefined) {
+      const name = typeof body.display_name === 'string' ? body.display_name.trim() : '';
+      if (name.length < 2 || name.length > 64) {
+        return res.status(400).json({ success: false, error: 'Display name must be 2-64 characters' });
+      }
+      updates.display_name = name;
+    }
+    if (body.role !== undefined) {
+      if (!['admin', 'analyst'].includes(body.role)) {
+        return res.status(400).json({ success: false, error: 'Role must be "admin" or "analyst"' });
+      }
+      updates.role = body.role;
+    }
+    if (body.is_active !== undefined) {
+      if (![0, 1, true, false].includes(body.is_active)) {
+        return res.status(400).json({ success: false, error: 'is_active must be 0 or 1' });
+      }
+      updates.is_active = body.is_active ? 1 : 0;
+    }
+
+    // An admin locking themselves out could leave the instance with no admin at all
+    // (no SMTP / admin email → no recovery path short of editing the database).
+    if (userId === req.user.id && (updates.role === 'analyst' || updates.is_active === 0)) {
+      return res.status(400).json({ success: false, error: 'You cannot demote or disable your own account' });
+    }
+    // The shared guest account is used by every anonymous visitor: promoting it
+    // would make the whole internet an admin.
+    const target = db.getUserById(userId);
+    if (target && target.username === auth.GUEST_USERNAME && updates.role === 'admin') {
+      return res.status(400).json({ success: false, error: 'The shared guest account cannot be made an admin' });
+    }
+
+    const result = db.updateUser(userId, updates);
     if (!result.success) return res.status(400).json(result);
-    db.logAudit(req.user.id, 'admin_user_update', `Updated user ${userId}: ${JSON.stringify(req.body)}`, req.ip);
+    db.logAudit(req.user.id, 'admin_user_update', `Updated user ${userId}: ${JSON.stringify(updates)}`, req.ip);
     res.json(result);
   } catch (error) {
     res.status(500).json({ error: 'Failed to update user' });
@@ -741,7 +788,21 @@ router.delete('/admin/users/:id', auth.requireAuth, auth.requireAdmin, (req, res
   try {
     const userId = parseInt(req.params.id);
     if (userId === req.user.id) return res.status(400).json({ error: 'Cannot delete yourself' });
-    const result = db.deleteUser(userId);
+    // One transaction: deleteUser issues several DELETEs, and a failure part-way
+    // (e.g. the FK from invite_codes.created_by) used to wipe the user's sources and
+    // articles while leaving the account in place. Invite codes the user created are
+    // handed to the acting admin so that FK no longer blocks the delete.
+    const d = db.getDb();
+    let result;
+    try {
+      d.transaction(() => {
+        d.prepare('UPDATE invite_codes SET created_by = ? WHERE created_by = ?').run(req.user.id, userId);
+        result = db.deleteUser(userId);
+        if (!result.success) throw Object.assign(new Error('rollback'), { rollback: true });
+      })();
+    } catch (e) {
+      if (!e.rollback) throw e;
+    }
     if (result.success) {
       db.logAudit(req.user.id, 'admin_user_delete', `Deleted user ${userId}`, req.ip);
     }

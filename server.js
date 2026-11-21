@@ -178,6 +178,12 @@ app.get('/admin', (req, res) => {
 // ERROR HANDLING — never expose internals
 // ============================================
 app.use((err, req, res, next) => {
+  // Client errors raised by body parsing (malformed JSON → 400, body too large → 413)
+  // carry their own status; report them as such instead of a 500.
+  const status = err.status || err.statusCode;
+  if (status >= 400 && status < 500) {
+    return res.status(status).json({ success: false, error: err.expose ? err.message : 'Bad request' });
+  }
   console.error('[Server] Unhandled error:', err.message);
   res.status(500).json({ error: 'Internal server error' });
 });
