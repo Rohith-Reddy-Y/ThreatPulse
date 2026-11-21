@@ -25,7 +25,10 @@ function isPrivateIPv4(ip) {
     (a === 169 && b === 254) ||             // link-local / cloud metadata
     (a === 172 && b >= 16 && b <= 31) ||
     (a === 192 && b === 168) ||
-    (a === 192 && b === 0) ||
+    (a === 192 && b === 0 && (p[2] === 0 || p[2] === 2)) ||   // 192.0.0.0/24, 192.0.2.0/24 only
+                                                              // (NOT all of 192.0/16 — WordPress.com is 192.0.78.x)
+    (a === 198 && b === 51 && p[2] === 100) ||                // TEST-NET-2
+    (a === 203 && b === 0 && p[2] === 113) ||                 // TEST-NET-3
     (a === 198 && (b === 18 || b === 19)) ||
     a >= 224                                // multicast + reserved
   );
@@ -68,19 +71,23 @@ function safeLookup(hostname, options, callback) {
   options = options || {};
   dns.lookup(hostname, { ...options, all: true }, (err, addresses) => {
     if (err) return callback(err);
-    const bad = addresses.find(a => isPrivateIp(a.address));
-    if (bad || addresses.length === 0) {
-      const e = new Error(`Blocked outbound request: ${hostname} resolves to a private/internal address`);
+    // Prefer IPv4: many hosting platforms have no IPv6 egress, and Node's
+    // happy-eyeballs then fails with an empty-message AggregateError.
+    const v4 = addresses.filter(a => a.family === 4);
+    const usable = v4.length ? v4 : addresses;
+    const bad = usable.find(a => isPrivateIp(a.address));
+    if (bad || usable.length === 0) {
+      const e = new Error(`Blocked outbound request: ${hostname} resolves to a private/internal address${bad ? ` (${bad.address})` : ''}`);
       e.code = 'EBLOCKED';
       return callback(e);
     }
-    if (options.all) return callback(null, addresses);
-    return callback(null, addresses[0].address, addresses[0].family);
+    if (options.all) return callback(null, usable);
+    return callback(null, usable[0].address, usable[0].family);
   });
 }
 
-const safeHttpAgent = new http.Agent({ lookup: safeLookup });
-const safeHttpsAgent = new https.Agent({ lookup: safeLookup });
+const safeHttpAgent = new http.Agent({ lookup: safeLookup, autoSelectFamily: false });
+const safeHttpsAgent = new https.Agent({ lookup: safeLookup, autoSelectFamily: false });
 
 /**
  * axios.get for UNTRUSTED (user-supplied) URLs.

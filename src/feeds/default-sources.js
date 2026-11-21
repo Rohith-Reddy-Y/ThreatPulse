@@ -1,6 +1,6 @@
 /**
  * ThreatPulse — Default Threat Intelligence Sources
- * 160+ pre-configured, verified feeds from around the world
+ * 200+ pre-configured feeds from around the world
  */
 
 const DEFAULT_SOURCES = [
@@ -1217,7 +1217,284 @@ const DEFAULT_SOURCES = [
     type: 'browser',
     category: 'news',
     added_by: 'system'
-  }
+  },
+  // ============================================
+  // ➕ ADDED: more news, vendor research, advisories
+  //   (if a feed is blocked/broken, the fetcher falls back to Google News)
+  // ============================================
+  {
+    name: 'Ars Technica Security',
+    url: 'https://arstechnica.com/security/feed/',
+    type: 'rss',
+    category: 'news',
+    added_by: 'system'
+  },
+  {
+    name: 'WIRED Security',
+    url: 'https://www.wired.com/feed/category/security/latest/rss',
+    type: 'rss',
+    category: 'news',
+    added_by: 'system'
+  },
+  {
+    name: 'TechCrunch Security',
+    url: 'https://techcrunch.com/category/security/feed/',
+    type: 'rss',
+    category: 'news',
+    added_by: 'system'
+  },
+  {
+    name: 'CSO Online',
+    url: 'https://www.csoonline.com/feed/',
+    type: 'rss',
+    category: 'news',
+    added_by: 'system'
+  },
+  {
+    name: '404 Media',
+    url: 'https://www.404media.co/rss/',
+    type: 'rss',
+    category: 'news',
+    added_by: 'system'
+  },
+  {
+    name: 'Zero Day (Kim Zetter)',
+    url: 'https://www.zetter-zeroday.com/rss/',
+    type: 'rss',
+    category: 'news',
+    added_by: 'system'
+  },
+  {
+    name: 'SC Media',
+    url: 'https://www.scworld.com/rss',
+    type: 'rss',
+    category: 'news',
+    added_by: 'system'
+  },
+  {
+    name: 'Cybernews',
+    url: 'https://cybernews.com/feed/',
+    type: 'rss',
+    category: 'news',
+    added_by: 'system'
+  },
+  {
+    name: 'Risky Business Newsletters',
+    url: 'https://risky.biz/feeds/newsletters/',
+    type: 'rss',
+    category: 'news',
+    added_by: 'system'
+  },
+  {
+    name: 'Google Threat Intelligence (Mandiant)',
+    url: 'https://cloud.google.com/blog/topics/threat-intelligence/rss/',
+    type: 'rss',
+    category: 'threat_intel',
+    added_by: 'system'
+  },
+  {
+    name: 'Google Threat Analysis Group',
+    url: 'https://blog.google/threat-analysis-group/rss/',
+    type: 'rss',
+    category: 'threat_intel',
+    added_by: 'system'
+  },
+  {
+    name: 'Microsoft Security Response Center Blog',
+    url: 'https://msrc.microsoft.com/blog/feed',
+    type: 'rss',
+    category: 'threat_intel',
+    added_by: 'system'
+  },
+  {
+    name: 'AWS Security Blog',
+    url: 'https://aws.amazon.com/blogs/security/feed/',
+    type: 'rss',
+    category: 'threat_intel',
+    added_by: 'system'
+  },
+  {
+    name: 'Citizen Lab',
+    url: 'https://citizenlab.ca/feed/',
+    type: 'rss',
+    category: 'threat_intel',
+    added_by: 'system'
+  },
+  {
+    name: 'Volexity Threat Research',
+    url: 'https://www.volexity.com/feed/',
+    type: 'rss',
+    category: 'threat_intel',
+    added_by: 'system'
+  },
+  {
+    name: 'Sekoia TDR Blog',
+    url: 'https://blog.sekoia.io/feed/',
+    type: 'rss',
+    category: 'threat_intel',
+    added_by: 'system'
+  },
+  {
+    name: 'ZeroFox Blog',
+    url: 'https://www.zerofox.com/feed/',
+    type: 'rss',
+    category: 'threat_intel',
+    added_by: 'system'
+  },
+  {
+    name: 'Infoblox Threat Intel',
+    url: 'https://blogs.infoblox.com/feed/',
+    type: 'rss',
+    category: 'threat_intel',
+    added_by: 'system'
+  },
+  {
+    name: 'Trend Micro Research',
+    url: 'https://www.trendmicro.com/en_us/research.rss',
+    type: 'rss',
+    category: 'threat_intel',
+    added_by: 'system'
+  },
+  {
+    name: 'Symantec Threat Intelligence',
+    url: 'https://www.security.com/feed/blogs/threat-intelligence',
+    type: 'rss',
+    category: 'threat_intel',
+    added_by: 'system'
+  },
+  {
+    name: 'Arctic Wolf Labs',
+    url: 'https://arcticwolf.com/resources/blog/feed/',
+    type: 'rss',
+    category: 'threat_intel',
+    added_by: 'system'
+  },
+  {
+    name: 'Group-IB Blog',
+    url: 'https://www.group-ib.com/feed/blogfeed/',
+    type: 'rss',
+    category: 'threat_intel',
+    added_by: 'system'
+  },
+  {
+    name: 'NCC Group Research',
+    url: 'https://research.nccgroup.com/feed/',
+    type: 'rss',
+    category: 'threat_intel',
+    added_by: 'system'
+  },
+  {
+    name: 'Lab52',
+    url: 'https://lab52.io/blog/feed/',
+    type: 'rss',
+    category: 'threat_intel',
+    added_by: 'system'
+  },
+  {
+    name: 'Shadowserver',
+    url: 'https://www.shadowserver.org/feed/',
+    type: 'rss',
+    category: 'threat_intel',
+    added_by: 'system'
+  },
+  {
+    name: 'Dragos Blog (ICS/OT)',
+    url: 'https://www.dragos.com/feed/',
+    type: 'rss',
+    category: 'threat_intel',
+    added_by: 'system'
+  },
+  {
+    name: 'Kaspersky ICS CERT',
+    url: 'https://ics-cert.kaspersky.com/feed/',
+    type: 'rss',
+    category: 'threat_intel',
+    added_by: 'system'
+  },
+  {
+    name: 'Intezer Blog',
+    url: 'https://intezer.com/feed/',
+    type: 'rss',
+    category: 'malware',
+    added_by: 'system'
+  },
+  {
+    name: 'VirusTotal Blog',
+    url: 'https://blog.virustotal.com/feeds/posts/default',
+    type: 'rss',
+    category: 'malware',
+    added_by: 'system'
+  },
+  {
+    name: 'Trail of Bits Blog',
+    url: 'https://blog.trailofbits.com/feed/',
+    type: 'rss',
+    category: 'vulnerability',
+    added_by: 'system'
+  },
+  {
+    name: 'Quarkslab Blog',
+    url: 'https://blog.quarkslab.com/feeds/all.rss.xml',
+    type: 'rss',
+    category: 'vulnerability',
+    added_by: 'system'
+  },
+  {
+    name: 'Synacktiv Publications',
+    url: 'https://www.synacktiv.com/en/feed/lastblog.xml',
+    type: 'rss',
+    category: 'vulnerability',
+    added_by: 'system'
+  },
+  {
+    name: 'Horizon3.ai Attack Research',
+    url: 'https://www.horizon3.ai/feed/',
+    type: 'rss',
+    category: 'vulnerability',
+    added_by: 'system'
+  },
+  {
+    name: 'Bugcrowd Blog',
+    url: 'https://www.bugcrowd.com/feed/',
+    type: 'rss',
+    category: 'vulnerability',
+    added_by: 'system'
+  },
+  {
+    name: 'HackerOne Blog',
+    url: 'https://www.hackerone.com/blog.rss',
+    type: 'rss',
+    category: 'vulnerability',
+    added_by: 'system'
+  },
+  {
+    name: 'Microsoft Security Update Guide',
+    url: 'https://api.msrc.microsoft.com/update-guide/rss',
+    type: 'rss',
+    category: 'advisory',
+    added_by: 'system'
+  },
+  {
+    name: 'Full Disclosure Mailing List',
+    url: 'https://seclists.org/rss/fulldisclosure.rss',
+    type: 'rss',
+    category: 'advisory',
+    added_by: 'system'
+  },
+  {
+    name: 'oss-security Mailing List',
+    url: 'https://seclists.org/rss/oss-sec.rss',
+    type: 'rss',
+    category: 'advisory',
+    added_by: 'system'
+  },
+  {
+    name: 'Debian Security Advisories',
+    url: 'https://www.debian.org/security/dsa-long',
+    type: 'rss',
+    category: 'advisory',
+    added_by: 'system'
+  },
 ];
 
 // System sources that were removed because their feeds are permanently broken.

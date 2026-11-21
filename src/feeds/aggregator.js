@@ -216,12 +216,27 @@ async function fetchAllSources() {
           console.error(`[Browser] Overall error: ${error.message}`);
         }
       } else {
-        console.log(`[Browser] Skipping ${browserSources.length} browser-type source(s) — no headless Chrome on this host (install Chrome or set PUPPETEER_EXECUTABLE_PATH).`);
+        // No headless Chrome here (e.g. Render free tier): fetch them like normal
+        // feeds instead — the RSS fetcher falls back to Google News if blocked.
+        console.log(`[Browser] No headless Chrome — fetching ${browserSources.length} browser-type source(s) as plain RSS (with fallback).`);
         for (const source of browserSources) {
-          db.updateSourceFetchStatus(source.id, {
-            last_fetched: new Date().toISOString(),
-            last_error: 'Headless browser not available on this host'
-          });
+          try {
+            const result = await fetchRSSFeed(source);
+            if (result.success && result.articles.length > 0) {
+              const inserted = db.insertArticles(result.articles);
+              totalNew += inserted.newCount;
+              totalFetched += result.articles.length;
+              newArticles.push(...inserted.newArticles);
+            }
+            if (!result.success) totalErrors++;
+            db.updateSourceFetchStatus(source.id, {
+              last_fetched: new Date().toISOString(),
+              last_error: result.success ? null : result.error
+            });
+          } catch (error) {
+            totalErrors++;
+            db.updateSourceFetchStatus(source.id, { last_fetched: new Date().toISOString(), last_error: error.message });
+          }
         }
       }
     }
