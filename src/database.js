@@ -191,6 +191,7 @@ function initializeSchema() {
     'ALTER TABLE articles ADD COLUMN threat_actors TEXT',
     'ALTER TABLE articles ADD COLUMN mitre_ids TEXT',
     'ALTER TABLE articles ADD COLUMN iocs TEXT',
+    'ALTER TABLE articles ADD COLUMN title_key TEXT',
     'ALTER TABLE notification_log ADD COLUMN user_id INTEGER',
   ];
   for (const sql of columnMigrations) {
@@ -289,6 +290,7 @@ function initializeSchema() {
     'CREATE INDEX IF NOT EXISTS idx_articles_url_hash ON articles(url_hash)',
     'CREATE INDEX IF NOT EXISTS idx_articles_user ON articles(user_id)',
     'CREATE INDEX IF NOT EXISTS idx_articles_sector ON articles(sector)',
+    'CREATE INDEX IF NOT EXISTS idx_articles_title_key ON articles(title_key)',
     'CREATE INDEX IF NOT EXISTS idx_sources_user ON sources(user_id)',
     'CREATE INDEX IF NOT EXISTS idx_reviews_article ON article_reviews(article_id)',
     'CREATE INDEX IF NOT EXISTS idx_reviews_user ON article_reviews(user_id)',
@@ -629,9 +631,43 @@ function isHttpUrl(u) {
   try { return ['http:', 'https:'].includes(new URL(u).protocol); } catch { return false; }
 }
 
+// Feeds use many date formats ("Fri, 20 Nov 2026 10:00:00 GMT", ISO, ...).
+// SQLite's date() only understands ISO-8601, so non-ISO dates silently fell out
+// of "threats today" and the activity chart. Normalise everything to ISO UTC;
+// unparseable or future dates (bad feed clocks) become "now".
+function normalizeDate(value) {
+  const now = new Date();
+  if (!value) return now.toISOString();
+  // Zone-less ISO timestamps (e.g. NVD's "2026-11-20T15:15:10.123") are UTC
+  const v = typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(value) ? value + 'Z' : value;
+  const d = new Date(v);
+  if (isNaN(d.getTime())) return now.toISOString();
+  if (d.getTime() > now.getTime() + 24 * 60 * 60 * 1000) return now.toISOString();
+  return d.toISOString();
+}
+
+// Normalised title used to merge the same story arriving from several sources
+// (direct feed + Google News fallback, syndicated posts, mirrors).
+function titleKey(title) {
+  return String(title || '')
+    .toLowerCase()
+    .replace(/\s+[-|–—]\s+[^-|–—]{2,60}$/, '')   // trailing " - Publisher"
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
 function insertArticle(article) {
   if (!article || !isHttpUrl(article.url)) {
     return { success: false, isNew: false, error: 'Rejected non-http(s) article URL' };
+  }
+  article.published_date = normalizeDate(article.published_date);
+  const key = titleKey(article.title);
+  // Same story already stored in the last 7 days (same owner scope)? Skip it.
+  if (key.length >= 20) {
+    const dup = getDb().prepare(
+      `SELECT id FROM articles WHERE title_key = ? AND user_id IS ? AND fetched_date >= datetime('now', '-7 days') LIMIT 1`
+    ).get(key, article.user_id || null);
+    if (dup) return { success: true, isNew: false, duplicate: true };
   }
   // Centralized enrichment — fills sector / threat_actors / mitre_ids for every
   // source (RSS, CVE, CISA KEV, dark web, scraped) that didn't set them.
@@ -639,8 +675,8 @@ function insertArticle(article) {
   const urlHash = hashUrl(article.url);
   try {
     const result = getDb().prepare(`
-      INSERT INTO articles (url_hash, title, description, url, source_name, source_type, source_id, user_id, author, published_date, category, severity, cve_id, is_patched, has_poc, tags, mitre_ids, iocs, sector, threat_actors)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO articles (url_hash, title, description, url, source_name, source_type, source_id, user_id, author, published_date, category, severity, cve_id, is_patched, has_poc, tags, mitre_ids, iocs, sector, threat_actors, title_key)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       urlHash,
       article.title || 'Untitled',
@@ -661,7 +697,8 @@ function insertArticle(article) {
       article.mitre_ids || null,
       article.iocs || null,
       article.sector || null,
-      article.threat_actors || null
+      article.threat_actors || null,
+      key || null
     );
     return { id: result.lastInsertRowid, success: true, isNew: true };
   } catch (err) {
@@ -777,8 +814,14 @@ function getArticleStats(userId = null) {
     `SELECT COUNT(*) as count FROM articles WHERE date(published_date) = date('now', '-1 day') ${userFilter}`
   ).get(...userFilterParam).count;
 
+  // Unique critical *vulnerabilities*: one per CVE (many articles cover the same
+  // CVE), plus critical vulnerability/advisory items without a CVE ID. Critical
+  // general news no longer inflates this number.
   const criticalVulns = d.prepare(
-    `SELECT COUNT(*) as count FROM articles WHERE severity = 'critical' AND date(published_date) >= date('now', '-7 days') ${userFilter}`
+    `SELECT COUNT(DISTINCT COALESCE(cve_id, 'article-' || id)) as count FROM articles
+     WHERE severity = 'critical'
+       AND (cve_id IS NOT NULL OR category IN ('vulnerability', 'advisory'))
+       AND date(published_date) >= date('now', '-7 days') ${userFilter}`
   ).get(...userFilterParam).count;
 
   const pocsDetected = d.prepare(

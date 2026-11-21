@@ -10,7 +10,10 @@
 const SECTOR_PATTERNS = [
   ['financial', /\b(bank|banking|financial|finance|fintech|payment|credit[- ]card|swift|atm|pci[- ]dss|pci|wire transfer|monetary|insurer|insurance|stock exchange|brokerage|trading platform|crypto(currency)?[- ]exchange|fs-isac)\b/i],
   ['healthcare', /\b(hospital|hipaa|patient|medical|pharma(ceutical)?|healthcare|health[- ]care|clinic|ehr|health data|medicare|medicaid|biotech|life sciences|medtech)\b/i],
-  ['government', /\b(government|federal|election|state[- ]sponsored|military|defense|ministry|municipal|public sector|national security|pentagon|nation[- ]state|city council|\.gov|cisa|nsa|fbi)\b/i],
+  // Victim sector only: agencies that *report* (CISA/FBI/NSA) and attacker
+  // descriptors (nation-state, state-sponsored) don't make an article "government",
+  // and "defense evasion" isn't the defense industry.
+  ['government', /\b(government agenc(y|ies)|government (network|system|website|entit(y|ies))s?|federal agenc(y|ies)|election(s)?|military|defen[cs]e (contractor|industr(y|ial)|ministry|department)|ministry|municipal(ity|ities)?|public sector|pentagon|city council|local government)\b/i],
   ['technology', /\b(cloud|saas|paas|devops|kubernetes|docker|ci\/cd|software supply chain|open[- ]source|data center|semiconductor|microservice|npm|pypi|github|gitlab|api gateway|tech giant|software vendor)\b/i],
 ];
 

@@ -31,56 +31,119 @@ const parser = new RSSParser({
 const failureTracker = new Map();
 const MAX_CONSECUTIVE_FAILURES = 5;
 
-/**
- * Detect category from content/title
- */
-function detectCategory(title, description) {
-  const text = `${title} ${description}`.toLowerCase();
+// ============================================
+// CLASSIFICATION (word-boundary aware)
+// Earlier versions matched raw substrings, so "rce" hit "source"/"resource",
+// "apt" hit "adapt"/"laptop", "tor " hit "monitor", "low" hit "follow" —
+// which badly inflated "critical" counts and mis-categorised articles.
+// ============================================
 
-  if (/cve-\d{4}-\d+|vulnerability|vuln|exploit|rce|xss|sqli|buffer overflow|zero[- ]day/i.test(text)) {
-    return 'vulnerability';
+const CATEGORY_RULES = [
+  ['vulnerability', [
+    /\bCVE-\d{4}-\d{4,}\b/i, /\bvulnerabilit(y|ies)\b/i, /\bvulns?\b/i, /\bexploit(s|ed|ation|ing)?\b/i,
+    /\bRCE\b/, /\bremote code execution\b/i, /\bXSS\b/, /\bcross[- ]site scripting\b/i,
+    /\bSQL ?injection\b/i, /\bSQLi\b/, /\bbuffer overflow\b/i, /\b(zero|0)[- ]days?\b/i,
+    /\bsecurity (flaw|bug|hole)s?\b/i, /\bflaws?\b/i, /\bprivilege escalation\b/i, /\bauthentication bypass\b/i
+  ]],
+  ['malware', [
+    /\b(malware|trojans?|ransomware|botnets?|backdoors?|rootkits?|spyware|infostealers?|stealers?|wipers?|worms?|loaders?|droppers?)\b/i,
+    /\bRATs?\b/, /\bremote access trojan\b/i
+  ]],
+  ['breach', [
+    /\bdata breach(es)?\b/i, /\bbreach(ed|es)?\b/i, /\bleak(ed|s)?\b/i, /\bhack(ed|ers?|ing)?\b/i,
+    /\bcompromised\b/i, /\bstolen (data|credentials|records)\b/i, /\bexposed (data|records|database|personal)\b/i
+  ]],
+  ['advisory', [
+    /\badvisor(y|ies)\b/i, /\bsecurity (update|bulletin|notice|alert)s?\b/i, /\bpatch(es|ed)?\b/i,
+    /\bPatch Tuesday\b/i, /\bbulletin\b/i
+  ]],
+  ['threat_intel', [
+    /\bAPT ?-?\d*\b/, /\bthreat (actor|group)s?\b/i, /\bcampaigns?\b/i, /\bnation[- ]state\b/i,
+    /\bstate[- ]sponsored\b/i, /\bespionage\b/i, /\bcyber ?-?attacks?\b/i, /\bTTPs?\b/
+  ]],
+  ['darkweb', [
+    /\bdark ?web\b/i, /\bdarknet\b/i, /\bunderground (forum|market)s?\b/i, /\.onion\b/i,
+    /\bTor (network|browser|hidden)\b/i, /\bleak sites?\b/i
+  ]]
+];
+
+function classifyText(text) {
+  for (const [category, patterns] of CATEGORY_RULES) {
+    if (patterns.some(re => re.test(text))) return category;
   }
-  if (/malware|trojan|ransomware|botnet|backdoor|rootkit|spyware|worm|rat /i.test(text)) {
-    return 'malware';
-  }
-  if (/breach|leak|data (loss|exposure|stolen)|hack|compromised|credential/i.test(text)) {
-    return 'breach';
-  }
-  if (/advisory|alert|patch|update|bulletin|security notice/i.test(text)) {
-    return 'advisory';
-  }
-  if (/apt|threat actor|campaign|nation[- ]state|espionage|cyber[- ]attack/i.test(text)) {
-    return 'threat_intel';
-  }
-  if (/dark ?web|underground|tor |onion|leaked|darknet/i.test(text)) {
-    return 'darkweb';
-  }
-  return 'news';
+  return null;
 }
 
 /**
- * Detect severity from content
+ * Detect category from content/title. The title is the strongest signal, so it
+ * is classified on its own first; the body is only used when the title is generic.
+ */
+function detectCategory(title, description) {
+  return classifyText(title || '') || classifyText(`${title || ''} ${description || ''}`) || 'news';
+}
+
+/**
+ * Pull a CVSS base score out of text: "CVSS 9.8", "CVSS score of 9.8",
+ * "CVSSv3.1: 7.5", "CVSS 3.1 base score 8.1".
+ */
+function extractCvssScore(text) {
+  const m = String(text || '').match(/\bcvss(?:\s?v?\s?[234](?:\.\d)?)?\b[^0-9\n]{0,25}?(10(?:\.0)?|[0-9]\.[0-9]|[0-9])(?![\d.])/i);
+  if (!m) return null;
+  const v = parseFloat(m[1]);
+  return v >= 0 && v <= 10 ? v : null;
+}
+
+const SEVERITY_RULES = {
+  critical: [
+    /\bactively[- ]exploited\b/i, /\bexploited in the wild\b/i, /\bunder active (exploitation|attack)\b/i,
+    /\b(zero|0)[- ]days?\b(?!\s+(protection|defen[cs]e|prevention|initiative|program))/i,
+    /\bcritical[- ](severity|vulnerabilit(y|ies)|flaws?|bugs?|rce|remote code|security (flaw|bug|issue|update|patch|fix))/i,
+    /\b(severity|rated|rating)[:\s]+critical\b/i,
+    /\bknown exploited vulnerabilit/i, /\bKEV\b/,
+    /\bemergency (patch|update|directive|fix)/i,
+    /\b(unauthenticated|pre-?auth(entication)?)\b[^.\n]{0,60}\b(remote code execution|RCE|code execution)\b/i,
+    /\bwormable\b/i
+  ],
+  high: [
+    /\bremote code execution\b/i, /\bRCE\b/, /\bhigh[- ]severity\b/i, /\b(severity|rated|rating)[:\s]+high\b/i,
+    /\bprivilege escalation\b/i, /\bauth(entication)? bypass\b/i, /\bsandbox escape\b/i,
+    /\bransomware attack/i, /\bdata breach\b/i, /\bsupply[- ]chain (attack|compromise)\b/i,
+    /\bbackdoor(ed)?\b/i, /\bproof[- ]of[- ]concept\b/i,
+    /\b(account|device|server|full|complete) takeover\b/i, /\btake (full )?(control|over)\b/i
+  ],
+  medium: [
+    /\b(medium|moderate)[- ]severity\b/i, /\b(severity|rated|rating)[:\s]+(medium|moderate)\b/i,
+    /\bcross[- ]site scripting\b/i, /\bXSS\b/, /\bdenial[- ]of[- ]service\b/i, /\bDoS\b/,
+    /\binformation disclosure\b/i, /\bphishing\b/i
+  ],
+  low: [
+    /\blow[- ]severity\b/i, /\b(severity|rated|rating)[:\s]+low\b/i, /\binformational\b/i
+  ]
+};
+
+/**
+ * Detect severity: a stated CVSS score wins; otherwise the strongest keyword
+ * signal; otherwise a conservative default by category.
  */
 function detectSeverity(title, description, category) {
-  const text = `${title} ${description}`.toLowerCase();
+  const text = `${title || ''} ${description || ''}`;
 
-  if (/critical|cvss[:\s]*(?:9|10)|emergency|actively exploited|zero[- ]day|remote code execution|rce/i.test(text)) {
-    return 'critical';
-  }
-  if (/high|severe|important|cvss[:\s]*(?:7|8)|privilege escalation/i.test(text)) {
-    return 'high';
-  }
-  if (/medium|moderate|cvss[:\s]*(?:4|5|6)/i.test(text)) {
-    return 'medium';
-  }
-  if (/low|informational|cvss[:\s]*(?:0|1|2|3)/i.test(text)) {
+  const score = extractCvssScore(text);
+  if (score !== null) {
+    if (score >= 9) return 'critical';
+    if (score >= 7) return 'high';
+    if (score >= 4) return 'medium';
     return 'low';
   }
 
-  // Default by category
-  if (category === 'vulnerability' || category === 'breach') return 'high';
-  if (category === 'advisory') return 'medium';
-  return 'medium';
+  for (const level of ['critical', 'high', 'medium', 'low']) {
+    if (SEVERITY_RULES[level].some(re => re.test(text))) return level;
+  }
+
+  // No explicit signal: security-relevant categories default to medium,
+  // general news to low (so it doesn't drown out real issues).
+  if (['vulnerability', 'malware', 'breach', 'advisory', 'threat_intel', 'darkweb'].includes(category)) return 'medium';
+  return 'low';
 }
 
 /**
@@ -88,26 +151,27 @@ function detectSeverity(title, description, category) {
  */
 function extractCVE(text) {
   if (!text) return null;
-  const match = text.match(/CVE-\d{4}-\d{4,}/i);
+  const match = text.match(/\bCVE-\d{4}-\d{4,}\b/i);
   return match ? match[0].toUpperCase() : null;
 }
 
 /**
- * Detect if PoC is mentioned
+ * Detect if a public exploit / PoC is mentioned
  */
 function detectPOC(title, description) {
-  const text = `${title} ${description}`.toLowerCase();
-  return /proof[- ]of[- ]concept|poc |exploit[- ]code|exploit available|weaponized|exploit-db|github\.com.*exploit|metasploit/i.test(text) ? 1 : 0;
+  const text = `${title || ''} ${description || ''}`;
+  return /\bproof[- ]of[- ]concept\b|\bPoC\b|\bexploit[- ]code\b|\b(public|working|functional) exploits?\b|\bexploits? (is |are |has been |have been )?(now )?(available|released|published)\b|\bweaponi[sz]ed\b|\bexploit-db\b|\bmetasploit\b|github\.com\/\S*exploit/i.test(text) ? 1 : 0;
 }
 
 /**
- * Detect patch status
+ * Detect patch status: 1 = patched, 0 = unpatched, -1 = unknown
  */
 function detectPatchStatus(title, description) {
-  const text = `${title} ${description}`.toLowerCase();
-  if (/patched|fix available|fixed|update released|patch released|remediat/i.test(text)) return 1;
-  if (/unpatched|no fix|no patch|zero[- ]day|0[- ]day/i.test(text)) return 0;
-  return -1; // unknown
+  const text = `${title || ''} ${description || ''}`;
+  if (/\bunpatched\b|\bno (fix|patch)\b|\bnot (yet )?(been )?(patched|fixed)\b|\bwithout a (fix|patch)\b|\bpatch (is )?not (yet )?available\b/i.test(text)) return 0;
+  if (/\bpatch(ed|es)\b|\bfix(ed|es)\b|\b(fix|patch|update)s? (is |are )?(now )?(available|released)\b|\bsecurity updates? (released|available|address)|\bremediat(ed|ion)\b|\bupgrade to (version )?\d/i.test(text)) return 1;
+  if (/\b(zero|0)[- ]days?\b(?!\s+(protection|defen[cs]e|prevention|initiative|program))/i.test(text)) return 0;
+  return -1;
 }
 
 /**
