@@ -89,14 +89,12 @@ function extractArticleLinks($, baseUrl) {
       let href = $(el).attr('href');
       if (!href) return;
 
-      // Make absolute URL
-      if (href.startsWith('/')) {
-        try {
-          const base = new URL(baseUrl);
-          href = `${base.protocol}//${base.host}${href}`;
-        } catch { return; }
-      }
-      if (!href.startsWith('http')) return;
+      // Make absolute URL (handles "/path", "//host/path" and "path" correctly;
+      // "//cdn.example/x" used to become "https://site//cdn.example/x" and
+      // "posts/1" was dropped)
+      if (/^(javascript|mailto|tel|data):/i.test(href.trim())) return;
+      try { href = new URL(href, baseUrl).href; } catch { return; }
+      if (!/^https?:/i.test(href)) return;
 
       // Skip non-article URLs
       if (href.includes('#') || href.includes('javascript:') || href.includes('/tag/') ||
@@ -166,7 +164,7 @@ async function scrapeSource(source) {
           user_id: source.user_id || null,
           author: null,
           published_date: new Date().toISOString(),
-          category: source.category || category,
+          category: source.category && source.category !== 'news' ? source.category : category,
           severity: detectSeverity(title, '', category),
           cve_id: extractCVE(title),
           is_patched: detectPatchStatus(title, ''),
@@ -190,7 +188,7 @@ async function scrapeSource(source) {
           user_id: source.user_id || null,
         author: metadata.author,
         published_date: metadata.publishedDate || new Date().toISOString(),
-        category: source.category || category,
+        category: source.category && source.category !== 'news' ? source.category : category,
         severity: detectSeverity(metadata.title, metadata.description, category),
         cve_id: extractCVE(fullText),
         is_patched: detectPatchStatus(metadata.title, metadata.description),
