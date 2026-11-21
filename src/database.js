@@ -307,7 +307,18 @@ function initializeSchema() {
     ).get();
     if (hasOldUnique && hasOldUnique.sql && hasOldUnique.sql.includes('url TEXT NOT NULL UNIQUE')) {
       console.log('[DB] Migrating sources table: url UNIQUE -> UNIQUE(url, user_id)...');
-      d.exec(`
+      // Columns are copied BY NAME: in old tables user_id was appended by ALTER
+      // TABLE (last column), so "SELECT *" shifted every value one slot over.
+      // Foreign keys are switched off for the swap, otherwise DROP TABLE fires
+      // articles.source_id ON DELETE SET NULL and detaches every article.
+      const srcCols = d.prepare('PRAGMA table_info(sources)').all().map(c => c.name);
+      const copyCols = ['id', 'name', 'url', 'type', 'category', 'enabled', 'added_by', 'user_id',
+        'last_fetched', 'last_error', 'fetch_count', 'created_at'].filter(c => srcCols.includes(c)).join(', ');
+      d.pragma('foreign_keys = OFF');
+      try {
+        d.exec('BEGIN');
+        d.exec(`
+        DROP TABLE IF EXISTS sources_new;
         CREATE TABLE sources_new (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           name TEXT NOT NULL,
@@ -323,11 +334,18 @@ function initializeSchema() {
           created_at TEXT DEFAULT (datetime('now')),
           UNIQUE(url, user_id)
         );
-        INSERT INTO sources_new SELECT * FROM sources;
+        INSERT INTO sources_new (${copyCols}) SELECT ${copyCols} FROM sources;
         DROP TABLE sources;
         ALTER TABLE sources_new RENAME TO sources;
         CREATE INDEX IF NOT EXISTS idx_sources_user ON sources(user_id);
-      `);
+        `);
+        d.exec('COMMIT');
+      } catch (e) {
+        try { d.exec('ROLLBACK'); } catch (_) { /* not in a transaction */ }
+        throw e;
+      } finally {
+        d.pragma('foreign_keys = ON');
+      }
       console.log('[DB] Sources table migrated successfully ✓');
     }
   } catch(e) {
@@ -338,7 +356,9 @@ function initializeSchema() {
   try {
     const admin = d.prepare("SELECT id FROM users WHERE role = 'admin' ORDER BY id ASC LIMIT 1").get();
     if (admin) {
-      const orphanedSources = d.prepare('UPDATE sources SET user_id = ? WHERE user_id IS NULL').run(admin.id);
+      // OR IGNORE: a system source whose URL the admin also added personally
+      // would violate UNIQUE(url, user_id) and abort the whole migration.
+      const orphanedSources = d.prepare('UPDATE OR IGNORE sources SET user_id = ? WHERE user_id IS NULL').run(admin.id);
       const orphanedArticles = d.prepare('UPDATE articles SET user_id = ? WHERE user_id IS NULL').run(admin.id);
       if (orphanedSources.changes > 0 || orphanedArticles.changes > 0) {
         console.log(`[DB] Assigned ${orphanedSources.changes} orphaned sources and ${orphanedArticles.changes} orphaned articles to admin (id=${admin.id})`);
@@ -347,11 +367,52 @@ function initializeSchema() {
   } catch(e) {
     console.log('[DB] Orphan migration note:', e.message);
   }
+
+  // Step 7: Rows stored before published_date normalisation may hold RFC-822
+  // dates ("Fri, 20 Nov 2026 10:00:00 GMT") that SQLite's date() can't parse,
+  // so they vanished from "threats today" and showed up as a null day in the
+  // timeline. Rewrite them once to ISO UTC (falls back to fetched_date).
+  try {
+    const legacy = d.prepare(
+      "SELECT id, published_date, fetched_date FROM articles WHERE published_date IS NULL OR published_date NOT GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T*'"
+    ).all();
+    if (legacy.length > 0) {
+      const upd = d.prepare('UPDATE articles SET published_date = ? WHERE id = ?');
+      d.transaction(() => {
+        for (const r of legacy) {
+          const fetched = r.fetched_date && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(r.fetched_date)
+            ? r.fetched_date.replace(' ', 'T') + 'Z' : r.fetched_date;
+          const parsed = r.published_date && !isNaN(new Date(r.published_date).getTime()) ? r.published_date : fetched;
+          upd.run(normalizeDate(parsed), r.id);
+        }
+      })();
+      console.log(`[DB] Normalised published_date on ${legacy.length} legacy article(s) ✓`);
+    }
+  } catch(e) {
+    console.log('[DB] Date normalisation note:', e.message);
+  }
 }
 
 // --- URL Hash for dedup ---
 function hashUrl(url) {
   return crypto.createHash('sha256').update(url.trim().toLowerCase()).digest('hex');
+}
+
+// Per-owner dedup key: unowned (system) articles keep the plain url hash.
+function articleHash(url, userId) {
+  return userId ? hashUrl(`${url.trim()}\n${userId}`) : hashUrl(url);
+}
+
+// LIKE pattern that matches `s` literally (use with ESCAPE '\').
+function likeContains(s) {
+  return '%' + String(s).replace(/[\\%_]/g, '\\$&') + '%';
+}
+
+// Clamp pagination input: a negative LIMIT means "no limit" in SQLite.
+function clampInt(v, def, min, max) {
+  const n = parseInt(v, 10);
+  if (!Number.isFinite(n)) return def;
+  return Math.min(Math.max(n, min), max);
 }
 
 // ============================================
@@ -590,12 +651,18 @@ function updateSource(id, updates) {
   for (const [key, val] of Object.entries(updates)) {
     if (allowed.includes(key)) {
       fields.push(`${key} = ?`);
-      values.push(val);
+      // better-sqlite3 can't bind booleans (JSON true/false threw -> HTTP 500)
+      values.push(key === 'enabled' ? (val && val !== '0' ? 1 : 0) : val);
     }
   }
   if (fields.length === 0) return { success: false, error: 'No valid fields to update' };
   values.push(id);
-  getDb().prepare(`UPDATE sources SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+  try {
+    getDb().prepare(`UPDATE sources SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+  } catch (err) {
+    if (err.message.includes('UNIQUE')) return { success: false, error: 'Source URL already exists for this user' };
+    throw err;
+  }
   return { success: true };
 }
 
@@ -638,11 +705,15 @@ function isHttpUrl(u) {
 function normalizeDate(value) {
   const now = new Date();
   if (!value) return now.toISOString();
-  // Zone-less ISO timestamps (e.g. NVD's "2026-11-20T15:15:10.123") are UTC
-  const v = typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(value) ? value + 'Z' : value;
+  // Zone-less ISO timestamps (e.g. NVD's "2026-11-20T15:15:10.123", or SQLite's
+  // "2026-11-20 15:15:10") are UTC
+  const v = typeof value === 'string' && /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(value) ? value.replace(' ', 'T') + 'Z' : value;
   const d = new Date(v);
   if (isNaN(d.getTime())) return now.toISOString();
-  if (d.getTime() > now.getTime() + 24 * 60 * 60 * 1000) return now.toISOString();
+  // Any future timestamp is a bad feed clock (often local time labelled GMT);
+  // storing it put items on "tomorrow" (missing from threats-today) and pinned
+  // them to the top of the feed.
+  if (d.getTime() > now.getTime()) return now.toISOString();
   return d.toISOString();
 }
 
@@ -663,8 +734,14 @@ function insertArticle(article) {
   // Cheap check first: already stored? Skip BEFORE the (CPU-heavy) enrichment.
   // Every 15-min cycle re-reads thousands of known items; on a small CPU share,
   // enriching them all blocked the event loop and failed health checks.
-  const urlHashEarly = hashUrl(article.url);
-  if (getDb().prepare('SELECT 1 FROM articles WHERE url_hash = ? LIMIT 1').get(urlHashEarly)) {
+  // url_hash is UNIQUE across the whole table but articles are per-user, so a
+  // plain url hash let the first owner "claim" a story and every other user
+  // subscribed to the same feed never received it. Owned articles use a
+  // per-user hash; legacy rows (plain hash) still dedupe for their own owner.
+  const plainHash = hashUrl(article.url);
+  const urlHash = articleHash(article.url, article.user_id);
+  if (getDb().prepare('SELECT 1 FROM articles WHERE url_hash = ? OR (url_hash = ? AND user_id IS ?) LIMIT 1')
+    .get(urlHash, plainHash, article.user_id || null)) {
     return { success: true, isNew: false };
   }
   article.published_date = normalizeDate(article.published_date);
@@ -679,7 +756,6 @@ function insertArticle(article) {
   // Centralized enrichment — fills sector / threat_actors / mitre_ids for every
   // source (RSS, CVE, CISA KEV, dark web, scraped) that didn't set them.
   enrichArticle(article);
-  const urlHash = hashUrl(article.url);
   try {
     const result = getDb().prepare(`
       INSERT INTO articles (url_hash, title, description, url, source_name, source_type, source_id, user_id, author, published_date, category, severity, cve_id, is_patched, has_poc, tags, mitre_ids, iocs, sector, threat_actors, title_key)
@@ -760,8 +836,8 @@ function getArticles({ page = 1, limit = 50, category, severity, search, source_
     params.push(sector);
   }
   if (threat_actor) {
-    where.push('articles.threat_actors LIKE ?');
-    params.push(`%${threat_actor}%`);
+    where.push("articles.threat_actors LIKE ? ESCAPE '\\'");
+    params.push(likeContains(threat_actor));
   }
   // Detection-engineering filters
   if (has_poc === '1' || has_poc === 1 || has_poc === true) {
@@ -775,8 +851,8 @@ function getArticles({ page = 1, limit = 50, category, severity, search, source_
     params.push(parseInt(is_patched, 10));
   }
   if (search) {
-    where.push('(articles.title LIKE ? OR articles.description LIKE ? OR articles.cve_id LIKE ? OR articles.author LIKE ? OR articles.tags LIKE ? OR articles.threat_actors LIKE ?)');
-    const term = `%${search}%`;
+    where.push("(articles.title LIKE ? ESCAPE '\\' OR articles.description LIKE ? ESCAPE '\\' OR articles.cve_id LIKE ? ESCAPE '\\' OR articles.author LIKE ? ESCAPE '\\' OR articles.tags LIKE ? ESCAPE '\\' OR articles.threat_actors LIKE ? ESCAPE '\\')");
+    const term = likeContains(search);
     params.push(term, term, term, term, term, term);
   }
   if (startDate) {
@@ -789,6 +865,8 @@ function getArticles({ page = 1, limit = 50, category, severity, search, source_
   }
 
   const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+  page = clampInt(page, 1, 1, 1000000);
+  limit = clampInt(limit, 50, 1, 200);
   const offset = (page - 1) * limit;
 
   const countRow = getDb().prepare(`SELECT COUNT(*) as total FROM articles ${whereClause}`).get(...params);
@@ -896,13 +974,14 @@ function markAsNotified(articleIds) {
 }
 
 function searchArticles(query, limit = 50, userId = null) {
-  const term = `%${query}%`;
+  const term = likeContains(query);
+  limit = clampInt(limit, 50, 1, 200);
   const userFilter = userId ? `AND user_id = ?` : '';
   const params = userId
     ? [term, term, term, term, term, userId, limit]
     : [term, term, term, term, term, limit];
   return getDb().prepare(
-    `SELECT * FROM articles WHERE (title LIKE ? OR description LIKE ? OR cve_id LIKE ? OR tags LIKE ? OR author LIKE ?) ${userFilter} ORDER BY published_date DESC LIMIT ?`
+    `SELECT * FROM articles WHERE (title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR cve_id LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\' OR author LIKE ? ESCAPE '\\') ${userFilter} ORDER BY published_date DESC LIMIT ?`
   ).all(...params);
 }
 
@@ -1042,7 +1121,8 @@ function updateNotificationSettings(settings, userId = null) {
       // Skip masked secrets (don't overwrite a real value with its masked form)
       if ((key === 'telegram_bot_token' || key === 'whatsapp_apikey') && val && String(val).includes('...')) continue;
       fields.push(`${key} = ?`);
-      values.push(val);
+      // better-sqlite3 can't bind booleans (JSON true/false threw -> HTTP 500)
+      values.push(typeof val === 'boolean' ? (val ? 1 : 0) : val);
     }
   }
   if (fields.length === 0) return { success: false };
