@@ -132,7 +132,7 @@ test('aggregator: failed API / custom / dark-web fetches are counted and mapped 
   reset();
   const statusUpdates = [];
   fakeDb.getEnabledSources = () => [
-    { id: 21, name: 'NVD', type: 'api', url: 'https://services.nvd.nist.gov/rest/json/cves/2.0' },
+    { id: 21, name: 'NVD', type: 'api', added_by: 'system', url: 'https://services.nvd.nist.gov/rest/json/cves/2.0' },
     { id: 22, name: 'ThreatFox', type: 'darkweb', url: 'https://threatfox-api.abuse.ch/api/v1/' },
     { id: 23, name: 'ThreatFox', type: 'darkweb', url: 'https://threatfox-api.abuse.ch/api/v1/', user_id: 9 },
   ];
@@ -185,4 +185,32 @@ test('URLhaus and MalwareBazaar request bounded result sets', async () => {
   await dw.fetchMalwareBazaar({ id: 4 });
   assert.match(calls.axiosGet[0].url, /\/urls\/recent\/limit\/100\/$/);
   assert.equal(calls.axiosPost[0].body, 'query=get_recent&selector=100');
+});
+
+
+test('aggregator: NVD / KEV run only for system sources, once per cycle', async () => {
+  reset();
+  delete require.cache[require.resolve('../src/feeds/aggregator')];
+  const statusUpdates = [];
+  fakeDb.getEnabledSources = () => [
+    { id: 31, name: 'NVD', type: 'api', added_by: 'system', url: 'https://services.nvd.nist.gov/rest/json/cves/2.0' },
+    { id: 32, name: 'NVD copy', type: 'api', added_by: 'system', url: 'https://services.nvd.nist.gov/rest/json/cves/2.0?x' },
+    { id: 33, name: 'my NVD', type: 'api', added_by: 'user', user_id: 5, url: 'https://services.nvd.nist.gov/rest/json/cves/2.0' },
+    { id: 34, name: 'my KEV', type: 'api', added_by: 'user', user_id: 5, url: 'https://www.cisa.gov/x/known_exploited_vulnerabilities.json' },
+  ];
+  fakeDb.updateSourceFetchStatus = (id, s) => statusUpdates.push({ id, err: s.last_error || null });
+  state.axiosGet = async () => ({ data: { vulnerabilities: [] } });
+  const realSetTimeout = global.setTimeout;
+  global.setTimeout = (fn, ms, ...a) => realSetTimeout(fn, Math.min(ms, 1), ...a);
+  try {
+    const agg = require('../src/feeds/aggregator');
+    await agg.fetchAllSources();
+    const nvdCalls = calls.axiosGet.filter(c => /nvd\.nist\.gov/.test(c.url));
+    assert.equal(nvdCalls.length, 1, 'NVD called once, only for the first system source');
+    assert.ok(!calls.axiosGet.some(c => /known_exploited/.test(c.url)), 'user KEV source not fetched');
+    assert.match(statusUpdates.find(u => u.id === 33).err, /platform/);
+    assert.match(statusUpdates.find(u => u.id === 34).err, /platform/);
+  } finally {
+    global.setTimeout = realSetTimeout;
+  }
 });

@@ -115,9 +115,27 @@ async function fetchAllSources() {
 
     // --- 2. Fetch CVE/API Sources ---
     console.log(`\n[API] Fetching ${apiSources.length} API sources...`);
+    const apiSeen = new Set();
     for (const source of apiSources) {
       try {
         let result;
+
+        // The NVD / CISA KEV fetchers use the server's own API key and rate-limit
+        // budget, so only the built-in (system) sources may trigger them, and
+        // each one at most once per cycle — a user-added "api" source pointing at
+        // NVD used to cost a full extra NVD call + 6.5 s pause each.
+        const kind = source.url.includes('nvd.nist.gov') ? 'nvd'
+          : source.url.includes('known_exploited_vulnerabilities') ? 'kev' : null;
+        if (kind && (source.added_by !== 'system' || apiSeen.has(kind))) {
+          db.updateSourceFetchStatus(source.id, {
+            last_fetched: new Date().toISOString(),
+            last_error: source.added_by !== 'system'
+              ? 'Built-in API feeds (NVD / CISA KEV) are provided by the platform sources'
+              : null
+          });
+          continue;
+        }
+        if (kind) apiSeen.add(kind);
 
         if (source.url.includes('nvd.nist.gov')) {
           const apiKey = process.env.NVD_API_KEY || null;
