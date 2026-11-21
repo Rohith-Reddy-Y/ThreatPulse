@@ -12,6 +12,11 @@
   // Access token lifetime is 15 min; refresh proactively at 13 min
   const REFRESH_MARGIN = 13 * 60 * 1000; // refresh 2 min before expiry
   let refreshTimer = null;
+  let refreshPromise = null;   // single-flight: concurrent 401s share one refresh
+  let sessionEpoch = 0;        // bumped on logout so late refresh results are ignored
+  let clockInterval = null;
+  let faviconInterval = null;
+  let resetAiPanel = () => {}; // assigned in bindEvents (AI panel state lives there)
 
   //
   //  STATE
@@ -59,6 +64,11 @@
     return match ? match[1] : null;
   }
 
+  // Parse a JSON body without throwing on empty/HTML error pages (e.g. proxy 502s)
+  async function readJson(res) {
+    try { return await res.json(); } catch { return {}; }
+  }
+
   async function api(method, endpoint, body = null) {
     const opts = {
       method,
@@ -86,19 +96,29 @@
           logout();
           throw new Error('Session expired');
         }
-        const retryData = await retryRes.json();
+        const retryData = await readJson(retryRes);
         if (!retryRes.ok) throw new Error(retryData?.error || `Request failed (${retryRes.status})`);
         return retryData;
       }
       logout();
       throw new Error('Session expired');
     }
-    const data = await res.json();
+    const data = await readJson(res);
     if (!res.ok) throw new Error(data?.error || `Request failed (${res.status})`);
     return data;
   }
 
-  async function refreshAccessToken() {
+  // The server rotates (revokes) the refresh token on every use, so two parallel
+  // refreshes would make the second one fail and log the user out. Share one.
+  function refreshAccessToken() {
+    if (!refreshPromise) {
+      refreshPromise = doRefreshAccessToken().finally(() => { refreshPromise = null; });
+    }
+    return refreshPromise;
+  }
+
+  async function doRefreshAccessToken() {
+    const epoch = sessionEpoch;
     try {
       const csrf = getCsrfToken();
       const res = await fetch(d('L2FwaS9hdXRoL3JlZnJlc2g='), {
@@ -107,7 +127,12 @@
       });
       if (!res.ok) return false;
       const data = await res.json();
+      if (epoch !== sessionEpoch) return false; // logged out while refreshing
       if (data.success && data.user) {
+        // Refresh payload omits mustChangePassword; keep the flag we already have
+        if (currentUser && currentUser.id === data.user.id && currentUser.mustChangePassword) {
+          data.user.mustChangePassword = true;
+        }
         currentUser = data.user;
         updateUserMenu();
         scheduleAutoRefresh();
@@ -138,21 +163,48 @@
   }
 
   function setUser(user) {
+    // Switching account (e.g. guest -> signed in): drop the previous user's AI chat
+    if (!currentUser || currentUser.id !== user.id) resetAiPanel();
     currentUser = user;
     updateUserMenu();
     scheduleAutoRefresh();
     hideAuth();
   }
 
+  // Wipe everything the previous user could leave behind in the DOM
+  function resetSessionUi() {
+    ['#email-modal', '#password-modal', '#verification-modal'].forEach(sel => $(sel)?.classList.add('hidden'));
+    ['#password-form', '#email-form', '#verification-form', '#notification-form', '#login-form'].forEach(sel => $(sel)?.reset());
+    $('#cancel-password-btn')?.classList.remove('hidden');
+    $('#password-forced-notice')?.classList.add('hidden');
+    $('#user-dropdown')?.classList.add('hidden');
+    state.pendingVerificationType = null;
+    state.articles = [];
+    state.sources = [];
+    state.currentPage = 1;
+    articlesReqSeq++;            // discard any in-flight article response from the old session
+    state.isLoading = false;
+    hideLoader();
+    const ac = $('#articles-container'); if (ac) ac.innerHTML = '';
+    renderSources();
+    renderEscalatedSidebar([]);
+    resetAiPanel();
+  }
+
   function logout() {
     // Call server to clear cookies + blacklist tokens
     fetch(d('L2FwaS9hdXRoL2xvZ291dA=='), { method: 'POST', headers: { 'X-CSRF-Token': getCsrfToken() || '' } }).catch(() => {});
 
+    sessionEpoch++;
     currentUser = null;
     if (refreshTimer) clearTimeout(refreshTimer);
     refreshTimer = null;
     if (state.refreshTimer) clearInterval(state.refreshTimer);
     if (state.countdownTimer) clearInterval(state.countdownTimer);
+    state.refreshTimer = state.countdownTimer = null;
+    resetSessionUi();
+    // Offer "Continue as Guest" (starts a fresh guest session — see guest-back-btn)
+    const gb = $('#guest-back'); if (gb) gb.style.display = '';
     showAuth();
   }
 
@@ -169,6 +221,8 @@
     } else {
       $('#admin-link').classList.add('hidden');
     }
+    // Guests get 403 on sources / notifications / fetch-now — hide those controls
+    document.body.classList.toggle('guest-mode', isGuest);
     // Guests see a "Sign In / Register" entry; hide account-only options
     if (isGuest) {
       $('#sign-in-btn').classList.remove('hidden');
@@ -197,11 +251,24 @@
     catch { return '#'; }
   }
 
+  // Must also escape quotes: the result is interpolated into attribute values
+  // (title="...", href="...", data-*="..."). textContent->innerHTML does not.
   function escapeHtml(str) {
-    if (!str) return '';
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
+    if (str === null || str === undefined || str === '') return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  // Set a <select> programmatically and keep its custom dropdown label in sync
+  function setSelectValue(el, value) {
+    if (!el) return;
+    el.value = value;
+    el.classList.toggle('has-value', value !== '');
+    if (el._syncDisplay) el._syncDisplay();
   }
 
   function relativeTime(dateStr) {
@@ -662,8 +729,7 @@
         state.filters.end_date = closest.day + 'T23:59:59.999Z';
         state.filters.time_range = 'custom';
         state.currentPage = 1;
-        const timeFilter = $('#time-range-filter');
-        if (timeFilter) timeFilter.value = 'custom';
+        setSelectValue($('#time-range-filter'), 'custom');
         updateClearAllButton();
         fetchArticles();
         showToast('Filtered', `Showing threats from ${closest.day}`, 'info');
@@ -732,7 +798,8 @@
     }
     if (minDist > 30) { tip.classList.add('hidden'); return; }
 
-    tip.innerHTML = `<strong>${closest.day}</strong><br>Total: ${closest.count} | Crit: ${closest.critical} | High: ${closest.high} | Med: ${closest.medium} | Low: ${closest.low}`;
+    const n = (v) => Number(v) || 0;
+    tip.innerHTML = `<strong>${escapeHtml(closest.day)}</strong><br>Total: ${n(closest.count)} | Crit: ${n(closest.critical)} | High: ${n(closest.high)} | Med: ${n(closest.medium)} | Low: ${n(closest.low)}`;
     tip.classList.remove('hidden');
 
     const tipRect = tip.getBoundingClientRect();
@@ -745,8 +812,13 @@
     tip.style.top = ty + 'px';
   }
 
+  // Latest request wins. Previously a fetch issued while another was in flight
+  // (filter change during auto-refresh, stat-card click right after clearFilters)
+  // was silently dropped, leaving the feed out of sync with the filters shown.
+  let articlesReqSeq = 0;
   async function fetchArticles(page = 1, append = false) {
-    if (state.isLoading) return;
+    if (append && state.isLoading) return;   // don't stack "Load more" on a pending load
+    const seq = ++articlesReqSeq;
     state.isLoading = true;
     showLoader();
     try {
@@ -765,18 +837,22 @@
       if (state.filters.end_date) params.set('end_date', state.filters.end_date);
 
       const data = await api('GET', `${d('L2FwaS9hcnRpY2xlcw==')}?${params}`);
+      if (seq !== articlesReqSeq) return;     // superseded by a newer request
       state.currentPage = data.page;
       state.totalPages = data.totalPages;
       state.totalArticles = data.total;
 
+      const articles = Array.isArray(data.articles) ? data.articles : [];
       if (append) {
-        state.articles = [...state.articles, ...data.articles];
+        state.articles = [...state.articles, ...articles];
       } else {
-        state.articles = data.articles;
+        state.articles = articles;
       }
       renderArticles();
     } catch (e) { console.error('Articles error:', e); }
-    finally { state.isLoading = false; hideLoader(); }
+    finally {
+      if (seq === articlesReqSeq) { state.isLoading = false; hideLoader(); }
+    }
   }
 
   async function fetchSources() {
@@ -796,18 +872,19 @@
     try {
       const s = await api('GET', d('L2FwaS9ub3RpZmljYXRpb25zL3NldHRpbmdz'));
       if (!s) return;
-      if (s.email) $('#notif-email').value = s.email;
+      // Assign unconditionally so a previous user's values never linger in the form
+      $('#notif-email').value = s.email || '';
       $('#notif-email-enabled').checked = !!s.email_enabled;
-      if (s.telegram_chat_id) $('#notif-telegram').value = s.telegram_chat_id;
-      if (s.telegram_bot_token) $('#notif-telegram-token').value = s.telegram_bot_token;
+      $('#notif-telegram').value = s.telegram_chat_id || '';
+      $('#notif-telegram-token').value = s.telegram_bot_token || '';
       $('#notif-telegram-enabled').checked = !!s.telegram_enabled;
-      if (s.teams_webhook) $('#notif-teams-webhook').value = s.teams_webhook;
+      $('#notif-teams-webhook').value = s.teams_webhook || '';
       $('#notif-teams-enabled').checked = !!s.teams_enabled;
-      if (s.whatsapp_number) $('#notif-whatsapp-number').value = s.whatsapp_number;
-      if (s.whatsapp_apikey) $('#notif-whatsapp-apikey').value = s.whatsapp_apikey;
+      $('#notif-whatsapp-number').value = s.whatsapp_number || '';
+      $('#notif-whatsapp-apikey').value = s.whatsapp_apikey || '';
       $('#notif-whatsapp-enabled').checked = !!s.whatsapp_enabled;
-      if (s.severity_threshold) $('#notif-severity').value = s.severity_threshold;
-      if (s.keywords_filter) $('#notif-keywords').value = s.keywords_filter;
+      setSelectValue($('#notif-severity'), s.severity_threshold || 'critical');
+      $('#notif-keywords').value = s.keywords_filter || '';
     } catch (e) { console.error('Notification settings error:', e); }
   }
 
@@ -842,9 +919,12 @@
       loadMore.classList.add('hidden');
       const hasFilters = hasActiveFilters();
       $('#empty-title').textContent = hasFilters ? 'No threats match your filters' : 'No Threats Yet';
+      const isGuest = currentUser && currentUser.username === 'guest';
       $('#empty-message').textContent = hasFilters
         ? 'Your current filters returned nothing. Try widening them or clear all.'
-        : 'Your dashboard is empty. Add threat intelligence sources from the sidebar to start tracking threats, or click Fetch Now.';
+        : isGuest
+          ? 'No threats yet. Sign in or register to add your own sources.'
+          : 'Your dashboard is empty. Add threat intelligence sources from the sidebar to start tracking threats, or click Fetch Now.';
       const clearBtn = $('#clear-filters-btn-empty');
       if (clearBtn) {
         clearBtn.style.display = hasFilters ? '' : 'none';
@@ -901,9 +981,10 @@
       const statusTag = escalated
         ? '<span class="badge badge-severity-critical">Escalated</span>'
         : '<span class="badge badge-patched">Reviewed</span>';
-      const noteSnippet = who && who.notes ? `<span class="sidebar-item-note">${escapeHtml(who.notes.substring(0, 50))}</span>` : '';
+      const noteSnippet = who && who.notes ? `<span class="sidebar-item-note">${escapeHtml(String(who.notes).substring(0, 50))}</span>` : '';
+      const title = String(a.title || '');
       return `<div class="sidebar-article-item">
-        <a href="${escapeHtml(safeUrl(a.url))}" target="_blank" rel="noopener" class="sidebar-article-link" title="${escapeHtml(a.title)}">${escapeHtml(a.title.substring(0, 60))}${a.title.length > 60 ? '...' : ''}</a>
+        <a href="${escapeHtml(safeUrl(a.url))}" target="_blank" rel="noopener" class="sidebar-article-link" title="${escapeHtml(title)}">${escapeHtml(title.substring(0, 60))}${title.length > 60 ? '...' : ''}</a>
         <div class="sidebar-article-meta">${statusTag} ${who ? escapeHtml(who.username) : ''} ${noteSnippet}</div>
       </div>`;
     }).join('');
@@ -965,8 +1046,8 @@
   }
 
   function createArticleCard(article) {
-    const catBadge = `<span class="badge badge-${article.category}">${escapeHtml(article.category)}</span>`;
-    const sevBadge = `<span class="badge badge-severity-${article.severity}">${article.severity}</span>`;
+    const catBadge = `<span class="badge badge-${escapeHtml(article.category)}">${escapeHtml(article.category)}</span>`;
+    const sevBadge = `<span class="badge badge-severity-${escapeHtml(article.severity)}">${escapeHtml(article.severity)}</span>`;
     const sectorBadge = article.sector ? `<span class="badge badge-sector">${escapeHtml(article.sector)}</span>` : '';
     // Threat actors render as a distinct label with their Synchrony class badge (A/B/C/D/E)
     const actorBadge = article.threat_actors ? article.threat_actors.split(',').map(a => {
@@ -975,7 +1056,7 @@
       const clsTag = cls ? `<span class="ta-class ta-class-${cls.toLowerCase()}">${cls}</span>` : '';
       return `<span class="badge badge-actor" title="${cls ? 'Class ' + cls : 'Threat actor'}">${clsTag}${escapeHtml(name)}</span>`;
     }).join('') : '';
-    const cveLink = article.cve_id ? `<a href="https://nvd.nist.gov/vuln/detail/${article.cve_id}" target="_blank" rel="noopener" class="cve-link">${article.cve_id}</a>` : '';
+    const cveLink = article.cve_id ? `<a href="https://nvd.nist.gov/vuln/detail/${escapeHtml(encodeURIComponent(article.cve_id))}" target="_blank" rel="noopener" class="cve-link">${escapeHtml(article.cve_id)}</a>` : '';
     const pocBadge = article.has_poc ? '<span class="badge badge-poc">PoC Available</span>' : '';
 
     // MITRE ATT&CK technique/tactic IDs — key signal for detection engineering
@@ -1006,7 +1087,7 @@
         const [type, values] = p.split(':');
         if (values) {
           values.split(',').slice(0, 3).forEach(v => {
-            items.push(`<span class="ioc-tag ioc-${type}" title="${type}: ${escapeHtml(v)}">${escapeHtml(v.length > 30 ? v.substring(0,28)+'..' : v)}</span>`);
+            items.push(`<span class="ioc-tag ioc-${escapeHtml(type)}" title="${escapeHtml(type)}: ${escapeHtml(v)}">${escapeHtml(v.length > 30 ? v.substring(0,28)+'..' : v)}</span>`);
           });
         }
       });
@@ -1044,7 +1125,7 @@
         } else {
           label = `${escapeHtml(r.username)} · reviewed`;
         }
-        reviewHtml += `<span class="review-tag review-${r.status}">${label}</span>`;
+        reviewHtml += `<span class="review-tag review-${escapeHtml(r.status)}">${label}</span>`;
       });
       reviewHtml += '</div>';
     }
@@ -1092,7 +1173,7 @@
           <span>${relativeTime(article.published_date)}</span>
         </div>
         ${desc ? `<p class="article-desc">${desc}</p>` : ''}
-        ${article.tags ? `<div class="article-tags">${article.tags.split(',').map(t => `<span class="tag">${t.trim()}</span>`).join('')}</div>` : ''}
+        ${article.tags ? `<div class="article-tags">${String(article.tags).split(',').map(t => t.trim()).filter(Boolean).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join('')}</div>` : ''}
         ${iocHtml}
         ${reviewHtml}
         <div class="article-actions">
@@ -1124,6 +1205,7 @@
       return;
     }
     list.innerHTML = state.sources.map(s => renderSourceItem(s)).join('');
+    updateDashBulkBar(); // re-render drops the checked boxes; hide a stale bulk bar
   }
 
   function renderSourceItem(source) {
@@ -1132,14 +1214,14 @@
 
     return `
       <div class="source-item" data-source-id="${source.id}">
-        <input type="checkbox" class="dash-source-cb" data-src-id="${source.id}" data-src-url="${escapeHtml(source.url)}" data-src-name="${escapeHtml(source.name)}" style="margin-right:6px;cursor:pointer;">
+        <input type="checkbox" class="dash-source-cb guest-hidden" data-src-id="${source.id}" data-src-url="${escapeHtml(source.url)}" data-src-name="${escapeHtml(source.name)}" aria-label="Select ${escapeHtml(source.name)}" style="margin-right:6px;cursor:pointer;">
         <span class="source-status-dot ${st.cls}" title="${st.label}"></span>
         <div class="source-info">
-          <div class="source-info-name" title="${escapeHtml(source.name)}"><a href="${escapeHtml(source.url || '#')}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;" onmouseover="this.style.color='var(--cyan)'" onmouseout="this.style.color='inherit'">${escapeHtml(source.name)}</a></div>
+          <div class="source-info-name" title="${escapeHtml(source.name)}"><a href="${escapeHtml(safeUrl(source.url))}" target="_blank" rel="noopener">${escapeHtml(source.name)}</a></div>
           <div class="source-info-meta">Fetched: ${lastFetched} <span style="color:${st.color};font-size:10px;" title="${source.last_error ? escapeHtml(source.last_error) : st.label}">${st.label}</span></div>
         </div>
-        <div class="source-actions">
-          <label class="toggle-switch source-toggle">
+        <div class="source-actions guest-hidden">
+          <label class="toggle-switch source-toggle" aria-label="Enable ${escapeHtml(source.name)}">
             <input type="checkbox" ${source.enabled ? 'checked' : ''} data-toggle-source="${source.id}">
             <span class="toggle-slider"></span>
           </label>
@@ -1201,7 +1283,8 @@
         keywords_filter: $('#notif-keywords').value.trim()
       });
       showToast('Saved', 'Notification settings updated.', 'success');
-    } catch (e) { showToast('Error', e.message, 'error'); }
+      return true;
+    } catch (e) { showToast('Error', e.message, 'error'); return false; }
   }
 
   async function testNotification(type) {
@@ -1240,7 +1323,7 @@
     state.currentPage = 1;
     const si = $('#search-input'); if (si) si.value = '';
     ['#severity-filter', '#source-type-filter', '#sector-filter', '#threat-actor-filter', '#patch-filter', '#time-range-filter'].forEach(sel => {
-      const el = $(sel); if (el) { el.value = ''; el.classList.remove('has-value'); }
+      setSelectValue($(sel), '');
     });
     $$('.toggle-pill').forEach(b => b.classList.remove('active'));
     $$('#category-filters .pill').forEach(p => p.classList.remove('active'));
@@ -1295,7 +1378,10 @@
 
     state.refreshTimer = setInterval(async () => {
       state.refreshCountdown = 60;
-      await Promise.allSettled([fetchStats(), fetchArticles()]);
+      // Re-fetching page 1 would throw away pages the user loaded via "Load more"
+      const tasks = [fetchStats()];
+      if (state.currentPage <= 1) tasks.push(fetchArticles());
+      await Promise.allSettled(tasks);
     }, 60000);
   }
 
@@ -1336,6 +1422,9 @@
         }).then(r => r.json());
 
         if (result.success) {
+          // Don't leave the password in the (hidden) form — the eye toggle would
+          // reveal it to whoever sees the login screen after logout.
+          $('#login-form').reset();
           setUser(result.user);
           initDashboard();
         } else {
@@ -1461,6 +1550,8 @@
         }).then(r => r.json());
 
         if (result.success) {
+          $('#register-form').reset();
+          $('#password-strength').className = 'password-strength hidden';
           setUser(result.user);
           initDashboard();
         } else {
@@ -1648,9 +1739,11 @@
       $('#guest-back').style.display = isGuest ? '' : 'none';
     });
 
-    // Continue as Guest — return to the dashboard from the auth overlay
+    // Continue as Guest — return to the dashboard from the auth overlay.
+    // After a logout there is no session (and no timers) left, so start a new guest one.
     $('#guest-back-btn').addEventListener('click', () => {
-      hideAuth();
+      if (currentUser && currentUser.username === 'guest') hideAuth();
+      else enterGuestSession();
     });
 
     // Change email
@@ -1859,7 +1952,7 @@
             <input type="datetime-local" id="custom-date-start">
             <label>To</label>
             <input type="datetime-local" id="custom-date-end">
-            <span class="tz-label">${tz}</span>
+            <span class="tz-label">${escapeHtml(tz)}</span>
             <button class="date-apply-btn" id="custom-date-apply">Apply</button>
           `;
           e.target.parentElement.appendChild(pickerEl);
@@ -1882,6 +1975,11 @@
         const startEl = $('#custom-date-start');
         const endEl = $('#custom-date-end');
         if (startEl && endEl) {
+          // Empty/invalid inputs made toISOString() throw a RangeError
+          if (isNaN(new Date(startEl.value)) || isNaN(new Date(endEl.value))) {
+            showToast('Invalid range', 'Pick both a start and an end date.', 'error');
+            return;
+          }
           state.filters.start_date = new Date(startEl.value).toISOString();
           state.filters.end_date = new Date(endEl.value).toISOString();
           state.currentPage = 1;
@@ -1896,7 +1994,10 @@
         if (tag) tag.remove();
         state.filters.start_date = '';
         state.filters.end_date = '';
-        $('#time-range-filter').value = '';
+        state.filters.time_range = '';
+        setSelectValue($('#time-range-filter'), '');
+        const picker = $('#custom-date-picker');
+        if (picker) picker.classList.remove('visible');
         updateClearAllButton();
         fetchArticles();
       }
@@ -1976,8 +2077,15 @@
           const sum = sumRes.status === 'fulfilled' ? sumRes.value : { success: false, error: (sumRes.reason && sumRes.reason.message) || 'Summary failed' };
           const tri = triRes.status === 'fulfilled' ? triRes.value : { success: false, error: (triRes.reason && triRes.reason.message) || 'Triage failed' };
           if (resultEl) {
+            // Triage fields are raw LLM output over untrusted article text
+            // (prompt injection) — whitelist the class, escape everything.
+            const PRIORITIES = ['immediate', 'high', 'routine', 'informational'];
+            const prio = String(tri.priority || '').toLowerCase();
+            const prioCls = PRIORITIES.includes(prio) ? prio : 'informational';
+            const relNum = parseFloat(tri.relevance);
+            const relevance = Number.isFinite(relNum) ? Math.round(relNum) : '?';
             const triageBadge = tri.success && tri.priority
-              ? `<span class="ai-triage-badge ai-triage-${tri.priority}">${tri.priority} · ${tri.relevance || '?'}/100</span>`
+              ? `<span class="ai-triage-badge ai-triage-${prioCls}">${escapeHtml(prio)} · ${relevance}/100</span>`
               : (tri.error ? `<div class="ai-message ai-error">Triage: ${escapeHtml(tri.error)}</div>` : '');
             const summaryText = sum.success && sum.summary
               ? `<div class="ai-summary-box"><strong>AI Summary:</strong> ${escapeHtml(sum.summary)}${sum.keyTakeaway ? `<br><em>${escapeHtml(sum.keyTakeaway)}</em>` : ''}</div>`
@@ -2015,7 +2123,7 @@
           state.filters.time_range = 'custom';
         } else if (stat === 'critical') {
           state.filters.severity = 'critical';
-          $('#severity-filter').value = 'critical';
+          setSelectValue($('#severity-filter'), 'critical');
         } else if (stat === 'pocs') {
           state.filters.has_poc = '1';
           $('#filter-poc').classList.add('active');
@@ -2094,8 +2202,7 @@
     // Per-channel test buttons — save first so the test uses current values
     $$('.notif-test').forEach(btn => {
       btn.addEventListener('click', async () => {
-        await saveNotificationSettings();
-        testNotification(btn.dataset.test);
+        if (await saveNotificationSettings()) testNotification(btn.dataset.test);
       });
     });
 
@@ -2149,10 +2256,14 @@
       const checked = document.querySelectorAll('.dash-source-cb:checked');
       if (checked.length === 0) return;
       if (confirm(`Delete ${checked.length} selected source(s)?`)) {
+        let ok = 0, lastErr = '';
         for (const cb of checked) {
-          try { await api('DELETE', `${d('L2FwaS9zb3VyY2Vz')}/${cb.dataset.srcId}`); } catch(e) {}
+          try { await api('DELETE', `${d('L2FwaS9zb3VyY2Vz')}/${cb.dataset.srcId}`); ok++; }
+          catch (e) { lastErr = e.message; }
         }
-        showToast('Deleted', `${checked.length} source(s) removed.`, 'success');
+        if (ok) showToast('Deleted', `${ok} source(s) removed.`, 'success');
+        if (ok < checked.length) showToast('Error', `${checked.length - ok} source(s) could not be removed: ${lastErr}`, 'error');
+        $('#dash-select-all').checked = false;
         fetchSources(); fetchStats();
       }
     });
@@ -2163,7 +2274,18 @@
         e.preventDefault();
         searchInput.focus();
       }
+      // Date headers are role="button" — make them operable from the keyboard
+      const dh = e.target.closest && e.target.closest('.date-header');
+      if (dh && (e.key === 'Enter' || e.key === ' ')) {
+        e.preventDefault();
+        dh.click();
+      }
     });
+
+    // Chart is sized from its container at render time — re-render on resize
+    window.addEventListener('resize', debounce(() => {
+      if (_chartTimeline.length) renderChart(_chartTimeline, _chartRange);
+    }, 200));
 
     // ─── Ask ThreatPulse (AI) panel ───
     let aiThreadId = null;
@@ -2235,6 +2357,17 @@
       $('#ai-question').focus();
     }
 
+    // On logout / account switch: the previous user's chat must not stay on screen,
+    // and their threadId would 404 ("Thread not found") for the next user.
+    resetAiPanel = () => {
+      aiThreadId = null;
+      $('#ai-panel').classList.add('hidden');
+      $('#ai-panel-body').innerHTML = '<div class="ai-message ai-bot">Ask me about threats in your feed, or toggle web search for anything else.</div>';
+      $('#ai-thread-list').innerHTML = '';
+      $('#ai-question').value = '';
+      $('#ai-web-toggle').checked = false;
+    };
+
     async function askAI() {
       const question = $('#ai-question').value.trim();
       if (!question) return;
@@ -2261,8 +2394,8 @@
           aiThreadId = result.threadId || aiThreadId;
           const answerHtml = escapeHtml(result.answer || '').replace(/\n/g, '<br>');
           let extra = '';
-          if (result.mode === 'rag' && result.citations && result.citations.length) {
-            extra = `<br><br>[Citations: ${result.citations.join(', ')}]`;
+          if (result.mode === 'rag' && Array.isArray(result.citations) && result.citations.length) {
+            extra = `<br><br>[Citations: ${escapeHtml(result.citations.join(', '))}]`;
           } else if (result.mode === 'web') {
             extra = renderSources(result.sources);
           }
@@ -2316,11 +2449,12 @@
   }
 
   async function initDashboard() {
+    // initDashboard runs again on every login / guest->user switch: don't stack intervals
     updateClock();
-    setInterval(updateClock, 1000);
+    if (!clockInterval) clockInterval = setInterval(updateClock, 1000);
     // Dynamic favicon — shield + pulse, updated every 2s
     updateFavicon();
-    setInterval(updateFavicon, 2000);
+    if (!faviconInterval) faviconInterval = setInterval(updateFavicon, 2000);
     enforcePasswordChange();
     initCustomDropdowns();
     await Promise.allSettled([fetchStats(), fetchArticles(), fetchSources(), fetchNotificationSettings()]);
@@ -2360,6 +2494,15 @@
       display.className = 'custom-select-display';
       display.textContent = select.options[select.selectedIndex]?.textContent || '';
       wrapper.appendChild(display);
+      // Keep the label in sync with programmatic changes (setSelectValue) and with
+      // keyboard changes on the (visually hidden but focusable) native select.
+      select._syncDisplay = () => {
+        display.textContent = select.options[select.selectedIndex]?.textContent || '';
+      };
+      select.addEventListener('change', () => {
+        select._syncDisplay();
+        select.classList.toggle('has-value', select.value !== '');
+      });
 
       const list = document.createElement('div');
       list.className = 'custom-select-list hidden';
@@ -2440,23 +2583,32 @@
 
     // Check if we have an httpOnly session cookie by hitting the auth endpoint
     // (the cookie is sent automatically, no JS involved)
-    fetch(d('L2FwaS9hdXRoL21l'))
-      .then(r => {
-        if (!r.ok) throw new Error('Not authenticated');
-        return r.json();
-      })
-      .then(data => {
-        if (data.success && data.user) {
-          currentUser = data.user;
-          updateUserMenu();
-          scheduleAutoRefresh();
-          hideAuth();
+    fetchSessionUser()
+      .then(user => {
+        if (user) {
+          setUser(user);
           initDashboard();
         } else {
           enterGuestSession();
         }
       })
       .catch(() => enterGuestSession());
+  }
+
+  // The access token only lives 15 min. A returning user with an expired access
+  // token but a valid refresh token used to be dropped straight into a guest
+  // session (which also overwrote their refresh cookie). Refresh first.
+  async function fetchSessionUser() {
+    const me = () => fetch(d('L2FwaS9hdXRoL21l')).then(async r => {
+      if (!r.ok) return { status: r.status, user: null };
+      const data = await readJson(r);
+      return { status: r.status, user: data.success && data.user ? data.user : null };
+    });
+    let res = await me();
+    if (!res.user && res.status === 401 && await refreshAccessToken()) {
+      res = await me();   // re-read so we get the full user (incl. mustChangePassword)
+    }
+    return res.user;
   }
 
   // Anonymous visitors land straight on the dashboard via a shared guest account.
@@ -2466,10 +2618,7 @@
       .then(r => r.json())
       .then(data => {
         if (data.success && data.user) {
-          currentUser = data.user;
-          updateUserMenu();
-          scheduleAutoRefresh();
-          hideAuth();
+          setUser(data.user);
           initDashboard();
         } else {
           showAuth();
