@@ -21,14 +21,20 @@ function isGuest(user) {
   return !!user && user.username === GUEST_USERNAME;
 }
 
-// Guest/admin see all articles; regular users only their own.
+// Admin sees all articles; the shared guest account only built-in system
+// content (never other users' private articles); regular users only their own.
 function scopeUserId(user) {
-  return (user.role === 'admin' || isGuest(user)) ? null : user.id;
+  if (user.role === 'admin') return null;
+  if (isGuest(user)) return db.SYSTEM_SCOPE;
+  return user.id;
 }
 
 // Same visibility rule as the article list (/api/articles).
 function canAccessArticle(user, article) {
-  return scopeUserId(user) === null || article.user_id === user.id;
+  const scope = scopeUserId(user);
+  if (scope === null) return true;
+  if (scope === db.SYSTEM_SCOPE) return db.isSystemArticle(article);
+  return article.user_id === user.id;
 }
 
 function intEnv(name, def) {

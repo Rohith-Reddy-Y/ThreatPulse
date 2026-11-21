@@ -258,6 +258,30 @@ test('per-user AI rate limit protects the shared Groq quota', async () => {
   assert.ok(limited !== null && limited <= 20, `never limited (limited=${limited})`);
 });
 
+// Runs before the guest rate-limit test, which exhausts the aggregate guest quota.
+test('guest: AI summarize/triage/ask only reach built-in system articles, never private ones', async () => {
+  const owner = freshUser();
+  const gu = guest();
+  const k = `${Date.now()}-${Math.random()}`;
+  const sysSrc = db.addSource({ name: `Sys ${k}`, url: `https://sys.example/${k}`, type: 'rss', added_by: 'system' }).id;
+  const sysId = db.getDb().prepare(
+    `INSERT INTO articles (url_hash, title, description, url, source_name, source_id, user_id, severity, category, published_date)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'high', 'malware', datetime('now'))`
+  ).run('sys' + k, `Quokkaware public ${k}`, 'quokkaware public advisory', `https://sys.example/a/${k}`, 'Sys', sysSrc, null).lastInsertRowid;
+  const privId = addArticle(owner.id, { title: `Quokkaware private ${k}`, description: 'quokkaware owner-only secret intel' });
+
+  captureGroq('{"summary":"s","priority":"high","relevance":50}');
+  assert.equal((await call('POST', '/summarize', { user: gu, ip: freshIp(), body: { articleId: privId } })).statusCode, 404);
+  assert.equal((await call('POST', '/triage', { user: gu, ip: freshIp(), body: { articleId: privId } })).statusCode, 404);
+  assert.equal((await call('POST', '/summarize', { user: gu, ip: freshIp(), body: { articleId: sysId } })).statusCode, 200);
+
+  const bodies = captureGroq('{"answer":"a"}');
+  await call('POST', '/ask', { user: gu, ip: freshIp(), body: { question: 'quokkaware?' } });
+  const sent = JSON.stringify(bodies.map(b => b.body));
+  assert.match(sent, /quokkaware public advisory/);
+  assert.ok(!sent.includes('owner-only secret intel'), 'private article leaked into guest RAG context');
+});
+
 test('guests are rate limited per IP and in aggregate', async () => {
   const gu = guest();
   captureGroq('{"answer":"a"}');
