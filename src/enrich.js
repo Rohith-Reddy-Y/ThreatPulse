@@ -85,18 +85,24 @@ function escapeRegExp(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// Compile once (was: ~200 new RegExp objects per article on every fetch cycle).
+const DISTINCTIVE_RE = DISTINCTIVE_ACTORS.map(a => [a, new RegExp(`\\b${escapeRegExp(a)}\\b`, 'i')]);
+const AMBIGUOUS_RE = AMBIGUOUS_ACTORS.map(a => [a, new RegExp(`\\b${escapeRegExp(a)}\\b`, 'i')]);
+// Fast pre-filter: one combined pass; per-actor regexes only run if something matched.
+const ANY_DISTINCTIVE = new RegExp(`\\b(${DISTINCTIVE_ACTORS.map(escapeRegExp).join('|')})\\b`, 'i');
+
 function detectThreatActors(text) {
   const t = String(text || '');
   const found = new Set();
 
-  for (const actor of DISTINCTIVE_ACTORS) {
-    const re = new RegExp(`\\b${escapeRegExp(actor)}\\b`, 'i');
-    if (re.test(t)) found.add(actor);
+  if (ANY_DISTINCTIVE.test(t)) {
+    for (const [actor, re] of DISTINCTIVE_RE) {
+      if (re.test(t)) found.add(actor);
+    }
   }
 
   if (THREAT_CONTEXT.test(t)) {
-    for (const actor of AMBIGUOUS_ACTORS) {
-      const re = new RegExp(`\\b${escapeRegExp(actor)}\\b`, 'i');
+    for (const [actor, re] of AMBIGUOUS_RE) {
       if (re.test(t)) found.add(actor);
     }
   }

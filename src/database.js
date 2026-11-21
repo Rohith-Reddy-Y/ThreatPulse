@@ -660,6 +660,13 @@ function insertArticle(article) {
   if (!article || !isHttpUrl(article.url)) {
     return { success: false, isNew: false, error: 'Rejected non-http(s) article URL' };
   }
+  // Cheap check first: already stored? Skip BEFORE the (CPU-heavy) enrichment.
+  // Every 15-min cycle re-reads thousands of known items; on a small CPU share,
+  // enriching them all blocked the event loop and failed health checks.
+  const urlHashEarly = hashUrl(article.url);
+  if (getDb().prepare('SELECT 1 FROM articles WHERE url_hash = ? LIMIT 1').get(urlHashEarly)) {
+    return { success: true, isNew: false };
+  }
   article.published_date = normalizeDate(article.published_date);
   const key = titleKey(article.title);
   // Same story already stored in the last 7 days (same owner scope)? Skip it.

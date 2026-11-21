@@ -311,7 +311,9 @@ async function fetchGoogleNewsFallback(source) {
   if (!raw.length && parts.length > 2) {
     raw = await fetchFeedItems(gn(`site:${parts.slice(-2).join('.')} when:30d`));
   }
-  const items = raw.map(i => ({
+  // Cap volume: fallback queries can return 100 items each, and processing
+  // thousands of items per cycle is too heavy for a small free-tier CPU.
+  const items = raw.slice(0, 30).map(i => ({
     ...i,
     // Google News titles look like "Headline - Publisher": drop the suffix
     title: (i.title || '').replace(/\s+-\s+[^-]{2,60}$/, '')
