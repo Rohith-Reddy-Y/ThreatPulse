@@ -573,7 +573,13 @@ async function ensureAdminExists() {
     const result = db.createUser('admin', 'Administrator', passwordHash, salt, 'admin', null, adminEmail);
     if (result.success) {
       db.createUserNotificationSettings(result.id);
-      db.setMustChangePassword(result.id, 1);
+      // The owner can pin a password they chose (Render: ADMIN_INITIAL_PASSWORD +
+      // ADMIN_FORCE_PASSWORD_CHANGE=false) so the login survives ephemeral-DB
+      // resets without a forced change after every redeploy. A generated
+      // password is always force-changed.
+      const keepChosenPassword = !!process.env.ADMIN_INITIAL_PASSWORD &&
+        String(process.env.ADMIN_FORCE_PASSWORD_CHANGE || '').toLowerCase() === 'false';
+      db.setMustChangePassword(result.id, keepChosenPassword ? 0 : 1);
 
       console.log('[Auth] Default admin created');
       console.log('[Auth] FIRST-RUN ADMIN CREDENTIALS (shown once)');

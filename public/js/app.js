@@ -9,6 +9,7 @@
   //  AUTH STATE (cookie-based httpOnly JWT — no localStorage)
   //
   let currentUser = null;
+  let forcedChangeSecret = null; // sign-in password, held only until a forced change completes
   // Access token lifetime is 15 min; refresh proactively at 13 min
   const REFRESH_MARGIN = 13 * 60 * 1000; // refresh 2 min before expiry
   let refreshTimer = null;
@@ -175,6 +176,7 @@
   function resetSessionUi() {
     ['#email-modal', '#password-modal', '#verification-modal'].forEach(sel => $(sel)?.classList.add('hidden'));
     ['#password-form', '#email-form', '#verification-form', '#notification-form', '#login-form'].forEach(sel => $(sel)?.reset());
+    forcedChangeSecret = null;
     $('#cancel-password-btn')?.classList.remove('hidden');
     $('#password-forced-notice')?.classList.add('hidden');
     $('#user-dropdown')?.classList.add('hidden');
@@ -1425,6 +1427,10 @@
           // Don't leave the password in the (hidden) form — the eye toggle would
           // reveal it to whoever sees the login screen after logout.
           $('#login-form').reset();
+          // Forced first-login change: reuse the password just typed at sign-in
+          // (kept in memory only until the change completes) instead of asking
+          // again — the browser tends to autofill a stale saved password there.
+          forcedChangeSecret = result.user && result.user.mustChangePassword ? password : null;
           setUser(result.user);
           initDashboard();
         } else {
@@ -1789,7 +1795,7 @@
       errEl.classList.add('hidden');
       try {
         const result = await api('PUT', d('L2FwaS9hdXRoL3Bhc3N3b3Jk'), {
-          currentPassword: $('#current-password').value,
+          currentPassword: forcedChangeSecret || $('#current-password').value,
           newPassword: $('#new-password').value
         });
         if (result.success && result.verificationRequired) {
@@ -1803,6 +1809,8 @@
           // Changed directly (first-login change, or email verification unavailable)
           $('#password-modal').classList.add('hidden');
           $('#current-password').value = '';
+          forcedChangeSecret = null;
+          setCurrentPasswordFieldVisible(true);
           $('#new-password').value = '';
           if (currentUser) currentUser.mustChangePassword = false;
           $('#cancel-password-btn')?.classList.remove('hidden');
@@ -2441,9 +2449,20 @@
   //
   //  INITIALIZATION
   //
+  function setCurrentPasswordFieldVisible(visible) {
+    const input = $('#current-password');
+    if (!input) return;
+    const group = input.closest('.form-group');
+    if (group) group.classList.toggle('hidden', !visible);
+    input.required = visible;
+    if (!visible) input.value = '';
+  }
+
   function enforcePasswordChange() {
     if (!currentUser || !currentUser.mustChangePassword) return;
     const modal = $('#password-modal');
+    // If we still hold the sign-in password, don't ask for it again.
+    setCurrentPasswordFieldVisible(!forcedChangeSecret);
     modal.classList.remove('hidden');
     const cancelBtn = $('#cancel-password-btn');
     if (cancelBtn) cancelBtn.classList.add('hidden');
