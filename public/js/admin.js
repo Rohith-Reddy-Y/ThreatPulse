@@ -156,23 +156,29 @@
     const data = await api('GET', d('L2FwaS9hZG1pbi91c2Vycw=='));
     if (!data || !data.users) return;
     const tbody = $('#users-tbody');
-    tbody.innerHTML = data.users.map(u => `
+    // The server refuses to demote, disable or delete your own account and to
+    // promote the shared guest account: don't offer those controls.
+    tbody.innerHTML = data.users.map(u => {
+      const self = currentUser && u.id === currentUser.id;
+      const guest = u.username === 'guest';
+      const lock = self ? ' disabled title="You cannot change your own role or status"' : '';
+      return `
       <tr>
         <td><strong>${escapeHtml(u.username)}</strong></td>
         <td>${escapeHtml(u.display_name)}</td>
-        <td><select data-user-role="${u.id}" class="filter-select" style="padding:4px 8px;font-size:12px;">
+        <td><select data-user-role="${u.id}" class="filter-select" style="padding:4px 8px;font-size:12px;"${lock}>
           <option value="analyst" ${u.role==='analyst'?'selected':''}>Analyst</option>
-          <option value="admin" ${u.role==='admin'?'selected':''}>Admin</option>
+          <option value="admin" ${u.role==='admin'?'selected':''}${guest ? ' disabled' : ''}>Admin</option>
         </select></td>
         <td>${u.source_count || 0}</td>
         <td>${relativeTime(u.last_login)}</td>
         <td><span class="badge ${u.is_active ? 'badge-advisory' : 'badge-breach'}">${u.is_active ? 'Active' : 'Disabled'}</span></td>
         <td>
-          <button class="btn btn-ghost" data-toggle-user="${u.id}" data-active="${u.is_active}" style="font-size:12px;padding:4px 8px;">${u.is_active ? 'Disable' : 'Enable'}</button>
-          <button class="btn btn-danger" data-delete-user="${u.id}" style="font-size:12px;padding:4px 8px;">Delete</button>
+          <button class="btn btn-ghost" data-toggle-user="${u.id}" data-active="${u.is_active}" style="font-size:12px;padding:4px 8px;"${lock}>${u.is_active ? 'Disable' : 'Enable'}</button>
+          <button class="btn btn-danger" data-delete-user="${u.id}" style="font-size:12px;padding:4px 8px;"${lock}>Delete</button>
         </td>
-      </tr>
-    `).join('');
+      </tr>`;
+    }).join('');
   }
 
   // Invite codes

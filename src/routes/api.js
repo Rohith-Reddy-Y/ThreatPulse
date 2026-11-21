@@ -47,6 +47,28 @@ function readScope(user) {
   return user.id;
 }
 
+// Source types whose fetchers are platform machinery rather than "a feed URL":
+// 'browser' drives headless Chrome on every fetch cycle and 'darkweb' spends
+// the operator's abuse.ch quota. The built-in sources use them; the UI never
+// offers them to users, so only admins may create or switch a source to them.
+const ADMIN_ONLY_SOURCE_TYPES = new Set(['browser', 'darkweb']);
+function sourceTypeAllowed(user, type) {
+  if (user.role === 'admin') return true;
+  return !ADMIN_ONLY_SOURCE_TYPES.has(String(type == null ? '' : type).trim().toLowerCase());
+}
+
+// The server-wide TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are the operator's. Only
+// admins fall back to them; otherwise any registered user could make the
+// operator's bot post into the operator's chat (or into a chat of their choice),
+// and their private alerts would land in the operator's chat.
+function telegramTarget(user, settings) {
+  const envFallback = user && user.role === 'admin';
+  return {
+    token: settings.telegram_bot_token || (envFallback ? process.env.TELEGRAM_BOT_TOKEN : null),
+    chatId: settings.telegram_chat_id || (envFallback ? process.env.TELEGRAM_CHAT_ID : null),
+  };
+}
+
 // Manual fetch cooldown (non-admins) — a full fetch is heavy on a small VM.
 let lastManualFetch = 0;
 const MANUAL_FETCH_COOLDOWN_MS = 5 * 60 * 1000;
@@ -331,6 +353,14 @@ router.put('/auth/email', auth.requireAuth, denyGuest, async (req, res) => {
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ success: false, error: 'Valid email address is required' });
     }
+    // Step-up: the verification code goes to the NEW address, so without this a
+    // stolen/borrowed session could move the account to an attacker's mailbox
+    // and then take it over for good via "forgot password" — the very thing the
+    // current-password check on PUT /auth/password exists to prevent.
+    const user = db.getUserById(req.user.id);
+    if (!(await auth.verifyPassword(req.body.currentPassword, user.salt, user.password_hash))) {
+      return res.status(400).json({ success: false, error: 'Current password is incorrect' });
+    }
     // Ensure email isn't already used by a different account
     const existing = db.getUserByEmail(email);
     if (existing && existing.id !== req.user.id) {
@@ -499,8 +529,8 @@ router.get('/search', auth.requireAuth, (req, res) => {
 // user could attach reviews/notes to another user's article by id, and a
 // missing article surfaced as a 500 (FK error).
 function loadReviewableArticle(req, res) {
-  const articleId = parseInt(req.params.id, 10);
-  const article = Number.isInteger(articleId) ? db.getArticleById(articleId) : null;
+  const articleId = security.parseId(req.params.id);
+  const article = articleId !== null ? db.getArticleById(articleId) : null;
   if (!article) { res.status(404).json({ success: false, error: 'Article not found' }); return null; }
   if (req.user.role !== 'admin' && article.user_id !== req.user.id) {
     res.status(403).json({ success: false, error: 'Not authorized to review this article' });
@@ -579,6 +609,9 @@ router.post('/sources', auth.requireAuth, denyGuest, (req, res) => {
     if (!auth.validateUrl(cleanUrl)) {
       return res.status(400).json({ error: 'Invalid URL. Only http/https URLs to public hosts are allowed.' });
     }
+    if (!sourceTypeAllowed(req.user, type)) {
+      return res.status(403).json({ error: 'This source type is reserved for administrators' });
+    }
 
     const result = db.addSource({
       name: cleanName,
@@ -603,14 +636,16 @@ router.post('/sources', auth.requireAuth, denyGuest, (req, res) => {
 
 router.put('/sources/:id', auth.requireAuth, denyGuest, (req, res) => {
   try {
-    const { id } = req.params;
-    const sourceId = parseInt(id);
+    const sourceId = security.parseId(req.params.id);
     // Check ownership
-    const source = db.getDb().prepare('SELECT * FROM sources WHERE id = ?').get(sourceId);
+    const source = sourceId !== null && db.getDb().prepare('SELECT * FROM sources WHERE id = ?').get(sourceId);
     if (!source) return res.status(404).json({ error: 'Source not found' });
     // System sources (user_id NULL) are admin-only — previously anyone could edit them.
     if (source.user_id !== req.user.id && req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Not authorized to modify this source' });
+    }
+    if (req.body && req.body.type !== undefined && !sourceTypeAllowed(req.user, req.body.type)) {
+      return res.status(403).json({ error: 'This source type is reserved for administrators' });
     }
 
     // Validate URL / name if being updated (an empty string used to skip validation)
@@ -637,8 +672,8 @@ router.put('/sources/:id', auth.requireAuth, denyGuest, (req, res) => {
 
 router.delete('/sources/:id', auth.requireAuth, denyGuest, (req, res) => {
   try {
-    const sourceId = parseInt(req.params.id);
-    const source = db.getDb().prepare('SELECT * FROM sources WHERE id = ?').get(sourceId);
+    const sourceId = security.parseId(req.params.id);
+    const source = sourceId !== null && db.getDb().prepare('SELECT * FROM sources WHERE id = ?').get(sourceId);
     if (!source) return res.status(404).json({ error: 'Source not found' });
     
     // Only source owner or admin can delete
@@ -745,8 +780,7 @@ router.post('/notifications/test', auth.requireAuth, denyGuest, async (req, res)
       if (!settings.email) return res.status(400).json({ error: 'No email address configured' });
       return res.json(await sendAlertEmail([testArticle], settings.email));
     } else if (type === 'telegram') {
-      const token = settings.telegram_bot_token || process.env.TELEGRAM_BOT_TOKEN;
-      const chatId = settings.telegram_chat_id || process.env.TELEGRAM_CHAT_ID;
+      const { token, chatId } = telegramTarget(req.user, settings);
       if (!token || !chatId) return res.status(400).json({ error: 'Telegram not configured' });
       return res.json(await sendTelegramAlert([testArticle], token, chatId));
     } else if (type === 'teams') {
@@ -777,8 +811,10 @@ router.get('/admin/users', auth.requireAuth, auth.requireAdmin, (req, res) => {
 
 router.put('/admin/users/:id', auth.requireAuth, auth.requireAdmin, (req, res) => {
   try {
-    const userId = parseInt(req.params.id, 10);
-    if (!Number.isInteger(userId)) return res.status(400).json({ success: false, error: 'Invalid user id' });
+    const userId = security.parseId(req.params.id);
+    if (userId === null) return res.status(400).json({ success: false, error: 'Invalid user id' });
+    const target = db.getUserById(userId);
+    if (!target) return res.status(404).json({ success: false, error: 'User not found' });
     const body = req.body || {};
     const updates = {};
 
@@ -809,8 +845,7 @@ router.put('/admin/users/:id', auth.requireAuth, auth.requireAdmin, (req, res) =
     }
     // The shared guest account is used by every anonymous visitor: promoting it
     // would make the whole internet an admin.
-    const target = db.getUserById(userId);
-    if (target && target.username === auth.GUEST_USERNAME && updates.role === 'admin') {
+    if (target.username === auth.GUEST_USERNAME && updates.role === 'admin') {
       return res.status(400).json({ success: false, error: 'The shared guest account cannot be made an admin' });
     }
 
@@ -825,8 +860,10 @@ router.put('/admin/users/:id', auth.requireAuth, auth.requireAdmin, (req, res) =
 
 router.delete('/admin/users/:id', auth.requireAuth, auth.requireAdmin, (req, res) => {
   try {
-    const userId = parseInt(req.params.id);
-    if (userId === req.user.id) return res.status(400).json({ error: 'Cannot delete yourself' });
+    const userId = security.parseId(req.params.id);
+    if (userId === null) return res.status(400).json({ success: false, error: 'Invalid user id' });
+    if (userId === req.user.id) return res.status(400).json({ success: false, error: 'Cannot delete yourself' });
+    if (!db.getUserById(userId)) return res.status(404).json({ success: false, error: 'User not found' });
     // One transaction: deleteUser issues several DELETEs, and a failure part-way
     // (e.g. the FK from invite_codes.created_by) used to wipe the user's sources and
     // articles while leaving the account in place. Invite codes the user created are
@@ -845,7 +882,7 @@ router.delete('/admin/users/:id', auth.requireAuth, auth.requireAdmin, (req, res
     if (result.success) {
       db.logAudit(req.user.id, 'admin_user_delete', `Deleted user ${userId}`, req.ip);
     }
-    res.json(result);
+    res.status(result.success ? 200 : 400).json(result);
   } catch (error) {
     res.status(500).json({ error: 'Failed to delete user' });
   }
@@ -1036,8 +1073,7 @@ async function handleNotifications(newArticles) {
       };
 
       // Telegram
-      const tgToken = settings.telegram_bot_token || process.env.TELEGRAM_BOT_TOKEN;
-      const tgChat = settings.telegram_chat_id || process.env.TELEGRAM_CHAT_ID;
+      const { token: tgToken, chatId: tgChat } = telegramTarget(user, settings);
       if (settings.telegram_enabled && tgToken && tgChat) {
         console.log(`[Notifications] ${user.username}: ${userArticles.length} via Telegram`);
         logAll('telegram', tgChat, await sendTelegramAlert(userArticles, tgToken, tgChat));

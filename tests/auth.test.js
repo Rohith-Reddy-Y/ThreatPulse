@@ -136,7 +136,7 @@ test('email verification codes actually expire after 15 minutes', async () => {
   const real = Date.now;
   Date.now = () => real() - 16 * 60 * 1000;
   try {
-    const r = await request('PUT', '/api/auth/email', { cookies: jar, body: { email: 'moved@example.test' } });
+    const r = await request('PUT', '/api/auth/email', { cookies: jar, body: { email: 'moved@example.test', currentPassword: PW } });
     assert.strictEqual(r.body.success, true, JSON.stringify(r.body));
   } finally { Date.now = real; }
   const row = db.getDb().prepare("SELECT code FROM verification_codes WHERE type = 'email_change'").get();

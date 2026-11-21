@@ -1179,9 +1179,9 @@
         ${iocHtml}
         ${reviewHtml}
         <div class="article-actions">
-          <button class="${reviewBtnCls}" data-review-article="${article.id}" title="Start reviewing"${reviewBtnDisabled}>${reviewBtnTxt}</button>
-          <button class="btn-review-done" data-review-done="${article.id}" title="Mark as reviewed"${doneBtnDisabled}>Done</button>
-          <button class="${escalateBtnCls}" data-escalate="${article.id}" title="Escalate"${escalateBtnDisabled}>${escalateBtnTxt}</button>
+          <button class="${reviewBtnCls} guest-hidden" data-review-article="${article.id}" title="Start reviewing"${reviewBtnDisabled}>${reviewBtnTxt}</button>
+          <button class="btn-review-done guest-hidden" data-review-done="${article.id}" title="Mark as reviewed"${doneBtnDisabled}>Done</button>
+          <button class="${escalateBtnCls} guest-hidden" data-escalate="${article.id}" title="Escalate"${escalateBtnDisabled}>${escalateBtnTxt}</button>
           <button class="btn-ai" data-ai-summarize="${article.id}" title="AI summary + triage">AI</button>
         </div>
         <div class="ai-result" data-ai-result="${article.id}" style="display:none;"></div>
@@ -1756,6 +1756,7 @@
     $('#change-email-btn').addEventListener('click', () => {
       $('#email-error').classList.add('hidden');
       $('#account-email').value = (currentUser && currentUser.email) || '';
+      $('#email-current-password').value = '';
       $('#email-modal').classList.remove('hidden');
     });
     $('#cancel-email-btn').addEventListener('click', () => {
@@ -1766,7 +1767,10 @@
       const errEl = $('#email-error');
       errEl.classList.add('hidden');
       try {
-        const result = await api('PUT', d('L2FwaS9hdXRoL2VtYWls'), { email: $('#account-email').value.trim() });
+        const result = await api('PUT', d('L2FwaS9hdXRoL2VtYWls'), {
+          email: $('#account-email').value.trim(),
+          currentPassword: $('#email-current-password').value
+        });
         if (result.success && result.verificationRequired) {
           $('#email-modal').classList.add('hidden');
           $('#verification-code').value = '';

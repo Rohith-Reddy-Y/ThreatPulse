@@ -113,6 +113,20 @@ function csrfMiddleware(req, res, next) {
   next();
 }
 
+// ============================================
+// ID PARSING
+// ============================================
+
+// Record ids from URLs / bodies must be plain positive integers. parseInt() is
+// too lenient for that: parseInt('5abc') and parseInt('5e3') are 5, so
+// DELETE /api/admin/users/5abc deleted user 5. Returns the id, or null.
+function parseId(value) {
+  if (typeof value === 'number') return Number.isSafeInteger(value) && value > 0 ? value : null;
+  if (typeof value !== 'string' || !/^[1-9][0-9]{0,15}$/.test(value)) return null;
+  const n = Number(value);
+  return Number.isSafeInteger(n) ? n : null;
+}
+
 module.exports = {
   // Config
   ACCESS_TOKEN_EXPIRY,
@@ -132,5 +146,8 @@ module.exports = {
   // CSRF
   setCsrfCookie,
   generateCsrfToken,
-  validateCsrf
+  validateCsrf,
+
+  // Ids
+  parseId
 };
