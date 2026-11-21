@@ -116,19 +116,19 @@ test('legacy non-ISO published_date rows are normalised so stats/timeline see th
   assert.ok(stats.timeline.every(t => t.day !== null), 'timeline must not contain a null day');
 });
 
-test('startup sequence (schema -> admin -> seed) works on fresh, restarted and v1 DBs', () => {
+test('startup sequence (schema -> admin -> seed) works on fresh, restarted and v1 DBs', async () => {
   const path = require('path');
-  const boot = (p) => {
+  const boot = async (p) => {
     const env = load(p);
-    env.auth.ensureAdminExists();
+    await env.auth.ensureAdminExists();
     const { seedDefaultSources } = require(path.join(__dirname, '..', 'src', 'feeds', 'default-sources.js'));
     return { env, res: seedDefaultSources(env.db) };
   };
   const p = tmpDbPath();
-  const first = boot(p);
+  const first = await boot(p);
   assert.ok(first.res.added > 100);
   const countBefore = first.env.db.getAllSources().length;
-  const second = boot(p);
+  const second = await boot(p);
   // NOTE: 'Trend Micro Research' and 'HackerOne Blog' are in both DEFAULT_SOURCES
   // and OBSOLETE_SOURCES (src/feeds/default-sources.js, outside this test's
   // scope), so each restart deletes and re-adds them. Only assert stability.
@@ -140,7 +140,7 @@ test('startup sequence (schema -> admin -> seed) works on fresh, restarted and v
 
   const v1 = tmpDbPath();
   makeV1(v1);
-  const b = boot(v1);
+  const b = await boot(v1);
   assert.ok(b.res.added > 100);
   assert.strictEqual(b.env.db.getDb().prepare('SELECT COUNT(*) c FROM sources WHERE url = ?').get('https://s1.example/feed').c, 1);
 });

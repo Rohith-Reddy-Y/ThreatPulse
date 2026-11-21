@@ -77,13 +77,21 @@ async function request(method, url, opts = {}) {
     app: { get: () => null },
   };
   const res = makeRes();
+  // Middleware like requireAuth calls next() without returning it, so awaiting the
+  // first handler doesn't cover an async handler further down the chain: collect
+  // every handler's promise and wait for all of them.
   let i = 0;
-  const next = async (err) => {
-    if (err) throw err;
+  const pending = [];
+  const next = (err) => {
+    if (err) return Promise.reject(err);
     const h = route.handlers[i++];
-    if (h) await h(req, res, next);
+    if (!h) return Promise.resolve();
+    const p = (async () => h(req, res, next))();
+    pending.push(p);
+    return p;
   };
-  await next();
+  next();
+  for (let k = 0; k < pending.length; k++) await pending[k];
   return { req, res, status: res.statusCode, body: res.body };
 }
 
@@ -94,19 +102,26 @@ function absorb(jar, res) {
   return jar;
 }
 
+// Hashes with the legacy synchronous scrypt call the app used before hashing went
+// async (same params/format), so every login in the suite also proves that hashes
+// stored by older versions still verify. Keeps this helper synchronous.
+function legacyHash(password, salt) {
+  return require('crypto').scryptSync(password, salt, 64).toString('hex');
+}
+
 function createUser(username, password, { role = 'analyst', email = null, mustChange = false } = {}) {
   const salt = auth.generateSalt();
-  const r = db.createUser(username, username, auth.hashPassword(password, salt), salt, role, null, email || `${username}@example.test`);
+  const r = db.createUser(username, username, legacyHash(password, salt), salt, role, null, email || `${username}@example.test`);
   if (!r.success) throw new Error(r.error);
   db.createUserNotificationSettings(r.id);
   if (mustChange) db.setMustChangePassword(r.id, 1);
   return r.id;
 }
 
-async function login(username, password) {
-  const r = await request('POST', '/api/auth/login', { body: { username, password } });
+async function login(username, password, ip) {
+  const r = await request('POST', '/api/auth/login', { body: { username, password }, ip });
   if (!r.body || !r.body.success) throw new Error(`login failed: ${JSON.stringify(r.body)}`);
   return absorb({}, r.res);
 }
 
-module.exports = { db, auth, security, router, request, absorb, createUser, login, tmp };
+module.exports = { db, auth, security, router, request, absorb, createUser, legacyHash, login, tmp };

@@ -46,12 +46,12 @@ const MANUAL_FETCH_COOLDOWN_MS = 5 * 60 * 1000;
 // AUTH ROUTES (public)
 // ============================================
 
-router.post('/auth/login', (req, res) => {
+router.post('/auth/login', async (req, res) => {
   try {
     const { username, password } = req.body;
     const ip = req.ip || req.connection?.remoteAddress;
     const identifier = auth.sanitizeString(username, 255);
-    const result = auth.loginUser(identifier, password);
+    const result = await auth.loginUser(identifier, password, ip);
 
     if (result.success) {
       // Set httpOnly cookies
@@ -72,11 +72,11 @@ router.post('/auth/login', (req, res) => {
   }
 });
 
-router.post('/auth/register', (req, res) => {
+router.post('/auth/register', async (req, res) => {
   try {
     const { username, displayName, password, inviteCode, email } = req.body;
     const ip = req.ip || req.connection?.remoteAddress;
-    const result = auth.registerUser(
+    const result = await auth.registerUser(
       auth.sanitizeString(username, 32),
       auth.sanitizeString(displayName, 64),
       password,
@@ -179,10 +179,10 @@ router.post('/auth/forgot-password', async (req, res) => {
   }
 });
 
-router.post('/auth/reset-password', (req, res) => {
+router.post('/auth/reset-password', async (req, res) => {
   try {
     const { token, newPassword } = req.body;
-    const result = auth.resetPassword(
+    const result = await auth.resetPassword(
       auth.sanitizeString(token, 128),
       newPassword
     );
@@ -224,9 +224,9 @@ router.get('/auth/me', auth.requireAuth, (req, res) => {
 });
 
 // Guest session — lets anonymous visitors use the dashboard without signing in
-router.post('/auth/guest', (req, res) => {
+router.post('/auth/guest', async (req, res) => {
   try {
-    const result = auth.getOrCreateGuestUser();
+    const result = await auth.getOrCreateGuestUser();
     if (!result.success) {
       return res.status(result.disabled ? 403 : 500).json({ success: false, error: result.error });
     }
@@ -268,7 +268,7 @@ router.put('/auth/password', auth.requireAuth, denyGuest, async (req, res) => {
     const user = db.getUserById(req.user.id);
 
     // Timing-safe verification of the current password
-    if (!auth.verifyPassword(currentPassword, user.salt, user.password_hash)) {
+    if (!(await auth.verifyPassword(currentPassword, user.salt, user.password_hash))) {
       return res.status(400).json({ success: false, error: 'Current password is incorrect' });
     }
 
@@ -276,7 +276,7 @@ router.put('/auth/password', auth.requireAuth, denyGuest, async (req, res) => {
     if (!pwCheck.valid) return res.status(400).json({ success: false, error: pwCheck.error });
 
     // Prevent reusing the same password
-    if (auth.verifyPassword(newPassword, user.salt, user.password_hash)) {
+    if (await auth.verifyPassword(newPassword, user.salt, user.password_hash)) {
       return res.status(400).json({ success: false, error: 'New password must be different from the current one' });
     }
 
@@ -286,7 +286,7 @@ router.put('/auth/password', auth.requireAuth, denyGuest, async (req, res) => {
 
     // Hash the new password and store it as newHash:newSalt in target_value
     const newSalt = auth.generateSalt();
-    const newHash = auth.hashPassword(newPassword, newSalt);
+    const newHash = await auth.hashPassword(newPassword, newSalt);
     const targetValue = `${newHash}:${newSalt}`;
 
     const userEmail = user.email || req.user.email;
