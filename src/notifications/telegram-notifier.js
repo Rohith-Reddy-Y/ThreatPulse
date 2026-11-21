@@ -72,9 +72,11 @@ function formatArticle(article) {
   const cat = categoryEmoji(article.category);
   const pocTag = article.has_poc ? ' ⚡<b>POC</b>' : '';
   const patchTag = article.is_patched === 1 ? ' ✅Patched' : article.is_patched === 0 ? ' ❌Unpatched' : '';
-  const cveTag = article.cve_id ? `\n🏷 <code>${article.cve_id}</code>` : '';
-  const author = article.author ? `\n✍️ ${article.author}` : '';
-  const source = article.source_name ? `\n📡 ${article.source_name}` : '';
+  // Bot API HTML mode rejects messages with bare <, > or & (e.g. "MITRE ATT&CK
+  // Blog"), so every feed-supplied value is escaped.
+  const cveTag = article.cve_id ? `\n🏷 <code>${escapeHtml(article.cve_id)}</code>` : '';
+  const author = article.author ? `\n✍️ ${escapeHtml(article.author)}` : '';
+  const source = article.source_name ? `\n📡 ${escapeHtml(article.source_name)}` : '';
 
   return `${sev} <b>${escapeHtml(article.title)}</b>
 
@@ -82,7 +84,7 @@ ${cat} ${(article.category || 'news').replace('_', ' ').toUpperCase()}${pocTag}$
 
 ${escapeHtml((article.description || '').substring(0, 300))}${(article.description || '').length > 300 ? '...' : ''}
 
-🔗 <a href="${article.url}">Read Full Article →</a>`;
+🔗 <a href="${escapeHtml(article.url).replace(/"/g, '&quot;')}">Read Full Article →</a>`;
 }
 
 /**
@@ -90,7 +92,7 @@ ${escapeHtml((article.description || '').substring(0, 300))}${(article.descripti
  */
 function escapeHtml(text) {
   if (!text) return '';
-  return text
+  return String(text)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
@@ -153,6 +155,11 @@ ${critCount > 0 ? `🔴 ${critCount} Critical\n` : ''}${highCount > 0 ? `🟠 ${
 
     const successCount = results.filter(r => r.success).length;
     console.log(`[Telegram] Sent ${successCount}/${results.length} alert messages`);
+    // Reporting success when every message failed (bad token / chat id) made
+    // the test button say "sent" and logged failed alerts as sent.
+    if (results.length > 0 && successCount === 0) {
+      return { success: false, error: results[0].error || 'Telegram send failed', sent: 0, total: results.length };
+    }
     return { success: true, sent: successCount, total: results.length };
 
   } catch (error) {

@@ -9,6 +9,14 @@
  */
 
 const axios = require('axios');
+const http = require('http');
+const https = require('https');
+const { isSafeUrl, safeLookup } = require('../net-guard');
+
+// The webhook URL is user-supplied: refuse internal/private targets (checked
+// again after DNS resolution) so it can't be used for SSRF.
+const safeHttpAgent = new http.Agent({ lookup: safeLookup });
+const safeHttpsAgent = new https.Agent({ lookup: safeLookup });
 
 const severityColor = {
   critical: 'FF3B30',
@@ -65,11 +73,16 @@ async function sendTeamsAlert(articles, webhookUrl) {
   const url = webhookUrl || process.env.TEAMS_WEBHOOK;
   if (!url) return { success: false, error: 'Teams webhook not configured' };
   if (!articles || articles.length === 0) return { success: false, error: 'No articles to send' };
+  if (!isSafeUrl(url)) return { success: false, error: 'Teams webhook must be a public http(s) URL' };
 
   try {
     await axios.post(url, buildCard(articles), {
       timeout: 10000,
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 'Content-Type': 'application/json' },
+      httpAgent: safeHttpAgent,
+      httpsAgent: safeHttpsAgent,
+      proxy: false,
+      maxRedirects: 0
     });
     console.log(`[Teams] Sent alert with ${articles.length} threat(s)`);
     return { success: true, sent: articles.length };
