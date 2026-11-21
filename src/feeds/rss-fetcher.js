@@ -194,7 +194,13 @@ async function fetchFeedItems(url) {
   const resp = await safeGet(url, { timeout: 30000, headers: FEED_HEADERS, responseType: 'text' });
   const raw = typeof resp.data === 'string' ? resp.data : String(resp.data);
   const xml = raw.replace(/^﻿/, '').trimStart();
-  if (!/<(rss|feed|rdf:RDF)[\s>]/i.test(xml.slice(0, 3000))) {
+  // Only reject obvious HTML pages (bot challenges, moved-feed landing pages).
+  // Real feeds can have long preambles (stylesheets, comments) before <rss>.
+  const looksLikeFeed = /<(rss|feed|rdf:RDF|channel)[\s>]/i.test(xml);
+  if (!looksLikeFeed && /^(<!doctype html|<html)/i.test(xml)) {
+    throw new Error('Response is an HTML page, not an RSS/Atom feed');
+  }
+  if (!looksLikeFeed && !/<(item|entry)[\s>]/i.test(xml)) {
     throw new Error('Response is not an RSS/Atom feed');
   }
   try {
@@ -232,9 +238,11 @@ async function fetchGoogleNewsFallback(source) {
   const cached = fallbackCache.get(source.id);
   if (cached && Date.now() - cached.at < FALLBACK_TTL_MS) return cached.items;
 
-  const q = encodeURIComponent(`site:${site} when:14d`);
-  const url = `https://news.google.com/rss/search?q=${q}&hl=en-US&gl=US&ceid=US:en`;
-  const items = (await fetchFeedItems(url)).map(i => ({
+  // Last 30 days first; sites that post rarely get an unrestricted search.
+  const gn = (query) => `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-US&gl=US&ceid=US:en`;
+  let raw = await fetchFeedItems(gn(`site:${site} when:30d`));
+  if (!raw.length) raw = await fetchFeedItems(gn(`site:${site}`));
+  const items = raw.map(i => ({
     ...i,
     // Google News titles look like "Headline - Publisher": drop the suffix
     title: (i.title || '').replace(/\s+-\s+[^-]{2,60}$/, '')
@@ -298,6 +306,7 @@ async function fetchRSSFeed(source) {
       const articles = itemsToArticles(items, source);
       return { success: true, articles, count: articles.length, via: 'google-news' };
     }
+    else if (items) console.warn(`[RSS] ${source.name}: Google News fallback found no articles for this site`);
   } catch (fbErr) {
     console.warn(`[RSS] ${source.name}: Google News fallback failed too (${errorText(fbErr)})`);
   }
