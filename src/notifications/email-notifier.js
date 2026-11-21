@@ -39,6 +39,14 @@ function initTransporter(smtpConfig) {
   return { transporter, user };
 }
 
+// Feed-supplied text (titles, descriptions, URLs, authors) is untrusted: escape
+// it before putting it into the email HTML.
+function esc(v) {
+  return String(v == null ? '' : v)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 /**
  * Build a beautiful HTML email for threat alerts
  */
@@ -65,17 +73,17 @@ function buildEmailHTML(articles) {
     <tr style="border-bottom: 1px solid #1a2332;">
       <td style="padding: 16px; vertical-align: top;">
         <div style="display: flex; gap: 8px; margin-bottom: 8px;">
-          <span style="background: ${severityColors[a.severity] || '#666'}; color: white; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase;">${a.severity || 'MEDIUM'}</span>
-          <span style="background: #1a2332; color: #8899aa; padding: 2px 8px; border-radius: 4px; font-size: 11px;">${categoryEmojis[a.category] || '📰'} ${(a.category || 'news').replace('_', ' ')}</span>
+          <span style="background: ${severityColors[a.severity] || '#666'}; color: white; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase;">${esc(a.severity || 'MEDIUM')}</span>
+          <span style="background: #1a2332; color: #8899aa; padding: 2px 8px; border-radius: 4px; font-size: 11px;">${categoryEmojis[a.category] || '📰'} ${esc((a.category || 'news').replace('_', ' '))}</span>
           ${a.has_poc ? '<span style="background: #ff3366; color: white; padding: 2px 8px; border-radius: 4px; font-size: 11px;">⚡ POC</span>' : ''}
           ${a.is_patched === 1 ? '<span style="background: #00ff88; color: #000; padding: 2px 8px; border-radius: 4px; font-size: 11px;">✅ Patched</span>' : ''}
           ${a.is_patched === 0 ? '<span style="background: #ff3366; color: white; padding: 2px 8px; border-radius: 4px; font-size: 11px;">❌ Unpatched</span>' : ''}
         </div>
-        <a href="${a.url}" style="color: #00f0ff; font-size: 16px; font-weight: 600; text-decoration: none;">${a.title}</a>
-        ${a.cve_id ? `<div style="color: #ff9500; font-family: 'JetBrains Mono', monospace; font-size: 13px; margin-top: 4px;">${a.cve_id}</div>` : ''}
-        <p style="color: #8899aa; font-size: 13px; margin: 8px 0; line-height: 1.5;">${(a.description || '').substring(0, 200)}${(a.description || '').length > 200 ? '...' : ''}</p>
+        <a href="${esc(a.url)}" style="color: #00f0ff; font-size: 16px; font-weight: 600; text-decoration: none;">${esc(a.title)}</a>
+        ${a.cve_id ? `<div style="color: #ff9500; font-family: 'JetBrains Mono', monospace; font-size: 13px; margin-top: 4px;">${esc(a.cve_id)}</div>` : ''}
+        <p style="color: #8899aa; font-size: 13px; margin: 8px 0; line-height: 1.5;">${esc((a.description || '').substring(0, 200))}${(a.description || '').length > 200 ? '...' : ''}</p>
         <div style="color: #556677; font-size: 12px;">
-          ${a.source_name ? `📡 ${a.source_name}` : ''} ${a.author ? `• ✍️ ${a.author}` : ''} • 🕐 ${new Date(a.published_date).toLocaleString()}
+          ${a.source_name ? `📡 ${esc(a.source_name)}` : ''} ${a.author ? `• ✍️ ${esc(a.author)}` : ''} • 🕐 ${new Date(a.published_date).toLocaleString()}
         </div>
       </td>
     </tr>
