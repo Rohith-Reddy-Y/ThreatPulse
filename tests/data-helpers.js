@@ -1,6 +1,6 @@
 'use strict';
 // Shared test helpers. Run tests with:  tests/run.sh
-// (sets NODE_PATH=tests/shims/node_modules so better-sqlite3/express/axios/
+// (sets NODE_PATH=tests/shims/modules so better-sqlite3/express/axios/
 // nodemailer resolve to the local shims — no npm install needed).
 const fs = require('fs');
 const os = require('os');
