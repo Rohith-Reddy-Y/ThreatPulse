@@ -1503,9 +1503,9 @@ const OBSOLETE_SOURCES = [
   'CCCS (Canada)',
   'BSI (Germany)',
   'Google/Mandiant Threat Intel',
-  'Trend Micro Research', // replaced by the correctly-labelled ZDI entry
-  // Legacy feeds that are permanently dead (404 / bot-blocked / rate-limited)
-  'HackerOne Blog',
+  // Legacy feeds that are permanently dead (404 / bot-blocked / rate-limited).
+  // ('Trend Micro Research' and 'HackerOne Blog' were removed from this list:
+  //  they are current defaults again, served via the Google News fallback.)
   'Reddit r/netsec',
   'Reddit r/malware',
   'SC Magazine',

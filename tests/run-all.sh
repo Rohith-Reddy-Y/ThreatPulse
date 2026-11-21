@@ -6,4 +6,6 @@ cd "$(dirname "$0")/.." || exit 1
 echo "== data / API / notifications suite"
 sh tests/run.sh || exit 1
 echo "== auth / admin / AI / server suite"
-node --no-warnings --test tests/auth.test.js tests/ai.test.js tests/server.test.js
+node --no-warnings --test tests/auth.test.js tests/ai.test.js tests/server.test.js || exit 1
+echo "== feeds / net-guard / IOC / scraper suite"
+node --no-warnings --test tests/classify.test.js tests/rss-fetch.test.js tests/net-guard.test.js tests/api-fetchers.test.js tests/ioc-enrich.test.js tests/scraper-browser.test.js
