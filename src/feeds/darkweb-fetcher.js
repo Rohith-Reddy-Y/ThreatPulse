@@ -37,6 +37,44 @@ function dayOf(value) {
   return (isNaN(d) ? new Date() : d).toISOString().slice(0, 10);
 }
 
+// ── Large JSON off the main thread ──────────────────────────────────
+// ThreatFox `get_iocs` returns every IOC of the last day (several MB). Parsing
+// that with JSON.parse on the main thread blocked the event loop long enough on
+// a ~0.1-CPU instance to fail the 5 s health check. Parse it in a worker and
+// hand back only the first `limit` rows.
+const { Worker } = require('worker_threads');
+const PARSE_WORKER_SRC = `
+const { parentPort, workerData } = require('worker_threads');
+try {
+  const d = JSON.parse(workerData.text);
+  const n = workerData.limit;
+  let out = d;
+  if (Array.isArray(d)) out = d.slice(0, n);
+  else if (d && typeof d === 'object') {
+    out = Object.assign({}, d);
+    if (Array.isArray(d.data)) out.data = d.data.slice(0, n);
+    if (Array.isArray(d.urls)) out.urls = d.urls.slice(0, n);
+  }
+  parentPort.postMessage({ ok: true, out });
+} catch (e) {
+  parentPort.postMessage({ ok: false, error: e.message });
+}`;
+
+function parseJsonOffThread(payload, limit) {
+  // Already parsed (small responses / test stubs) → just trim.
+  if (typeof payload !== 'string') {
+    if (payload && Array.isArray(payload.data)) return Promise.resolve({ ...payload, data: payload.data.slice(0, limit) });
+    if (payload && Array.isArray(payload.urls)) return Promise.resolve({ ...payload, urls: payload.urls.slice(0, limit) });
+    return Promise.resolve(payload);
+  }
+  return new Promise((resolve, reject) => {
+    const w = new Worker(PARSE_WORKER_SRC, { eval: true, workerData: { text: payload, limit } });
+    const timer = setTimeout(() => { w.terminate(); reject(new Error('JSON parse timed out')); }, 30000);
+    w.once('message', (m) => { clearTimeout(timer); w.terminate(); m.ok ? resolve(m.out) : reject(new Error(m.error)); });
+    w.once('error', (e) => { clearTimeout(timer); reject(e); });
+  });
+}
+
 /**
  * Fetch RansomWatch — Tracks ransomware group leak site posts
  * Source: https://github.com/joshhighet/ransomwatch
@@ -171,10 +209,10 @@ async function fetchThreatFox(source) {
     const response = await axios.post(
       'https://threatfox-api.abuse.ch/api/v1/',
       { query: 'get_iocs', days: 1 },
-      requestConfig()
+      { ...requestConfig(), responseType: 'text', maxContentLength: 50 * 1024 * 1024 }
     );
 
-    const data = response.data;
+    const data = (await parseJsonOffThread(response.data, 100)) || {};
     const articles = [];
 
     if (data.query_status === 'ok' && data.data && Array.isArray(data.data)) {
@@ -232,7 +270,8 @@ async function fetchURLhaus(source) {
   try {
     // URLhaus moved to a path-based endpoint (the old `urlhaus_recent` body 404s now).
     const response = await axios.get(
-      'https://urlhaus-api.abuse.ch/v1/urls/recent/',
+      // /limit/<n>/ caps the response (default is up to 1000 URLs)
+      'https://urlhaus-api.abuse.ch/v1/urls/recent/limit/100/',
       requestConfig()
     );
 
@@ -301,7 +340,7 @@ async function fetchMalwareBazaar(source) {
   try {
     const response = await axios.post(
       'https://mb-api.abuse.ch/api/v1/',
-      'query=get_recent&selector=time',
+      'query=get_recent&selector=100',   // latest 100 samples (bounded)
       requestConfig({ extraHeaders: { 'Content-Type': 'application/x-www-form-urlencoded' } })
     );
 

@@ -264,6 +264,16 @@ async function initialize() {
     console.log(`[Init] Keep-alive ping enabled → ${pingUrl} every 10 min ✓`);
   }
 
+  // 6c. Event-loop lag monitor: logs whenever the process was blocked for >1s,
+  // so a failed platform health check can be traced to what was running.
+  let lagLast = Date.now();
+  setInterval(() => {
+    const now = Date.now();
+    const lag = now - lagLast - 500;
+    if (lag > 1000) console.warn(`[Lag] event loop blocked ~${lag} ms (fetching: ${aggregator.getStatus ? JSON.stringify(aggregator.getStatus().isRunning) : 'n/a'})`);
+    lagLast = now;
+  }, 500).unref();
+
   // 7. Start initial fetch after delay
   console.log('[Init] Starting initial feed fetch in 5 seconds...');
   setTimeout(async () => {

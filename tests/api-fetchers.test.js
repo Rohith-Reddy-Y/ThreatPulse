@@ -152,3 +152,37 @@ test('aggregator: failed API / custom / dark-web fetches are counted and mapped 
     global.setTimeout = realSetTimeout;
   }
 });
+
+test('ThreatFox: a multi-MB response is parsed off the main thread (event loop stays responsive)', async () => {
+  reset();
+  // ~6 MB of IOCs, like a busy day on ThreatFox
+  const iocs = Array.from({ length: 12000 }, (_, i) => ({
+    id: String(i), ioc: `198.51.${i % 250}.${i % 200}:443`, threat_type: 'botnet_cc', ioc_type: 'ip:port',
+    malware: 'win.cobalt_strike', malware_printable: i % 2 ? 'Cobalt Strike' : 'AsyncRAT',
+    first_seen: new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC',
+    confidence_level: 75, tags: ['c2', 'x'.repeat(300)], reporter: 'test',
+  }));
+  const big = JSON.stringify({ query_status: 'ok', data: iocs });
+  assert.ok(big.length > 5e6);
+  state.axiosPost = async () => ({ data: big });           // raw text, as with responseType 'text'
+
+  let maxGap = 0, last = Date.now();
+  const tick = setInterval(() => { const n = Date.now(); maxGap = Math.max(maxGap, n - last); last = n; }, 10);
+  const r = await dw.fetchThreatFox({ id: 2 });
+  clearInterval(tick);
+
+  assert.equal(r.success, true);
+  assert.ok(r.articles.length > 0);
+  assert.equal(calls.axiosPost[0].config.responseType, 'text');
+  assert.ok(maxGap < 250, `event loop blocked for ${maxGap} ms`);
+});
+
+test('URLhaus and MalwareBazaar request bounded result sets', async () => {
+  reset();
+  state.axiosGet = async () => ({ data: { query_status: 'ok', urls: [] } });
+  state.axiosPost = async () => ({ data: { query_status: 'ok', data: [] } });
+  await dw.fetchURLhaus({ id: 3 });
+  await dw.fetchMalwareBazaar({ id: 4 });
+  assert.match(calls.axiosGet[0].url, /\/urls\/recent\/limit\/100\/$/);
+  assert.equal(calls.axiosPost[0].body, 'query=get_recent&selector=100');
+});

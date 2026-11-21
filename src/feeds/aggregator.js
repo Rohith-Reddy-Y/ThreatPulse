@@ -10,6 +10,24 @@ const { fetchCVEs, fetchCISAKEV } = require('./cve-fetcher');
 const { fetchDarkWebIntel } = require('./darkweb-fetcher');
 const { scrapeSource } = require('./web-scraper');
 
+
+// Insert in small chunks and yield to the event loop between them. Each insert
+// runs synchronous enrichment (IOCs, actors, MITRE); a few hundred new items in
+// one transaction (e.g. NVD after a fresh boot) could block the event loop for
+// seconds on a ~0.1-CPU instance and fail the platform health check.
+const INSERT_CHUNK = 25;
+async function insertArticlesChunked(articles) {
+  let newCount = 0;
+  const newArticles = [];
+  for (let i = 0; i < articles.length; i += INSERT_CHUNK) {
+    const r = db.insertArticles(articles.slice(i, i + INSERT_CHUNK));
+    newCount += r.newCount;
+    newArticles.push(...r.newArticles);
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  return { newCount, newArticles };
+}
+
 let isRunning = false;
 let lastFetchTime = null;
 let fetchStats = { total: 0, new: 0, errors: 0 };
@@ -69,7 +87,7 @@ async function fetchAllSources() {
         if (result.status === 'fulfilled' && result.value.success) {
           const { articles } = result.value;
           if (articles.length > 0) {
-            const inserted = db.insertArticles(articles);
+            const inserted = await insertArticlesChunked(articles);
             totalNew += inserted.newCount;
             totalFetched += articles.length;
             newArticles.push(...inserted.newArticles);
@@ -111,7 +129,7 @@ async function fetchAllSources() {
         }
 
         if (result.success && result.articles.length > 0) {
-          const inserted = db.insertArticles(result.articles);
+          const inserted = await insertArticlesChunked(result.articles);
           totalNew += inserted.newCount;
           totalFetched += result.articles.length;
           newArticles.push(...inserted.newArticles);
@@ -143,7 +161,7 @@ async function fetchAllSources() {
       try {
         const dwResult = await fetchDarkWebIntel(darkwebSources);
         if (dwResult.articles.length > 0) {
-          const inserted = db.insertArticles(dwResult.articles);
+          const inserted = await insertArticlesChunked(dwResult.articles);
           totalNew += inserted.newCount;
           totalFetched += dwResult.articles.length;
           newArticles.push(...inserted.newArticles);
@@ -173,7 +191,7 @@ async function fetchAllSources() {
         try {
           const result = await scrapeSource(source);
           if (result.success && result.articles.length > 0) {
-            const inserted = db.insertArticles(result.articles);
+            const inserted = await insertArticlesChunked(result.articles);
             totalNew += inserted.newCount;
             totalFetched += result.articles.length;
             newArticles.push(...inserted.newArticles);
@@ -202,7 +220,7 @@ async function fetchAllSources() {
         try {
           const { articles, results } = await browserFetcher.fetchViaBrowser(browserSources);
           if (articles.length > 0) {
-            const inserted = db.insertArticles(articles);
+            const inserted = await insertArticlesChunked(articles);
             totalNew += inserted.newCount;
             totalFetched += articles.length;
             newArticles.push(...inserted.newArticles);
@@ -226,7 +244,7 @@ async function fetchAllSources() {
           try {
             const result = await fetchRSSFeed(source);
             if (result.success && result.articles.length > 0) {
-              const inserted = db.insertArticles(result.articles);
+              const inserted = await insertArticlesChunked(result.articles);
               totalNew += inserted.newCount;
               totalFetched += result.articles.length;
               newArticles.push(...inserted.newArticles);
