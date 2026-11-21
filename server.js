@@ -244,6 +244,18 @@ async function initialize() {
     console.log('');
   });
 
+  // 6b. Render free tier: the service sleeps after 15 min without inbound
+  // traffic, which would also stop the feed scheduler. Ping our own public URL
+  // (RENDER_EXTERNAL_URL is set automatically by Render) every 10 minutes.
+  if (process.env.RENDER_EXTERNAL_URL) {
+    const https = require('https');
+    const pingUrl = `${process.env.RENDER_EXTERNAL_URL.replace(/\/$/, '')}/healthz`;
+    setInterval(() => {
+      https.get(pingUrl, (r) => r.resume()).on('error', (e) => console.warn('[KeepAlive] ping failed:', e.message));
+    }, 10 * 60 * 1000);
+    console.log(`[Init] Keep-alive ping enabled → ${pingUrl} every 10 min ✓`);
+  }
+
   // 7. Start initial fetch after delay
   console.log('[Init] Starting initial feed fetch in 5 seconds...');
   setTimeout(async () => {
