@@ -4,17 +4,20 @@
  */
 
 const RSSParser = require('rss-parser');
+const { safeGet } = require('../net-guard');
 // Shared, source-agnostic enrichment (sector / threat actors / MITRE IDs)
 const { detectSector, detectThreatActors, extractMitreIds } = require('../enrich');
 
-const parser = new RSSParser({
-  timeout: 30000,
-  headers: {
+const FEED_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     'Accept': 'application/rss+xml, application/atom+xml, application/xml;q=0.9, text/html;q=0.8, */*;q=0.7',
     'Accept-Language': 'en-US,en;q=0.9',
     'Cache-Control': 'no-cache'
-  },
+};
+
+const parser = new RSSParser({
+  timeout: 30000,
+  headers: FEED_HEADERS,
   customFields: {
     item: [
       ['dc:creator', 'creator'],
@@ -134,7 +137,10 @@ function stripHtml(html) {
  */
 async function fetchRSSFeed(source) {
   try {
-    const feed = await parser.parseURL(source.url);
+    // Fetch through the SSRF guard (blocks private IPs, re-checks redirects),
+    // then parse — instead of parser.parseURL(), which follows redirects blindly.
+    const resp = await safeGet(source.url, { timeout: 30000, headers: FEED_HEADERS, responseType: 'text' });
+    const feed = await parser.parseString(typeof resp.data === 'string' ? resp.data : String(resp.data));
     
     // Reset failure counter on success
     failureTracker.delete(source.id);

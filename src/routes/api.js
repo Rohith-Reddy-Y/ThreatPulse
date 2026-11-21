@@ -26,6 +26,23 @@ setInterval(() => {
 }, 15 * 60 * 1000);
 
 // ============================================
+// GUEST RESTRICTIONS
+// ============================================
+// Every anonymous visitor shares the single "guest" account, so guests must not be
+// able to change shared state (sources, notification targets, account settings)
+// or trigger expensive work.
+function denyGuest(req, res, next) {
+  if (req.user && req.user.username === 'guest') {
+    return res.status(403).json({ success: false, error: 'Please sign in or register to use this feature.' });
+  }
+  next();
+}
+
+// Manual fetch cooldown (non-admins) — a full fetch is heavy on a small VM.
+let lastManualFetch = 0;
+const MANUAL_FETCH_COOLDOWN_MS = 5 * 60 * 1000;
+
+// ============================================
 // AUTH ROUTES (public)
 // ============================================
 
@@ -108,6 +125,9 @@ router.post('/auth/forgot-password', async (req, res) => {
 
     // If user was found, send reset email
     if (result._token && result._email) {
+      // Prefer the configured BASE_URL; falling back to the Host header lets an attacker
+      // poison reset links, so warn loudly when it's missing.
+      if (!process.env.BASE_URL) console.warn('[Auth] ⚠️  BASE_URL not set — reset link uses the request Host header.');
       const baseUrl = process.env.BASE_URL || `${req.protocol}://${req.get('host')}`;
       const resetLink = `${baseUrl}/?reset=${result._token}`;
       
@@ -143,14 +163,11 @@ router.post('/auth/forgot-password', async (req, res) => {
         console.error(`[Auth] Failed to send reset email: ${emailErr.message}`);
       }
 
-      // Show the reset link in the response if email didn't actually go out
-      // (SMTP mock, send failure, or no SMTP configured at all)
+      // SECURITY: never return the reset link in the HTTP response — that would let
+      // anyone reset any account whose email they know. If email couldn't be sent,
+      // the link is only in the server logs above (admin-only via `docker logs`).
       if (!emailSent) {
-        return res.json({
-          success: true,
-          message: 'Reset link generated but email could not be sent. Copy this URL to reset your password:',
-          _devResetLink: resetLink
-        });
+        console.log('[Auth] ⚠️  Reset email not delivered — link is available only in these server logs.');
       }
     }
 
@@ -233,7 +250,7 @@ router.post('/auth/refresh', (req, res) => {
   res.json({ success: true, user: result.user });
 });
 
-router.put('/auth/password', auth.requireAuth, async (req, res) => {
+router.put('/auth/password', auth.requireAuth, denyGuest, async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
     if (!currentPassword || !newPassword) {
@@ -280,7 +297,7 @@ router.put('/auth/password', auth.requireAuth, async (req, res) => {
   }
 });
 
-router.put('/auth/email', auth.requireAuth, async (req, res) => {
+router.put('/auth/email', auth.requireAuth, denyGuest, async (req, res) => {
   try {
     const email = auth.sanitizeString(req.body.email, 255);
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -313,7 +330,7 @@ router.put('/auth/email', auth.requireAuth, async (req, res) => {
   }
 });
 
-router.post('/auth/verify-change', auth.requireAuth, (req, res) => {
+router.post('/auth/verify-change', auth.requireAuth, denyGuest, (req, res) => {
   try {
     const { type, code } = req.body;
     if (!type || !code) {
@@ -499,7 +516,7 @@ router.get('/sources', auth.requireAuth, (req, res) => {
   }
 });
 
-router.post('/sources', auth.requireAuth, (req, res) => {
+router.post('/sources', auth.requireAuth, denyGuest, (req, res) => {
   try {
     const { url, name, type = 'rss', category = 'news' } = req.body;
     const cleanUrl = auth.sanitizeString(url, 2048);
@@ -532,14 +549,15 @@ router.post('/sources', auth.requireAuth, (req, res) => {
   }
 });
 
-router.put('/sources/:id', auth.requireAuth, (req, res) => {
+router.put('/sources/:id', auth.requireAuth, denyGuest, (req, res) => {
   try {
     const { id } = req.params;
     const sourceId = parseInt(id);
     // Check ownership
     const source = db.getDb().prepare('SELECT * FROM sources WHERE id = ?').get(sourceId);
     if (!source) return res.status(404).json({ error: 'Source not found' });
-    if (source.user_id && source.user_id !== req.user.id && req.user.role !== 'admin') {
+    // System sources (user_id NULL) are admin-only — previously anyone could edit them.
+    if (source.user_id !== req.user.id && req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Not authorized to modify this source' });
     }
 
@@ -558,7 +576,7 @@ router.put('/sources/:id', auth.requireAuth, (req, res) => {
   }
 });
 
-router.delete('/sources/:id', auth.requireAuth, (req, res) => {
+router.delete('/sources/:id', auth.requireAuth, denyGuest, (req, res) => {
   try {
     const sourceId = parseInt(req.params.id);
     const source = db.getDb().prepare('SELECT * FROM sources WHERE id = ?').get(sourceId);
@@ -586,10 +604,18 @@ router.delete('/sources/:id', auth.requireAuth, (req, res) => {
 // FETCH TRIGGER (require auth)
 // ============================================
 
-router.post('/fetch-now', auth.requireAuth, async (req, res) => {
+router.post('/fetch-now', auth.requireAuth, denyGuest, async (req, res) => {
   try {
     const aggregator = req.app.get('aggregator');
     if (!aggregator) return res.status(500).json({ error: 'Aggregator not initialized' });
+
+    if (req.user.role !== 'admin') {
+      const wait = lastManualFetch + MANUAL_FETCH_COOLDOWN_MS - Date.now();
+      if (wait > 0) {
+        return res.status(429).json({ error: `A fetch ran recently. Try again in ${Math.ceil(wait / 60000)} minute(s).` });
+      }
+    }
+    lastManualFetch = Date.now();
 
     res.json({ success: true, message: 'Fetch started' });
 
@@ -632,7 +658,7 @@ router.get('/notifications/settings', auth.requireAuth, (req, res) => {
   }
 });
 
-router.put('/notifications/settings', auth.requireAuth, (req, res) => {
+router.put('/notifications/settings', auth.requireAuth, denyGuest, (req, res) => {
   try {
     const result = db.updateNotificationSettings(req.body, req.user.id);
     res.json(result);
@@ -641,7 +667,7 @@ router.put('/notifications/settings', auth.requireAuth, (req, res) => {
   }
 });
 
-router.post('/notifications/test', auth.requireAuth, async (req, res) => {
+router.post('/notifications/test', auth.requireAuth, denyGuest, async (req, res) => {
   try {
     const { type } = req.body;
     const settings = db.getNotificationSettings(req.user.id);

@@ -21,6 +21,11 @@ const auth = require('./src/auth');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Behind Caddy (docker network) req.ip would otherwise be the proxy's IP for every
+// visitor, making rate limits global. Trust only private-network proxies, so a
+// directly-exposed server can't be fooled by a spoofed X-Forwarded-For.
+app.set('trust proxy', process.env.TRUST_PROXY || 'loopback, linklocal, uniquelocal');
+
 // ============================================
 // SECURITY MIDDLEWARE
 // ============================================
@@ -47,6 +52,14 @@ app.use((req, res, next) => {
   res.setHeader('X-XSS-Protection', '1; mode=block');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  // Blocks injected inline scripts / javascript: URLs from running.
+  // The sha256 hashes allow the small inline <script> blocks in index.html and
+  // admin.html — if you edit those blocks, regenerate the hashes (browser console
+  // prints the expected hash when one is blocked).
+  res.setHeader('Content-Security-Policy',
+    "default-src 'self'; script-src 'self' 'sha256-rwPhTO8AH2YTkM4qY4TAdsfwG/NzhP/ujV/DyMysVbo=' 'sha256-NEKOWahk3VTXigudAbS/Ab55vpvYBInuLocngBFznf0=' 'sha256-ZpYQh6FbExcbZMpg++Z26FEb8DFc2iu8gJ2zbysByYk='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+    "font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https:; connect-src 'self'; " +
+    "frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'");
   if (process.env.NODE_ENV === 'production' || process.env.RAILWAY_ENVIRONMENT) {
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   }

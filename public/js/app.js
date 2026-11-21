@@ -191,6 +191,12 @@
     return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), ms); };
   }
 
+  // Defence in depth: never render non-http(s) links (e.g. javascript:) as hrefs.
+  function safeUrl(u) {
+    try { return ['http:', 'https:'].includes(new URL(u, location.href).protocol) ? u : '#'; }
+    catch { return '#'; }
+  }
+
   function escapeHtml(str) {
     if (!str) return '';
     const div = document.createElement('div');
@@ -897,7 +903,7 @@
         : '<span class="badge badge-patched">Reviewed</span>';
       const noteSnippet = who && who.notes ? `<span class="sidebar-item-note">${escapeHtml(who.notes.substring(0, 50))}</span>` : '';
       return `<div class="sidebar-article-item">
-        <a href="${escapeHtml(a.url)}" target="_blank" rel="noopener" class="sidebar-article-link" title="${escapeHtml(a.title)}">${escapeHtml(a.title.substring(0, 60))}${a.title.length > 60 ? '...' : ''}</a>
+        <a href="${escapeHtml(safeUrl(a.url))}" target="_blank" rel="noopener" class="sidebar-article-link" title="${escapeHtml(a.title)}">${escapeHtml(a.title.substring(0, 60))}${a.title.length > 60 ? '...' : ''}</a>
         <div class="sidebar-article-meta">${statusTag} ${who ? escapeHtml(who.username) : ''} ${noteSnippet}</div>
       </div>`;
     }).join('');
@@ -1079,7 +1085,7 @@
         <div class="article-header">
           <div class="article-badges">${catBadge}${sevBadge}${ownerBadge}${ttpBadge}${pocBadge}${patchBadge}${sectorBadge}${actorBadge}${mitreBadges}${cveLink}</div>
         </div>
-        <h3 class="article-title"><a href="${escapeHtml(article.url)}" target="_blank" rel="noopener">${escapeHtml(article.title)}</a></h3>
+        <h3 class="article-title"><a href="${escapeHtml(safeUrl(article.url))}" target="_blank" rel="noopener">${escapeHtml(article.title)}</a></h3>
         <div class="article-meta">
           <span>${escapeHtml(article.source_name)}</span>
           ${article.author ? `<span>by ${escapeHtml(article.author)}</span>` : ''}

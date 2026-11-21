@@ -131,7 +131,9 @@ function verifyToken(token) {
       .update(`${headerEncoded}.${payloadEncoded}`)
       .digest('base64url');
 
-    if (signature !== expectedSignature) return null;
+    const sigBuf = Buffer.from(signature);
+    const expBuf = Buffer.from(expectedSignature);
+    if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) return null;
 
     // Decode and check expiry
     const payload = JSON.parse(base64UrlDecode(payloadEncoded));

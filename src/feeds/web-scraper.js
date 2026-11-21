@@ -3,7 +3,7 @@
  * Scrapes article metadata from custom URLs that don't have RSS feeds
  */
 
-const axios = require('axios');
+const { safeGet } = require('../net-guard');
 const cheerio = require('cheerio');
 const { detectCategory, detectSeverity, extractCVE, detectPOC, detectPatchStatus } = require('./rss-fetcher');
 
@@ -120,7 +120,7 @@ function extractArticleLinks($, baseUrl) {
  */
 async function scrapeUrl(url) {
   try {
-    const response = await axios.get(url, HTTP_CONFIG);
+    const response = await safeGet(url, HTTP_CONFIG);
     const $ = cheerio.load(response.data);
     const metadata = extractMetadata($, url);
 
@@ -143,7 +143,7 @@ async function scrapeUrl(url) {
  */
 async function scrapeSource(source) {
   try {
-    const response = await axios.get(source.url, HTTP_CONFIG);
+    const response = await safeGet(source.url, HTTP_CONFIG);
     const $ = cheerio.load(response.data);
     const articles = [];
 

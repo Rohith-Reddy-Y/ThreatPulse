@@ -623,7 +623,16 @@ function updateSourceFetchStatus(id, { last_fetched, last_error = null }) {
 // ARTICLE CRUD (user-scoped)
 // ============================================
 
+// Only http(s) links may be stored — feed-supplied "javascript:" / "data:" links
+// would become stored XSS when rendered as <a href>.
+function isHttpUrl(u) {
+  try { return ['http:', 'https:'].includes(new URL(u).protocol); } catch { return false; }
+}
+
 function insertArticle(article) {
+  if (!article || !isHttpUrl(article.url)) {
+    return { success: false, isNew: false, error: 'Rejected non-http(s) article URL' };
+  }
   // Centralized enrichment — fills sector / threat_actors / mitre_ids for every
   // source (RSS, CVE, CISA KEV, dark web, scraped) that didn't set them.
   enrichArticle(article);
