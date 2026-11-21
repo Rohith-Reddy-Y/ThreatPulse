@@ -242,6 +242,11 @@ async function fetchGoogleNewsFallback(source) {
   const gn = (query) => `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-US&gl=US&ceid=US:en`;
   let raw = await fetchFeedItems(gn(`site:${site} when:30d`));
   if (!raw.length) raw = await fetchFeedItems(gn(`site:${site}`));
+  // Google News often indexes only the main domain (sophos.com, not news.sophos.com)
+  const parts = site.split('.');
+  if (!raw.length && parts.length > 2) {
+    raw = await fetchFeedItems(gn(`site:${parts.slice(-2).join('.')} when:30d`));
+  }
   const items = raw.map(i => ({
     ...i,
     // Google News titles look like "Headline - Publisher": drop the suffix
