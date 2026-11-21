@@ -35,8 +35,25 @@ const PASSWORD_MIN_LENGTH = 8;
 
 // Token blacklist (in-memory, for logout)
 const tokenBlacklist = new Set();
-// Refresh token store: refreshToken → { userId, username, role, expiresAt }
+// Refresh token store: refreshToken → { userId, username, role, expiresAt, replacedBy?, graceUntil? }
 const refreshTokens = new Map();
+// Guest tokens are tracked separately so a flood of anonymous /auth/guest calls
+// (each mints a 7-day refresh token) can't grow memory without bound or evict
+// registered users' sessions.
+const guestRefreshTokens = new Set();
+const MAX_REFRESH_TOKENS = 50000;
+const MAX_GUEST_REFRESH_TOKENS = 10000;
+// After rotation the old refresh token stays usable briefly, so parallel requests
+// that all got a 401 and all refresh with the same cookie don't log the user out.
+const REFRESH_GRACE_MS = 30 * 1000;
+const GUEST_USERNAME = 'guest';
+
+// SQLite's datetime('now') format ("YYYY-MM-DD HH:MM:SS", UTC). Expiry columns are
+// compared against datetime('now') as strings, so an ISO "…T…Z" value would sort
+// after it for the rest of the day and never expire on time.
+function sqliteDateTime(ms) {
+  return new Date(ms).toISOString().slice(0, 19).replace('T', ' ');
+}
 
 // ============================================
 // PASSWORD HASHING (crypto.scryptSync)
@@ -58,6 +75,9 @@ function verifyPassword(password, salt, storedHash) {
 }
 
 function validatePasswordStrength(password) {
+  if (typeof password !== 'string' || !password) {
+    return { valid: false, error: 'Password is required' };
+  }
   if (password.length < PASSWORD_MIN_LENGTH) {
     return { valid: false, error: `Password must be at least ${PASSWORD_MIN_LENGTH} characters` };
   }
@@ -113,6 +133,16 @@ function createRefreshToken(user) {
     role: user.role,
     expiresAt
   });
+  if (user.username === GUEST_USERNAME) {
+    guestRefreshTokens.add(token);
+    while (guestRefreshTokens.size > MAX_GUEST_REFRESH_TOKENS) {
+      revokeRefreshToken(guestRefreshTokens.values().next().value);
+    }
+  }
+  // Backstop: Map iterates in insertion order, so the first key is the oldest
+  while (refreshTokens.size > MAX_REFRESH_TOKENS) {
+    revokeRefreshToken(refreshTokens.keys().next().value);
+  }
   return token;
 }
 
@@ -146,14 +176,26 @@ function verifyToken(token) {
   }
 }
 
+// Returns { token, entry, viaGrace } for a usable refresh token, else null.
+// A token that was already rotated is accepted only within REFRESH_GRACE_MS, and
+// then resolves to its (still live, not yet rotated) successor.
 function verifyRefreshToken(token) {
   const entry = refreshTokens.get(token);
   if (!entry) return null;
-  if (Date.now() > entry.expiresAt) {
-    refreshTokens.delete(token);
+  const now = Date.now();
+  if (now > entry.expiresAt) {
+    revokeRefreshToken(token);
     return null;
   }
-  return entry;
+  if (entry.replacedBy) {
+    const successor = refreshTokens.get(entry.replacedBy);
+    if (now > entry.graceUntil || !successor || successor.replacedBy || now > successor.expiresAt) {
+      revokeRefreshToken(token);
+      return null;
+    }
+    return { token: entry.replacedBy, entry: successor, viaGrace: true };
+  }
+  return { token, entry, viaGrace: false };
 }
 
 function blacklistToken(token) {
@@ -164,11 +206,22 @@ function blacklistToken(token) {
 
 function revokeRefreshToken(token) {
   refreshTokens.delete(token);
+  guestRefreshTokens.delete(token);
+}
+
+// Revoke every refresh token of a user (e.g. after a password change), optionally
+// keeping the caller's current session.
+function revokeUserSessions(userId, keepToken = null) {
+  for (const [rt, entry] of refreshTokens) {
+    if (entry.userId === userId && rt !== keepToken) revokeRefreshToken(rt);
+  }
 }
 
 // ============================================
 // AUTH MIDDLEWARE — reads from httpOnly cookie first, Bearer header as fallback
 // ============================================
+
+const MUST_CHANGE_ALLOWED_PATHS = new Set(['/api/auth/me', '/api/auth/password', '/api/auth/logout']);
 
 function requireAuth(req, res, next) {
   let token = null;
@@ -195,6 +248,19 @@ function requireAuth(req, res, next) {
   const user = db.getUserById(payload.userId);
   if (!user || !user.is_active) {
     return res.status(401).json({ error: 'Account disabled or not found' });
+  }
+
+  // A forced password change (first-run admin) must be done before anything else —
+  // the UI modal alone doesn't stop direct API use with the initial password.
+  if (user.must_change_password) {
+    const fullPath = `${req.baseUrl || ''}${req.path || ''}`.toLowerCase().replace(/\/+$/, '');
+    if (!MUST_CHANGE_ALLOWED_PATHS.has(fullPath)) {
+      return res.status(403).json({
+        success: false,
+        error: 'You must change your password before continuing.',
+        mustChangePassword: true
+      });
+    }
   }
 
   req.user = {
@@ -227,6 +293,12 @@ function registerUser(username, displayName, password, inviteCode, email = null)
   }
   if (!/^[a-zA-Z0-9_.-]+$/.test(username)) {
     return { success: false, error: 'Username can only contain letters, numbers, dots, hyphens, and underscores' };
+  }
+  // The shared guest account is created lazily on the first anonymous visit; on a
+  // fresh (ephemeral) deploy someone could otherwise register it first and own the
+  // workspace every anonymous visitor is dropped into.
+  if (username.toLowerCase() === GUEST_USERNAME) {
+    return { success: false, error: 'Username already taken' };
   }
   if (!displayName || displayName.length < 2 || displayName.length > 64) {
     return { success: false, error: 'Display name must be 2-64 characters' };
@@ -296,7 +368,7 @@ function registerUser(username, displayName, password, inviteCode, email = null)
 }
 
 function loginUser(identifier, password) {
-  if (!identifier || !password) {
+  if (!identifier || !password || typeof password !== 'string') {
     return { success: false, error: 'Username/email and password are required' };
   }
 
@@ -320,11 +392,6 @@ function loginUser(identifier, password) {
     db.unlockAccount(user.id);
   }
 
-  // Check if account is active
-  if (!user.is_active) {
-    return { success: false, error: 'Account has been disabled. Contact admin.' };
-  }
-
   // Verify password
   if (!verifyPassword(password, user.salt, user.password_hash)) {
     db.incrementFailedLogins(user.id);
@@ -338,6 +405,11 @@ function loginUser(identifier, password) {
     }
 
     return { success: false, error: 'Invalid username/email or password' };
+  }
+
+  // Only reveal that an account is disabled to someone who knows its password
+  if (!user.is_active) {
+    return { success: false, error: 'Account has been disabled. Contact admin.' };
   }
 
   // Success — reset failed attempts and update last login
@@ -365,21 +437,30 @@ function loginUser(identifier, password) {
 function refreshAccessToken(refreshTokenStr) {
   if (!refreshTokenStr) return { success: false, error: 'Refresh token required' };
 
-  const entry = verifyRefreshToken(refreshTokenStr);
-  if (!entry) return { success: false, error: 'Invalid or expired refresh token' };
+  const found = verifyRefreshToken(refreshTokenStr);
+  if (!found) return { success: false, error: 'Invalid or expired refresh token' };
+  const { entry } = found;
 
   // Verify user still exists and is active
   const user = db.getUserById(entry.userId);
   if (!user || !user.is_active) {
+    revokeRefreshToken(found.token);
     revokeRefreshToken(refreshTokenStr);
     return { success: false, error: 'Account disabled or not found' };
   }
 
-  // Rotate: revoke old refresh token, issue new pair
-  revokeRefreshToken(refreshTokenStr);
+  let newRefreshToken;
+  if (found.viaGrace) {
+    // A concurrent request already rotated this token — hand back the same successor
+    newRefreshToken = found.token;
+  } else {
+    // Rotate: the old token keeps working only for a short grace window
+    newRefreshToken = createRefreshToken(user);
+    entry.replacedBy = newRefreshToken;
+    entry.graceUntil = Date.now() + REFRESH_GRACE_MS;
+  }
 
   const newAccessToken = createToken({ userId: user.id, username: user.username, role: user.role });
-  const newRefreshToken = createRefreshToken(user);
 
   return {
     success: true,
@@ -390,21 +471,42 @@ function refreshAccessToken(refreshTokenStr) {
       username: user.username,
       displayName: user.display_name,
       role: user.role,
-      email: user.email || null
+      email: user.email || null,
+      mustChangePassword: !!user.must_change_password
     }
   };
 }
 
+// Works without a valid access token: an idle tab's access token is usually
+// expired by the time the user clicks "log out", and the refresh token must still
+// be revoked. Returns the user id when it can be determined (for the audit log).
 function logoutUser(req) {
+  let userId = null;
+
   // Blacklist access token
-  const accessToken = req.cookies?.tp_access || req.token;
-  if (accessToken) blacklistToken(accessToken);
+  const authz = req.headers?.authorization;
+  const accessToken = req.cookies?.tp_access || req.token ||
+    (authz && authz.startsWith('Bearer ') ? authz.slice(7) : null);
+  if (accessToken) {
+    const payload = verifyToken(accessToken);
+    if (payload) {
+      userId = payload.userId;
+      blacklistToken(accessToken);
+    }
+  }
 
-  // Revoke refresh token
+  // Revoke refresh token (and, if it was a just-rotated one, its successor)
   const refreshToken = req.cookies?.tp_refresh;
-  if (refreshToken) revokeRefreshToken(refreshToken);
+  if (refreshToken) {
+    const entry = refreshTokens.get(refreshToken);
+    if (entry) {
+      if (userId == null) userId = entry.userId;
+      if (entry.replacedBy) revokeRefreshToken(entry.replacedBy);
+    }
+    revokeRefreshToken(refreshToken);
+  }
 
-  return { success: true };
+  return { success: true, userId };
 }
 
 // ============================================
@@ -451,7 +553,7 @@ function ensureAdminExists() {
 setInterval(() => {
   const now = Date.now();
   for (const [token, entry] of refreshTokens) {
-    if (now > entry.expiresAt) refreshTokens.delete(token);
+    if (now > entry.expiresAt || (entry.graceUntil && now > entry.graceUntil)) revokeRefreshToken(token);
   }
 }, 60 * 60 * 1000);
 
@@ -523,7 +625,7 @@ function forgotPassword(email) {
   if (!user) return genericResponse;
 
   const token = crypto.randomBytes(32).toString('hex');
-  const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  const expiresAt = sqliteDateTime(Date.now() + 60 * 60 * 1000);
 
   db.createPasswordResetToken(user.id, token, expiresAt);
   db.cleanupExpiredResetTokens();
@@ -555,9 +657,7 @@ function resetPassword(token, newPassword) {
   db.logAudit(tokenRow.user_id, 'password_reset', 'Password reset via email token', null);
 
   // Revoke all sessions for this user on password reset
-  for (const [rt, entry] of refreshTokens) {
-    if (entry.userId === tokenRow.user_id) refreshTokens.delete(rt);
-  }
+  revokeUserSessions(tokenRow.user_id);
 
   return { success: true, message: 'Password has been reset successfully' };
 }
@@ -567,7 +667,7 @@ function resetPassword(token, newPassword) {
 // ============================================
 // A single shared "guest" account lets anonymous visitors use the dashboard
 // without registering. Everyone shares the same guest workspace.
-const GUEST_USERNAME = 'guest';
+// (GUEST_USERNAME is defined in CONFIG above.)
 
 function getOrCreateGuestUser() {
   let guest = db.getUserByUsername(GUEST_USERNAME);
@@ -581,6 +681,8 @@ function getOrCreateGuestUser() {
     guest = db.getUserById(result.id);
   }
   if (!guest) return { success: false, error: 'Failed to initialize guest account' };
+  // Admins can switch guest access off by disabling the guest account
+  if (!guest.is_active) return { success: false, disabled: true, error: 'Guest access is disabled. Please sign in.' };
 
   const userObj = { id: guest.id, username: guest.username, role: 'analyst' };
   const accessToken = createToken({ userId: userObj.id, username: userObj.username, role: 'analyst' });
@@ -613,5 +715,11 @@ module.exports = {
   verifyPassword,
   generateSalt,
   hashPassword,
+  revokeUserSessions,
+  sqliteDateTime,
+  GUEST_USERNAME,
+  MAX_GUEST_REFRESH_TOKENS,
+  _refreshTokenCount: () => refreshTokens.size,
+  _guestRefreshTokenCount: () => guestRefreshTokens.size,
   setCookies: security,  // pass through for routes
 };
