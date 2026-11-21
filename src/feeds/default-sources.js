@@ -192,8 +192,10 @@ const DEFAULT_SOURCES = [
   // 🌑 DARK WEB & UNDERGROUND INTEL (Clearnet APIs)
   // ============================================
   {
-    name: 'RansomWatch - Ransomware Leak Tracker',
-    url: 'https://raw.githubusercontent.com/joshhighet/ransomwatch/main/posts.json',
+    // RansomWatch (joshhighet/ransomwatch) is archived; ransomware.live is its
+    // maintained successor and returns only the ~100 most recent victims.
+    name: 'Ransomware.live - Ransomware Leak Tracker',
+    url: 'https://api.ransomware.live/v2/recentvictims',
     type: 'darkweb',
     category: 'darkweb',
     added_by: 'system'
@@ -614,8 +616,10 @@ const DEFAULT_SOURCES = [
   },
   {
     name: 'Fox-IT International',
-    url: 'https://blog.fox-it.com/feed/',
-    type: 'rss',
+    // blog.fox-it.com (and its RSS feed) now redirects to this research index,
+    // which has no feed — scraped with the generic website scraper instead.
+    url: 'https://www.fox-it.com/nl/research/',
+    type: 'website',
     category: 'threat_intel',
     added_by: 'system'
   },
@@ -1500,6 +1504,7 @@ const DEFAULT_SOURCES = [
 // System sources that were removed because their feeds are permanently broken.
 // These are cleaned up from existing installs on startup.
 const OBSOLETE_SOURCES = [
+  'RansomWatch - Ransomware Leak Tracker', // archived; replaced by Ransomware.live
   'CCCS (Canada)',
   'BSI (Germany)',
   'Google/Mandiant Threat Intel',
@@ -1567,6 +1572,21 @@ function seedDefaultSources(db) {
         if (res.success) removed++;
       }
     }
+  }
+
+  // 4. abuse.ch feeds (ThreatFox / URLhaus / MalwareBazaar) need a free API key.
+  //    Without one they can only fail, so keep them switched off (instead of
+  //    showing as errored every cycle) and switch them back on once a key is set.
+  const abuseHosts = /threatfox|urlhaus|mb-api\.abuse\.ch|malwarebazaar/i;
+  const hasAbuseKey = !!process.env.ABUSE_CH_API_KEY;
+  for (const s of database.getAllSources()) {
+    if (s.added_by === 'system' && abuseHosts.test(s.url || '')) {
+      const want = hasAbuseKey ? 1 : 0;
+      if (Number(s.enabled) !== want) database.updateSource(s.id, { enabled: want });
+    }
+  }
+  if (!hasAbuseKey) {
+    console.log('[Sources] abuse.ch feeds (ThreatFox, URLhaus, MalwareBazaar) are off — set ABUSE_CH_API_KEY (free at https://auth.abuse.ch) to enable them');
   }
 
   console.log(`[Sources] Seeded ${added} new, fixed ${updated}, removed ${removed} obsolete/dupe, ${skipped} unchanged`);

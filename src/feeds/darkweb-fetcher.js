@@ -90,6 +90,78 @@ async function fetchRansomWatch(source) {
   }
 }
 
+// ── Ransomware.live (maintained successor of the archived RansomWatch) ──
+// Free, no key, but rate-limited with a daily call cap → fetch at most hourly
+// and reuse the last result in between (the aggregator runs every 15 min).
+const RANSOMWARE_LIVE_URL = 'https://api.ransomware.live/v2/recentvictims';
+const RANSOMWARE_LIVE_TTL_MS = 60 * 60 * 1000;
+let ransomwareLiveCache = { at: 0, posts: null };
+
+async function fetchRansomwareLive(source) {
+  try {
+    let posts = ransomwareLiveCache.posts;
+    if (!posts || Date.now() - ransomwareLiveCache.at > RANSOMWARE_LIVE_TTL_MS) {
+      const response = await axios.get(RANSOMWARE_LIVE_URL, {
+        ...requestConfig({ abuse: false }),
+        maxContentLength: 5 * 1024 * 1024
+      });
+      posts = Array.isArray(response.data) ? response.data : [];
+      ransomwareLiveCache = { at: Date.now(), posts };
+    }
+
+    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const articles = [];
+    for (const post of posts.slice(0, 200)) {
+      if (!post || typeof post !== 'object') continue;
+      const discovered = post.discovered || post.attackdate;
+      const t = discovered ? new Date(discovered).getTime() : NaN;
+      if (!isNaN(t) && t < sevenDaysAgo) continue;
+
+      const victim = String(post.victim || post.domain || 'Unknown Victim').slice(0, 200);
+      const group = String(post.group || 'Unknown Group').slice(0, 80);
+      const pageUrl = /^https:\/\/(www\.)?ransomware\.live\//.test(post.url || '')
+        ? post.url
+        : `https://www.ransomware.live/group/${encodeURIComponent(group)}#${encodeURIComponent(victim)}`;
+
+      const lines = [
+        `Ransomware group "${group}" listed a new victim on its leak site.`,
+        '',
+        `Victim: ${victim}`,
+        `Group: ${group}`,
+        post.country ? `Country: ${post.country}` : null,
+        post.activity ? `Sector: ${post.activity}` : null,
+        post.attackdate ? `Attack date: ${post.attackdate}` : null,
+        `Discovered: ${discovered || 'Unknown'}`,
+        post.description ? `\n${String(post.description).slice(0, 600)}` : null
+      ].filter(Boolean);
+
+      articles.push({
+        title: `[Dark Web] Ransomware Leak: ${victim} (${group})`,
+        description: lines.join('\n'),
+        url: pageUrl,                       // unique per victim page
+        source_name: 'Ransomware.live',
+        source_type: 'darkweb',
+        source_id: source?.id || null,
+        user_id: source?.user_id || null,
+        author: group,
+        published_date: discovered || new Date().toISOString(),
+        category: 'darkweb',
+        severity: 'high',
+        cve_id: null,
+        is_patched: -1,
+        has_poc: 0,
+        tags: `ransomware,dark-web,leak,${group.toLowerCase().replace(/[^a-z0-9-]/g, '')}`
+      });
+    }
+
+    console.log(`[DarkWeb] Ransomware.live: ${articles.length} recent leak posts`);
+    return { success: true, articles, count: articles.length };
+  } catch (error) {
+    console.error(`[DarkWeb] Ransomware.live error: ${error.message}`);
+    return { success: false, articles: [], error: error.message };
+  }
+}
+
 /**
  * Fetch ThreatFox — Malware IOCs (many sourced from dark web)
  * Source: https://threatfox.abuse.ch
@@ -296,6 +368,8 @@ async function fetchDarkWebIntel(sources) {
 
     if (needsAbuseKey(source.url) && !ABUSE_KEY) {
       result = { success: false, articles: [], count: 0, error: 'abuse.ch API key required — set ABUSE_CH_API_KEY (free at auth.abuse.ch)' };
+    } else if (source.url.includes('ransomware.live')) {
+      result = await fetchRansomwareLive(source);
     } else if (source.url.includes('ransomwatch')) {
       result = await fetchRansomWatch(source);
     } else if (source.url.includes('threatfox')) {
@@ -318,4 +392,4 @@ async function fetchDarkWebIntel(sources) {
   return { articles: allArticles, results };
 }
 
-module.exports = { fetchDarkWebIntel, fetchRansomWatch, fetchThreatFox, fetchURLhaus, fetchMalwareBazaar };
+module.exports = { fetchDarkWebIntel, fetchRansomwareLive, fetchRansomWatch, fetchThreatFox, fetchURLhaus, fetchMalwareBazaar };

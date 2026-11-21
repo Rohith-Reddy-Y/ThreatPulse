@@ -110,6 +110,34 @@ function extractArticleLinks($, baseUrl) {
     });
   }
 
+  // Generic fallback for sites whose markup matches none of the selectors above
+  // (e.g. Fox-IT's research index): same-site links exactly one slug-like path
+  // segment below the index page, such as /nl/research/<post-slug>/.
+  if (links.length === 0) {
+    let base = null;
+    try { base = new URL(baseUrl); } catch { /* ignore */ }
+    if (base) {
+      const basePath = base.pathname.endsWith('/') ? base.pathname : base.pathname + '/';
+      $('a[href]').each((_, el) => {
+        const raw = $(el).attr('href');
+        if (!raw || /^(javascript|mailto|tel|data):/i.test(raw.trim())) return;
+        let u;
+        try { u = new URL(raw, baseUrl); } catch { return; }
+        if (u.host !== base.host || !/^https?:$/.test(u.protocol)) return;
+        if (!u.pathname.startsWith(basePath) || u.pathname === basePath) return;
+        const rest = u.pathname.slice(basePath.length).replace(/\/$/, '');
+        // one segment, slug-like ("when-picos-attack-usb-exploit-engineering")
+        if (!rest || rest.includes('/') || rest.length < 8 || !/[a-z0-9]-[a-z0-9]/i.test(rest)) return;
+        if (/^(page|tag|tags|category|categories|author|search)\b/i.test(rest)) return;
+        const key = u.origin + u.pathname;
+        if (!seen.has(key)) {
+          seen.add(key);
+          links.push({ url: key, title: $(el).text().trim() || null });
+        }
+      });
+    }
+  }
+
   return links.slice(0, 20); // Max 20 articles per source
 }
 

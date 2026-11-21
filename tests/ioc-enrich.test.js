@@ -33,3 +33,13 @@ test('threat actors: "snatch" as an English verb is not the Snatch ransomware gr
   assert.equal(detectThreatActors('Snatch ransomware gang leaks data'), 'Snatch');
   assert.equal(detectThreatActors('LockBit and Lazarus Group'), 'Lazarus Group,Lazarus,LockBit');
 });
+
+test('product version numbers after a product name are not IPs; real IOCs still are', () => {
+  const { extractIOCs } = require('../src/feeds/ioc-extractor');
+  const none = ['Upgrade FortiOS 7.4.2.1 now', 'PAN-OS 10.2.9.1 is affected', 'Chrome 13.0.6.85 fixed'];
+  for (const t of none) assert.deepEqual(extractIOCs(t).ips, [], t);
+  assert.deepEqual(extractIOCs('C2 server 45.9.148.108 observed').ips, ['45.9.148.108']);
+  assert.deepEqual(extractIOCs('IP 5.8.18.7 used').ips, ['5.8.18.7']);
+  assert.deepEqual(extractIOCs('beaconing from 23.4.5.6').ips, ['23.4.5.6']);
+  assert.deepEqual(extractIOCs('IOCs: 8.9.10.11, 91.92.93.94').ips, ['8.9.10.11', '91.92.93.94']);
+});

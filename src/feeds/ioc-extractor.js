@@ -29,6 +29,14 @@ function extractIOCs(text) {
     // ("kernel 5.15.0.91", "version 1.2.3.4", "build 6.1.0.12") — not an IP.
     if (/\d\.$/.test(before) || /^\.\d/.test(after)) continue;
     if (/\b(version|ver\.?|build|release|kernel|firmware|v)\s*$/i.test(before)) continue;
+    // Product version right after a product name ("FortiOS 7.4.2.1", "Chrome
+    // 131.0.6778.85", "PAN-OS 10.2.9.1"): a word glued to the number by one
+    // space, with a small first octet typical of version numbers. Real IOCs are
+    // normally introduced by "IP", ":", "from", a list, or appear defanged.
+    const octs = m[0].split('.').map(Number);
+    if (/[A-Za-z][A-Za-z0-9-]*[A-Za-z0-9] $/.test(before) &&
+        !/\b(ip|ips|address|addresses|host|server|c2|c&c|from|to|at|via|and|or)\s$/i.test(before) &&
+        octs[0] <= 30 && octs[1] <= 30) continue;
     ipMatches.push(m[0]);
   }
   results.ips = [...new Set(ipMatches.filter(ip => {

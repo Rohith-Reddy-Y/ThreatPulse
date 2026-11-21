@@ -63,3 +63,36 @@ test('browser-fetcher: internal URLs are refused before Chrome navigates to them
   assert.equal(pages, 0);
   assert.ok(results.every(r => !r.success && /blocked/i.test(r.error)), JSON.stringify(results));
 });
+
+// Fox-IT style index: none of the blog selectors match, only plain <a href> links.
+function fakeCheerioPlainLinks(links) {
+  const wrap = (el) => ({ attr: (k) => el[k], text: () => el.text, first: () => wrap(el) });
+  const $ = (sel) => {
+    if (typeof sel === 'object') return wrap(sel);
+    const els = sel === 'a[href]' ? links : [];
+    return { each: (fn) => els.forEach((el, i) => fn(i, el)), attr: () => undefined, text: () => '', first: () => ({ text: () => '' }) };
+  };
+  return $;
+}
+
+test('scraper: generic fallback picks slug links one level below the index path', async () => {
+  reset();
+  FAKES.cheerio.load = () => fakeCheerioPlainLinks([
+    { href: '/nl/research/when-picos-attack-usb-exploit-engineering/', text: 'When Picos Attack' },
+    { href: '/nl/research/releasing-the-cobalt-strike-beacon-corpus/', text: 'Cobalt Strike Beacon Corpus' },
+    { href: '/nl/research/', text: 'Research' },                       // the index itself
+    { href: '/nl/research/page/2/', text: 'Next' },                    // pagination
+    { href: '/nl/contact/', text: 'Contact' },                         // outside the index path
+    { href: 'https://evil.example/nl/research/fake-post-here/', text: 'x' }, // other host
+    { href: '/nl/research/when-picos-attack-usb-exploit-engineering/#comments', text: 'dup' },
+  ]);
+  state.axiosGet = async () => ({ data: '<html></html>' });
+  delete require.cache[require.resolve('../src/feeds/web-scraper')];
+  const { scrapeSource } = require('../src/feeds/web-scraper');
+  const res = await scrapeSource({ id: 2, name: 'Fox-IT', url: 'https://www.fox-it.com/nl/research/', category: 'threat_intel' });
+  assert.equal(res.success, true);
+  assert.deepEqual(res.articles.map(a => a.url), [
+    'https://www.fox-it.com/nl/research/when-picos-attack-usb-exploit-engineering/',
+    'https://www.fox-it.com/nl/research/releasing-the-cobalt-strike-beacon-corpus/',
+  ]);
+});

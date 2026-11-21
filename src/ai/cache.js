@@ -40,4 +40,17 @@ function set(kind, payload, response) {
   }
 }
 
-module.exports = { get, set };
+// Expired rows were only removed when that exact key was read again, so the
+// table grew forever. Prune everything past the TTL on start and hourly.
+function prune() {
+  try {
+    const cutoff = new Date(Date.now() - TTL_MS).toISOString();
+    return db.getDb().prepare('DELETE FROM ai_cache WHERE created_at < ?').run(cutoff).changes;
+  } catch (e) {
+    return 0;
+  }
+}
+setTimeout(prune, 30 * 1000).unref?.();
+setInterval(prune, 60 * 60 * 1000).unref?.();
+
+module.exports = { get, set, prune };

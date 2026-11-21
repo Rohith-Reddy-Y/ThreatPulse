@@ -544,10 +544,17 @@ function deleteUser(id) {
   // Don't allow deleting the last admin
   const user = getUserById(id);
   if (!user) return { success: false, error: 'User not found' };
-  if (user.role === 'admin') {
+  // Only refuse when this is the last *active* admin (a disabled admin isn't
+  // counted in activeAdmins, so it must not block its own deletion).
+  if (user.role === 'admin' && user.is_active) {
     const adminCount = getDb().prepare("SELECT COUNT(*) as count FROM users WHERE role = 'admin' AND is_active = 1").get().count;
     if (adminCount <= 1) return { success: false, error: 'Cannot delete the last admin' };
   }
+  // AI chats have no FK to users — remove them explicitly (messages first).
+  try {
+    getDb().prepare('DELETE FROM ai_messages WHERE thread_id IN (SELECT id FROM ai_threads WHERE user_id = ?)').run(id);
+    getDb().prepare('DELETE FROM ai_threads WHERE user_id = ?').run(id);
+  } catch (e) { /* tables may not exist on very old DBs */ }
   // Delete user's sources and their articles
   getDb().prepare('DELETE FROM article_reviews WHERE user_id = ?').run(id);
   getDb().prepare('DELETE FROM notification_settings WHERE user_id = ?').run(id);
