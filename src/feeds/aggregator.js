@@ -116,6 +116,7 @@ async function fetchAllSources() {
           totalFetched += result.articles.length;
           newArticles.push(...inserted.newArticles);
         }
+        if (!result.success) totalErrors++;   // fetchers report failure, they don't throw
 
         db.updateSourceFetchStatus(source.id, {
           last_fetched: new Date().toISOString(),
@@ -148,9 +149,10 @@ async function fetchAllSources() {
           newArticles.push(...inserted.newArticles);
         }
 
-        // Update source statuses
+        // Update source statuses (by id: names are not unique across users)
         for (const r of dwResult.results) {
-          const source = darkwebSources.find(s => s.name === r.source);
+          if (!r.success) totalErrors++;
+          const source = darkwebSources.find(s => s.id === r.sourceId);
           if (source) {
             db.updateSourceFetchStatus(source.id, {
               last_fetched: new Date().toISOString(),
@@ -176,6 +178,7 @@ async function fetchAllSources() {
             totalFetched += result.articles.length;
             newArticles.push(...inserted.newArticles);
           }
+          if (!result.success) totalErrors++;
           db.updateSourceFetchStatus(source.id, {
             last_fetched: new Date().toISOString(),
             last_error: result.success ? null : result.error

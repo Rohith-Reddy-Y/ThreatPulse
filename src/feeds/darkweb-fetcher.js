@@ -10,13 +10,32 @@ const axios = require('axios');
 // Get one at https://auth.abuse.ch and set ABUSE_CH_API_KEY in your .env.
 const ABUSE_KEY = process.env.ABUSE_CH_API_KEY || '';
 
+const USER_AGENT = 'ThreatPulse/1.0 (Threat Intelligence Aggregator)';
 const HTTP_CONFIG = {
   timeout: 30000,
   headers: {
-    'User-Agent': 'ThreatPulse/1.0 (Threat Intelligence Aggregator)',
+    'User-Agent': USER_AGENT,
     ...(ABUSE_KEY ? { 'Auth-Key': ABUSE_KEY } : {})
   }
 };
+
+// Per-request config. The abuse.ch Auth-Key is only sent to abuse.ch (it used
+// to go to raw.githubusercontent.com with the RansomWatch request too), and
+// every request gets a hard deadline: axios' `timeout` is only a socket-idle timer.
+function requestConfig({ abuse = true, extraHeaders = {} } = {}) {
+  return {
+    timeout: HTTP_CONFIG.timeout,
+    headers: { ...(abuse ? HTTP_CONFIG.headers : { 'User-Agent': USER_AGENT }), ...extraHeaders },
+    signal: AbortSignal.timeout(60000)
+  };
+}
+
+// "2026-11-20 13:36:27 UTC" -> "2026-11-20"; used to give daily summary
+// articles a distinct URL per day (articles are de-duplicated on URL).
+function dayOf(value) {
+  const d = new Date(value || Date.now());
+  return (isNaN(d) ? new Date() : d).toISOString().slice(0, 10);
+}
 
 /**
  * Fetch RansomWatch — Tracks ransomware group leak site posts
@@ -27,7 +46,7 @@ async function fetchRansomWatch(source) {
   try {
     const response = await axios.get(
       'https://raw.githubusercontent.com/joshhighet/ransomwatch/main/posts.json',
-      { ...HTTP_CONFIG, timeout: 30000 }
+      requestConfig({ abuse: false })
     );
 
     const posts = response.data;
@@ -44,7 +63,8 @@ async function fetchRansomWatch(source) {
         articles.push({
           title: `[Dark Web] Ransomware Leak: ${post.post_title || 'Unknown Victim'} (${post.group_name || 'Unknown Group'})`,
           description: `Ransomware group "${post.group_name}" posted a new victim on their dark web leak site.\n\nVictim: ${post.post_title || 'Unknown'}\nGroup: ${post.group_name || 'Unknown'}\nDiscovered: ${post.discovered || 'Unknown'}${post.post_url ? '\nLeak Site (Tor): ' + post.post_url : ''}`,
-          url: `https://github.com/joshhighet/ransomwatch`,
+          // One URL per post: a shared URL made the DB keep only the first post ever.
+          url: `https://github.com/joshhighet/ransomwatch#${encodeURIComponent(post.group_name || 'unknown')}/${encodeURIComponent(post.post_title || 'unknown')}`,
           source_name: 'RansomWatch - Dark Web Tracker',
           source_type: 'darkweb',
           source_id: source?.id || null,
@@ -79,7 +99,7 @@ async function fetchThreatFox(source) {
     const response = await axios.post(
       'https://threatfox-api.abuse.ch/api/v1/',
       { query: 'get_iocs', days: 1 },
-      { ...HTTP_CONFIG }
+      requestConfig()
     );
 
     const data = response.data;
@@ -98,18 +118,21 @@ async function fetchThreatFox(source) {
 
       for (const [malware, iocs] of Object.entries(malwareGroups).slice(0, 20)) {
         const firstIoc = iocs[0];
-        const iocTypes = [...new Set(iocs.map(i => i.ioc_type_desc))].join(', ');
+        const iocTypes = [...new Set(iocs.map(i => i.ioc_type_desc || i.ioc_type))].join(', ');
+        const firstSeen = firstIoc.first_seen || firstIoc.first_seen_utc;
 
         articles.push({
           title: `[IOC] ${malware} — ${iocs.length} new indicators detected`,
-          description: `ThreatFox detected ${iocs.length} new IOC(s) for "${malware}".\n\nIOC Types: ${iocTypes}\nThreat Type: ${firstIoc.threat_type_desc || 'Unknown'}\nConfidence: ${firstIoc.confidence_level || 'N/A'}%\nFirst Seen: ${firstIoc.first_seen_utc || 'Unknown'}\n\nSample IOC: ${firstIoc.ioc || 'N/A'}`,
-          url: `https://threatfox.abuse.ch/browse/malware/${encodeURIComponent(firstIoc.malware_malpedia || malware)}/`,
+          description: `ThreatFox detected ${iocs.length} new IOC(s) for "${malware}".\n\nIOC Types: ${iocTypes}\nThreat Type: ${firstIoc.threat_type_desc || firstIoc.threat_type || 'Unknown'}\nConfidence: ${firstIoc.confidence_level || 'N/A'}%\nFirst Seen: ${firstSeen || 'Unknown'}\n\nSample IOC: ${firstIoc.ioc || 'N/A'}`,
+          // `malware` is the Malpedia id ("win.cobalt_strike"); `malware_malpedia` is a full URL.
+          // The #day fragment makes each day's summary a new article (DB de-dupes on URL).
+          url: `https://threatfox.abuse.ch/browse/malware/${encodeURIComponent(firstIoc.malware || malware)}/#${dayOf(firstSeen)}`,
           source_name: 'ThreatFox - Malware IOCs',
           source_type: 'darkweb',
           source_id: source?.id || null,
           user_id: source?.user_id || null,
           author: firstIoc.reporter || 'abuse.ch',
-          published_date: firstIoc.first_seen_utc || new Date().toISOString(),
+          published_date: firstSeen || new Date().toISOString(),
           category: 'darkweb',
           severity: (firstIoc.confidence_level || 0) >= 75 ? 'high' : 'medium',
           cve_id: null,
@@ -138,7 +161,7 @@ async function fetchURLhaus(source) {
     // URLhaus moved to a path-based endpoint (the old `urlhaus_recent` body 404s now).
     const response = await axios.get(
       'https://urlhaus-api.abuse.ch/v1/urls/recent/',
-      { ...HTTP_CONFIG }
+      requestConfig()
     );
 
     const data = response.data;
@@ -150,8 +173,10 @@ async function fetchURLhaus(source) {
       const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
       for (const url of data.urls.slice(0, 50)) {
-        const addedDate = new Date(url.dateadded);
-        if (addedDate < oneDayAgo) continue;
+        // The API field is `date_added` ("2026-11-20 13:36:27 UTC"); `dateadded`
+        // never existed, so the 24h filter let everything through.
+        const addedDate = new Date(url.date_added || url.dateadded);
+        if (!(addedDate >= oneDayAgo)) continue;
 
         const threat = url.threat || 'malware_download';
         if (!threatGroups[threat]) {
@@ -170,13 +195,13 @@ async function fetchURLhaus(source) {
         articles.push({
           title: `[Malicious URLs] ${urls.length} new ${threat.replace('_', ' ')} URLs detected`,
           description: `URLhaus detected ${urls.length} new malicious URLs associated with "${threat}".\n\nStatuses: ${Object.entries(statusCounts).map(([k, v]) => `${k}: ${v}`).join(', ')}\nTags: ${[...new Set(urls.flatMap(u => u.tags || []))].slice(0, 10).join(', ')}\n\nSample: ${urls[0]?.url || 'N/A'}`,
-          url: 'https://urlhaus.abuse.ch/browse/',
+          url: `https://urlhaus.abuse.ch/browse/#${encodeURIComponent(threat)}-${dayOf(urls[0]?.date_added)}`,
           source_name: 'URLhaus - Malicious URLs',
           source_type: 'darkweb',
           source_id: source?.id || null,
           user_id: source?.user_id || null,
           author: urls[0]?.reporter || 'abuse.ch',
-          published_date: urls[0]?.dateadded || new Date().toISOString(),
+          published_date: urls[0]?.date_added || urls[0]?.dateadded || new Date().toISOString(),
           category: 'darkweb',
           severity: 'high',
           cve_id: null,
@@ -205,10 +230,7 @@ async function fetchMalwareBazaar(source) {
     const response = await axios.post(
       'https://mb-api.abuse.ch/api/v1/',
       'query=get_recent&selector=time',
-      {
-        ...HTTP_CONFIG,
-        headers: { ...HTTP_CONFIG.headers, 'Content-Type': 'application/x-www-form-urlencoded' }
-      }
+      requestConfig({ extraHeaders: { 'Content-Type': 'application/x-www-form-urlencoded' } })
     );
 
     const data = response.data;
@@ -290,7 +312,7 @@ async function fetchDarkWebIntel(sources) {
     }
 
     allArticles.push(...result.articles);
-    results.push({ source: source.name, ...result });
+    results.push({ source: source.name, sourceId: source.id, ...result });
   }
 
   return { articles: allArticles, results };
