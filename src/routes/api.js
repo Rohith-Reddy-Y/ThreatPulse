@@ -457,9 +457,10 @@ router.get('/articles/stats', auth.requireAuth, (req, res) => {
 router.get('/search', auth.requireAuth, (req, res) => {
   try {
     const { q, limit } = req.query;
-    if (!q) return res.json([]);
+    const query = auth.sanitizeString(q, 200);
+    if (!query) return res.json([]);   // whitespace-only used to match everything
     const results = db.searchArticles(
-      auth.sanitizeString(q, 200),
+      query,
       Math.min(parseInt(limit) || 50, 200),
       (req.user.role === 'admin' || req.user.username === 'guest') ? null : req.user.id
     );
@@ -473,9 +474,25 @@ router.get('/search', auth.requireAuth, (req, res) => {
 // ARTICLE REVIEWS (require auth)
 // ============================================
 
-router.post('/articles/:id/review', auth.requireAuth, (req, res) => {
+// Reviews are shown on the article to everyone who can see it, so a user may
+// only review articles they can see: their own (admins: any). Previously any
+// user could attach reviews/notes to another user's article by id, and a
+// missing article surfaced as a 500 (FK error).
+function loadReviewableArticle(req, res) {
+  const articleId = parseInt(req.params.id, 10);
+  const article = Number.isInteger(articleId) ? db.getArticleById(articleId) : null;
+  if (!article) { res.status(404).json({ success: false, error: 'Article not found' }); return null; }
+  if (req.user.role !== 'admin' && article.user_id !== req.user.id) {
+    res.status(403).json({ success: false, error: 'Not authorized to review this article' });
+    return null;
+  }
+  return articleId;
+}
+
+router.post('/articles/:id/review', auth.requireAuth, denyGuest, (req, res) => {
   try {
-    const articleId = parseInt(req.params.id);
+    const articleId = loadReviewableArticle(req, res);
+    if (articleId === null) return;
     const result = db.startReview(articleId, req.user.id);
     db.logAudit(req.user.id, 'review_start', `Started reviewing article ${articleId}`, req.ip);
     res.json(result);
@@ -484,9 +501,10 @@ router.post('/articles/:id/review', auth.requireAuth, (req, res) => {
   }
 });
 
-router.put('/articles/:id/review', auth.requireAuth, (req, res) => {
+router.put('/articles/:id/review', auth.requireAuth, denyGuest, (req, res) => {
   try {
-    const articleId = parseInt(req.params.id);
+    const articleId = loadReviewableArticle(req, res);
+    if (articleId === null) return;
     const { notes } = req.body;
     const result = db.completeReview(articleId, req.user.id, auth.sanitizeString(notes, 500));
     db.logAudit(req.user.id, 'review_complete', `Completed review of article ${articleId}`, req.ip);
@@ -496,9 +514,10 @@ router.put('/articles/:id/review', auth.requireAuth, (req, res) => {
   }
 });
 
-router.post('/articles/:id/escalate', auth.requireAuth, (req, res) => {
+router.post('/articles/:id/escalate', auth.requireAuth, denyGuest, (req, res) => {
   try {
-    const articleId = parseInt(req.params.id);
+    const articleId = loadReviewableArticle(req, res);
+    if (articleId === null) return;
     const { notes } = req.body;
     const result = db.escalateArticle(articleId, req.user.id, auth.sanitizeString(notes, 500));
     db.logAudit(req.user.id, 'escalate', `Escalated article ${articleId}`, req.ip);
@@ -570,14 +589,21 @@ router.put('/sources/:id', auth.requireAuth, denyGuest, (req, res) => {
       return res.status(403).json({ error: 'Not authorized to modify this source' });
     }
 
-    // Validate URL if being updated
-    if (req.body.url) {
-      if (!auth.validateUrl(req.body.url)) {
+    // Validate URL / name if being updated (an empty string used to skip validation)
+    const updates = { ...req.body };
+    if (updates.url !== undefined) {
+      updates.url = auth.sanitizeString(updates.url, 2048);
+      if (!updates.url || !auth.validateUrl(updates.url)) {
         return res.status(400).json({ error: 'Invalid URL' });
       }
     }
+    if (updates.name !== undefined) {
+      updates.name = auth.sanitizeString(updates.name, 128);
+      if (!updates.name) return res.status(400).json({ error: 'Name is required' });
+    }
 
-    const result = db.updateSource(sourceId, req.body);
+    const result = db.updateSource(sourceId, updates);
+    if (!result.success && /already exists/.test(result.error || '')) return res.status(409).json(result);
     res.json(result);
   } catch (error) {
     console.error('[API] Error updating source:', error.message);
@@ -886,16 +912,22 @@ async function handleNotifications(newArticles) {
 
     // Group articles by owning user (fully isolated — each user only gets alerts
     // for threats found in their OWN sources).
+    // Articles from system sources have user_id NULL until the startup orphan
+    // migration hands them to the admin — which never happens on a fresh DB
+    // (admin is created after the schema), i.e. on every Render boot. Route
+    // them to the same owner that migration would pick: the first admin.
+    const allUsers = db.getAllUsers();
+    const firstAdmin = allUsers.filter(u => u.role === 'admin').sort((a, b) => a.id - b.id)[0];
     const articlesByUser = {};
     for (const article of newArticles) {
-      if (!article.user_id) continue;
-      if (!articlesByUser[article.user_id]) articlesByUser[article.user_id] = [];
-      articlesByUser[article.user_id].push(article);
+      const ownerId = article.user_id || (firstAdmin && firstAdmin.id);
+      if (!ownerId) continue;
+      if (!articlesByUser[ownerId]) articlesByUser[ownerId] = [];
+      articlesByUser[ownerId].push(article);
     }
 
-    const allUsers = db.getAllUsers();
-
     for (const user of allUsers) {
+      if (!user.is_active) continue;   // deactivated accounts get no alerts
       let userArticles = articlesByUser[user.id];
       if (!userArticles || userArticles.length === 0) continue;
 
