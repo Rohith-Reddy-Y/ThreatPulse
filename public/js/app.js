@@ -1808,6 +1808,8 @@
           $('#cancel-password-btn')?.classList.remove('hidden');
           $('#password-forced-notice')?.classList.add('hidden');
           showToast('Password updated', result.message || 'Your password has been changed.', 'success');
+          // Data APIs were blocked until the forced change; load everything now.
+          Promise.allSettled([fetchStats(), fetchArticles(), fetchSources(), fetchNotificationSettings()]);
         } else {
           errEl.textContent = result.error || 'Failed to change password';
           errEl.classList.remove('hidden');
@@ -1844,6 +1846,7 @@
               currentUser.mustChangePassword = false;
             }
             showToast('Success', 'Password changed successfully.', 'success');
+            Promise.allSettled([fetchStats(), fetchArticles(), fetchSources(), fetchNotificationSettings()]);
             const notice = $('#password-forced-notice');
             if (notice) notice.classList.add('hidden');
             const cancelBtn = $('#cancel-password-btn');
