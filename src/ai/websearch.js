@@ -8,6 +8,21 @@ const axios = require('axios');
 const TAVILY_URL = 'https://api.tavily.com/search';
 const WIKI_URL = 'https://en.wikipedia.org/w/api.php';
 const UA = 'ThreatPulse/1.0 (cyber threat intelligence dashboard)';
+// Keep each provider call short: web mode then still fits inside the AI deadline.
+const TIMEOUT_MS = 8000;
+const MAX_RESULTS = 10;
+const MAX_QUERY = 400;
+
+// Results are third-party data that is echoed into prompts and the UI: bound sizes
+// and keep only http(s) URLs (the URL is only ever displayed, never fetched).
+function str(v, max) {
+  const s = v == null ? '' : String(v);
+  return s.length > max ? s.slice(0, max) : s;
+}
+function safeUrl(u) {
+  const s = str(u, 500);
+  return /^https?:\/\//i.test(s) ? s : '';
+}
 
 // Tavily key can come from the environment OR admin-configured DB settings.
 let db = null;
@@ -32,6 +47,8 @@ function hasTavily() {
  * @returns {Promise<Array<{title, url, snippet}>>}
  */
 async function search(query, max = 5) {
+  query = str(query, MAX_QUERY);
+  max = Math.max(1, Math.min(parseInt(max, 10) || 5, MAX_RESULTS));
   if (hasTavily()) {
     const results = await searchTavily(query, max);
     if (results.length > 0) return results;
@@ -47,12 +64,13 @@ async function searchTavily(query, max = 5) {
       max_results: max,
       search_depth: 'basic',
       include_answer: false
-    }, { headers: { 'Content-Type': 'application/json' }, timeout: 15000 });
+    }, { headers: { 'Content-Type': 'application/json' }, timeout: TIMEOUT_MS });
 
-    return (resp.data?.results || []).map(r => ({
-      title: r.title,
-      url: r.url,
-      snippet: (r.content || '').substring(0, 300)
+    const results = Array.isArray(resp?.data?.results) ? resp.data.results : [];
+    return results.slice(0, max).map(r => ({
+      title: str(r && r.title, 200) || '(untitled)',
+      url: safeUrl(r && r.url),
+      snippet: str(r && r.content, 300)
     }));
   } catch (e) {
     console.error('[WebSearch] Tavily error:', e.message);
@@ -72,15 +90,18 @@ async function searchWikipedia(query, max = 5) {
         origin: '*'
       },
       headers: { 'User-Agent': UA },
-      timeout: 15000
+      timeout: TIMEOUT_MS
     });
 
-    const hits = (resp.data?.query?.search) || [];
-    return hits.map(h => ({
-      title: h.title,
-      url: `https://en.wikipedia.org/wiki/${encodeURIComponent(h.title.replace(/ /g, '_'))}`,
-      snippet: (h.snippet || '').replace(/<[^>]+>/g, '').replace(/&quot;/g, '"').replace(/&amp;/g, '&').trim()
-    }));
+    const hits = Array.isArray(resp?.data?.query?.search) ? resp.data.query.search : [];
+    return hits.filter(h => h && h.title).slice(0, max).map(h => {
+      const title = str(h.title, 200);
+      return {
+        title,
+        url: `https://en.wikipedia.org/wiki/${encodeURIComponent(title.replace(/ /g, '_'))}`,
+        snippet: str(String(h.snippet || '').replace(/<[^>]+>/g, '').replace(/&quot;/g, '"').replace(/&amp;/g, '&').trim(), 300)
+      };
+    });
   } catch (e) {
     console.error('[WebSearch] Wikipedia error:', e.message);
     return [];
