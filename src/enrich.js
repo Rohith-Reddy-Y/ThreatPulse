@@ -8,7 +8,8 @@
 // ── Industry sector ──────────────────────────────────────────
 // Only the four sectors exposed in the dashboard filter dropdown.
 const SECTOR_PATTERNS = [
-  ['financial', /\b(bank|banking|financial|finance|fintech|payment|credit[- ]card|swift|atm|pci[- ]dss|pci|wire transfer|monetary|insurer|insurance|stock exchange|brokerage|trading platform|crypto(currency)?[- ]exchange|fs-isac)\b/i],
+  // "SWIFT" is matched case-sensitively below: "Swift" is also Apple's programming language.
+  ['financial', /\b(bank|banking|financial|finance|fintech|payment|credit[- ]card|atm|pci[- ]dss|pci|wire transfer|monetary|insurer|insurance|stock exchange|brokerage|trading platform|crypto(currency)?[- ]exchange|fs-isac)\b/i],
   ['healthcare', /\b(hospital|hipaa|patient|medical|pharma(ceutical)?|healthcare|health[- ]care|clinic|ehr|health data|medicare|medicaid|biotech|life sciences|medtech)\b/i],
   // Victim sector only: agencies that *report* (CISA/FBI/NSA) and attacker
   // descriptors (nation-state, state-sponsored) don't make an article "government",
@@ -17,10 +18,12 @@ const SECTOR_PATTERNS = [
   ['technology', /\b(cloud|saas|paas|devops|kubernetes|docker|ci\/cd|software supply chain|open[- ]source|data center|semiconductor|microservice|npm|pypi|github|gitlab|api gateway|tech giant|software vendor)\b/i],
 ];
 
+const SWIFT_NETWORK = /\bSWIFT\b/;
+
 function detectSector(text) {
   const t = String(text || '');
   for (const [sector, re] of SECTOR_PATTERNS) {
-    if (re.test(t)) return sector;
+    if (re.test(t) || (sector === 'financial' && SWIFT_NETWORK.test(t))) return sector;
   }
   return null;
 }
@@ -72,13 +75,13 @@ const DISTINCTIVE_ACTORS = [
   'UNC2452', 'UNC3886', 'Star Blizzard', 'Midnight Blizzard', 'Forest Blizzard',
   'BlackTech', 'Mustang Panda', 'Gamaredon', 'Lapsus', 'Vice Society',
   'BianLian', 'NoEscape', 'Hunters International', 'INC Ransom', 'RansomHub',
-  'Qilin', 'DragonForce', 'BlackByte', 'Snatch',
+  'Qilin', 'DragonForce', 'BlackByte',
 ];
 
 // Ambiguous names that are also ordinary English words — only tag these when the
 // text also mentions a threat context, to avoid false positives ("Play Store",
 // "Royal Mail", "display", etc.).
-const AMBIGUOUS_ACTORS = ['Play', 'Akira', 'Medusa', 'Royal', 'Embargo', 'Hive', 'Cuba', 'Maze'];
+const AMBIGUOUS_ACTORS = ['Play', 'Akira', 'Medusa', 'Royal', 'Embargo', 'Hive', 'Cuba', 'Maze', 'Snatch'];
 const THREAT_CONTEXT = /\b(ransomware|ransom|threat actor|threat group|apt|gang|extortion|leak site|data breach|cybercrime|affiliate|encryptor)\b/i;
 
 function escapeRegExp(s) {

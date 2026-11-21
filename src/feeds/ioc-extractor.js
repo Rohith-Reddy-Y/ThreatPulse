@@ -21,7 +21,16 @@ function extractIOCs(text) {
 
   // ── IPv4 ──
   const ipv4Re = /\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b/g;
-  const ipMatches = text.match(ipv4Re) || [];
+  const ipMatches = [];
+  for (const m of text.matchAll(ipv4Re)) {
+    const before = text.slice(Math.max(0, m.index - 12), m.index);
+    const after = text.slice(m.index + m[0].length, m.index + m[0].length + 2);
+    // Part of a longer dotted number ("4.4.2.1.5", "10.0.19041.1") or a version
+    // ("kernel 5.15.0.91", "version 1.2.3.4", "build 6.1.0.12") — not an IP.
+    if (/\d\.$/.test(before) || /^\.\d/.test(after)) continue;
+    if (/\b(version|ver\.?|build|release|kernel|firmware|v)\s*$/i.test(before)) continue;
+    ipMatches.push(m[0]);
+  }
   results.ips = [...new Set(ipMatches.filter(ip => {
     // Exclude common non-routable/placeholder IPs
     const octets = ip.split('.').map(Number);
@@ -31,6 +40,11 @@ function extractIOCs(text) {
       (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
       (octets[0] === 192 && octets[1] === 168) ||
       (octets[0] === 169 && octets[1] === 254) ||
+      (octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127) ||              // CGNAT
+      (octets[0] === 198 && (octets[1] === 18 || octets[1] === 19)) ||           // benchmarking
+      (octets[0] === 192 && octets[1] === 0 && (octets[2] === 0 || octets[2] === 2)) ||  // IETF / TEST-NET-1
+      (octets[0] === 198 && octets[1] === 51 && octets[2] === 100) ||            // TEST-NET-2
+      (octets[0] === 203 && octets[1] === 0 && octets[2] === 113) ||             // TEST-NET-3
       octets[0] >= 224
     );
   }))];
@@ -43,7 +57,13 @@ function extractIOCs(text) {
     if (/^\d+\.\d+\.\d+\.\d+$/.test(d)) return false;
     // Exclude common TLDs that appear as sentence endings / filenames
     const fakeTlds = /\.(com|org|net|io|gov|edu|mil|info|biz|co|uk|de|jp|fr|ru|cn|br|in|au|ca|it|es|nl|se|ch|pl|kr|tw)$/i;
-    return d.length > 7 && fakeTlds.test(d);
+    if (!(d.length > 7 && fakeTlds.test(d))) return false;
+    // Code identifiers like "System.IO" / "ASP.NET": a capitalised TLD is not
+    // how domains are written in prose.
+    if (/\.[A-Z]{2,}$/.test(d) && /[a-z]/.test(d)) return false;
+    // ".au" is only registered at the third level (example.com.au); "sound.au" is a file
+    if (/\.au$/i.test(d) && d.split('.').length < 3) return false;
+    return true;
   }))].slice(0, 50); // cap at 50
 
   // ── Hashes ──
