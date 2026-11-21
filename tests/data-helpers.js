@@ -59,7 +59,8 @@ async function call(env, method, routePath, { user, params = {}, body = {}, quer
   const req = { user, params, body, query, ip: '127.0.0.1', headers: {}, cookies: {},
     app: { get: (k) => app[k] }, protocol: 'http', get: () => 'localhost' };
   const res = {
-    statusCode: 200, body: undefined, done: false,
+    statusCode: 200, body: undefined, done: false, headers: {},
+    setHeader(k, v) { this.headers[String(k).toLowerCase()] = v; },
     status(c) { this.statusCode = c; return this; },
     json(b) { this.body = b; this.done = true; return this; },
     send(b) { this.body = b; this.done = true; return this; },

@@ -611,9 +611,15 @@ setInterval(() => {
 // INPUT SANITIZATION
 // ============================================
 
+// C0 controls (except tab/newline/CR), DEL, and the Unicode bidi embedding /
+// override / isolate controls: NUL bytes truncate values in SQLite text
+// functions and some clients, and RTL overrides let a display name or source
+// name render as something else ("Admin‮gpj.exe" shows as "Adminexe.jpg").
+const UNSAFE_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F‪-‮⁦-⁩]/g;
+
 function sanitizeString(str, maxLength = 255) {
   if (typeof str !== 'string') return '';
-  return str.trim().slice(0, maxLength);
+  return str.replace(UNSAFE_CHARS, '').trim().slice(0, maxLength);
 }
 
 function validateUrl(url) {
