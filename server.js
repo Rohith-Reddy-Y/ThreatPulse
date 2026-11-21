@@ -219,9 +219,11 @@ async function initialize() {
   db.getDb();
   console.log('[Init] Database ready ✓');
 
-  // 2. Create default admin user + invite codes (first run only)
+  // 2. Create default admin user + invite codes (first run only). Hashing is
+  // async now, so wait for it: the admin must exist (and own the seeded
+  // sources) before seeding and before the server accepts logins.
   console.log('[Init] Checking user accounts...');
-  auth.ensureAdminExists();
+  await auth.ensureAdminExists();
 
   // 3. Seed default sources (system-level, user_id = NULL)
   console.log('[Init] Seeding default threat intelligence sources...');
@@ -309,4 +311,7 @@ process.on('SIGINT', () => {
 // ============================================
 // START
 // ============================================
-initialize();
+initialize().catch((error) => {
+  console.error('[Fatal] Startup failed:', error && error.stack ? error.stack : error);
+  process.exit(1);
+});

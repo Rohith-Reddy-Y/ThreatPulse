@@ -5,8 +5,10 @@
  */
 
 const crypto = require('crypto');
+const util = require('util');
 const db = require('./database');
 const security = require('./security');
+const loginThrottle = require('./login-throttle');
 
 // ============================================
 // CONFIG
@@ -29,8 +31,9 @@ const JWT_SECRET = (() => {
 })();
 const ACCESS_TOKEN_EXPIRY = security.ACCESS_TOKEN_EXPIRY;    // 15 min
 const REFRESH_TOKEN_EXPIRY = security.REFRESH_TOKEN_EXPIRY;  // 7 days
-const MAX_FAILED_ATTEMPTS = 5;
-const LOCKOUT_DURATION_MINUTES = 15;
+// Failed-login lockout lives in ./login-throttle (per account+IP, plus a short
+// per-account cap). The users.failed_login_attempts / locked_until columns are
+// no longer used for locking: they stay in the schema for compatibility only.
 const PASSWORD_MIN_LENGTH = 8;
 
 // Token blacklist (in-memory, for logout)
@@ -56,23 +59,37 @@ function sqliteDateTime(ms) {
 }
 
 // ============================================
-// PASSWORD HASHING (crypto.scryptSync)
+// PASSWORD HASHING (async crypto.scrypt)
 // ============================================
+// scrypt runs on libuv's thread pool, so a login no longer blocks the event loop
+// (on a ~0.1 CPU host a synchronous scrypt could stall health checks). Parameters
+// and output format are unchanged from the old scryptSync version: 64-byte key,
+// Node's default cost (N=16384, r=8, p=1), hex string — existing hashes verify.
+
+const SCRYPT_KEYLEN = 64;
+const scryptAsync = util.promisify(crypto.scrypt);
 
 function generateSalt() {
   return crypto.randomBytes(32).toString('hex');
 }
 
-function hashPassword(password, salt) {
-  return crypto.scryptSync(password, salt, 64).toString('hex');
+async function hashPassword(password, salt) {
+  const key = await scryptAsync(password, salt, SCRYPT_KEYLEN);
+  return key.toString('hex');
 }
 
-function verifyPassword(password, salt, storedHash) {
-  const hash = crypto.scryptSync(password, salt, 64);
+async function verifyPassword(password, salt, storedHash) {
+  if (typeof password !== 'string' || typeof salt !== 'string' || typeof storedHash !== 'string') return false;
+  const hash = await scryptAsync(password, salt, SCRYPT_KEYLEN);
   const storedBuffer = Buffer.from(storedHash, 'hex');
   if (hash.length !== storedBuffer.length) return false;
   return crypto.timingSafeEqual(hash, storedBuffer);
 }
+
+// Used for unknown usernames so a miss costs the same scrypt work as a wrong
+// password (no timing oracle for which accounts exist).
+const DUMMY_SALT = crypto.randomBytes(32).toString('hex');
+const DUMMY_HASH = '0'.repeat(SCRYPT_KEYLEN * 2);
 
 function validatePasswordStrength(password) {
   if (typeof password !== 'string' || !password) {
@@ -286,7 +303,7 @@ function requireAdmin(req, res, next) {
 // AUTH OPERATIONS
 // ============================================
 
-function registerUser(username, displayName, password, inviteCode, email = null) {
+async function registerUser(username, displayName, password, inviteCode, email = null) {
   // Input validation
   if (!username || username.length < 3 || username.length > 32) {
     return { success: false, error: 'Username must be 3-32 characters' };
@@ -335,7 +352,18 @@ function registerUser(username, displayName, password, inviteCode, email = null)
 
   // Create user (invite code stored only if one was actually used)
   const salt = generateSalt();
-  const passwordHash = hashPassword(password, salt);
+  const passwordHash = await hashPassword(password, salt);
+
+  // Other requests ran while we were hashing: re-check everything a concurrent
+  // registration could have claimed. From here to createUser/useInviteCode the
+  // code is synchronous, so these checks and the writes can't interleave.
+  if (requireInvite) {
+    const again = db.validateInviteCode(inviteCode);
+    if (!again.valid) return { success: false, error: again.error };
+  }
+  if (db.getUserByUsername(username)) return { success: false, error: 'Username already taken' };
+  if (db.getUserByEmail(email)) return { success: false, error: 'Email already registered' };
+
   const cleanInvite = requireInvite ? inviteCode : null;
   const result = db.createUser(username, displayName, passwordHash, salt, 'analyst', cleanInvite, email);
 
@@ -367,8 +395,17 @@ function registerUser(username, displayName, password, inviteCode, email = null)
   };
 }
 
-function loginUser(identifier, password) {
-  if (!identifier || !password || typeof password !== 'string') {
+const LOGIN_FAILED_MSG = 'Invalid username/email or password';
+
+function lockoutMessage(retryAfterMs) {
+  const mins = Math.max(1, Math.ceil(retryAfterMs / 60000));
+  return `Too many failed login attempts. Try again in ${mins} minute(s).`;
+}
+
+// ip is optional (older callers pass only two arguments); without it every
+// caller shares one "unknown" bucket per account.
+async function loginUser(identifier, password, ip = null) {
+  if (!identifier || typeof identifier !== 'string' || !password || typeof password !== 'string') {
     return { success: false, error: 'Username/email and password are required' };
   }
 
@@ -377,43 +414,47 @@ function loginUser(identifier, password) {
   if (!user && identifier.includes('@')) {
     user = db.getUserByEmail(identifier);
   }
-  if (!user) {
-    return { success: false, error: 'Invalid username/email or password' };
+
+  // Unknown identifiers are throttled exactly like real accounts, so neither the
+  // messages nor the lockout behaviour reveal whether an account exists.
+  const accountKey = user ? `u:${user.id}` : `n:${identifier.toLowerCase()}`;
+
+  // Locked: refuse before spending any scrypt work
+  const lock = loginThrottle.check(accountKey, ip);
+  if (lock.locked) {
+    return { success: false, locked: true, error: lockoutMessage(lock.retryAfterMs) };
   }
 
-  // Check account lockout
-  if (user.locked_until) {
-    const lockTime = new Date(user.locked_until);
-    if (lockTime > new Date()) {
-      const minsLeft = Math.ceil((lockTime - new Date()) / 60000);
-      return { success: false, error: `Account locked. Try again in ${minsLeft} minute(s)` };
+  let ok;
+  if (user) {
+    ok = await verifyPassword(password, user.salt, user.password_hash);
+  } else {
+    await verifyPassword(password, DUMMY_SALT, DUMMY_HASH); // equalise timing
+    ok = false;
+  }
+
+  if (!ok) {
+    const after = loginThrottle.recordFailure(accountKey, ip);
+    if (after.locked) {
+      return { success: false, locked: true, error: lockoutMessage(after.retryAfterMs) };
     }
-    // Lock expired, reset
-    db.unlockAccount(user.id);
+    return { success: false, error: LOGIN_FAILED_MSG };
   }
 
-  // Verify password
-  if (!verifyPassword(password, user.salt, user.password_hash)) {
-    db.incrementFailedLogins(user.id);
-
-    // Check if we need to lock
-    const updated = db.getUserById(user.id);
-    if (updated.failed_login_attempts >= MAX_FAILED_ATTEMPTS) {
-      const lockUntil = new Date(Date.now() + LOCKOUT_DURATION_MINUTES * 60000).toISOString();
-      db.lockAccount(user.id, lockUntil);
-      return { success: false, error: `Too many failed attempts. Account locked for ${LOCKOUT_DURATION_MINUTES} minutes.` };
-    }
-
-    return { success: false, error: 'Invalid username/email or password' };
+  // The user may have been deleted, or the password changed, while scrypt ran
+  const fresh = db.getUserById(user.id);
+  if (!fresh || fresh.password_hash !== user.password_hash) {
+    return { success: false, error: LOGIN_FAILED_MSG };
   }
+  user = fresh;
 
   // Only reveal that an account is disabled to someone who knows its password
   if (!user.is_active) {
     return { success: false, error: 'Account has been disabled. Contact admin.' };
   }
 
-  // Success — reset failed attempts and update last login
-  db.resetFailedLogins(user.id);
+  // Success — clear this (account, IP) pair's failure counter, update last login
+  loginThrottle.recordSuccess(accountKey, ip);
   db.updateUserLastLogin(user.id);
 
   const accessToken = createToken({ userId: user.id, username: user.username, role: user.role });
@@ -518,13 +559,16 @@ function generateInitialAdminPassword() {
   return `Tp${random}9!`;
 }
 
-function ensureAdminExists() {
+async function ensureAdminExists() {
   const users = db.getAllUsers();
   if (users.length === 0) {
     console.log('[Auth] No users found — creating default admin...');
     const salt = generateSalt();
     const initialPassword = process.env.ADMIN_INITIAL_PASSWORD || generateInitialAdminPassword();
-    const passwordHash = hashPassword(initialPassword, salt);
+    const passwordHash = await hashPassword(initialPassword, salt);
+    // Startup awaits this before serving, but don't create a second admin if
+    // something else created users while we hashed.
+    if (db.getAllUsers().length > 0) return;
     const adminEmail = process.env.ADMIN_EMAIL || null;
     const result = db.createUser('admin', 'Administrator', passwordHash, salt, 'admin', null, adminEmail);
     if (result.success) {
@@ -639,25 +683,34 @@ function forgotPassword(email) {
   };
 }
 
-function resetPassword(token, newPassword) {
+async function resetPassword(token, newPassword) {
   if (!token) return { success: false, error: 'Reset token is required' };
 
   const pwCheck = validatePasswordStrength(newPassword);
   if (!pwCheck.valid) return { success: false, error: pwCheck.error };
 
-  const tokenRow = db.validatePasswordResetToken(token);
-  if (!tokenRow) {
+  // Cheap check first so random tokens don't cost a scrypt
+  if (!db.validatePasswordResetToken(token)) {
     return { success: false, error: 'Invalid or expired reset token' };
   }
 
   const salt = generateSalt();
-  const passwordHash = hashPassword(newPassword, salt);
+  const passwordHash = await hashPassword(newPassword, salt);
+
+  // Re-validate after the await: a concurrent request may have used the token.
+  // Validate → update → mark used is synchronous from here, so it's single-use.
+  const tokenRow = db.validatePasswordResetToken(token);
+  if (!tokenRow) {
+    return { success: false, error: 'Invalid or expired reset token' };
+  }
   db.updateUserPassword(tokenRow.user_id, passwordHash, salt);
   db.markResetTokenUsed(token);
   db.logAudit(tokenRow.user_id, 'password_reset', 'Password reset via email token', null);
 
-  // Revoke all sessions for this user on password reset
+  // Revoke all sessions for this user on password reset; earlier failed guesses
+  // were against the old password, so their lockout counters are cleared too.
   revokeUserSessions(tokenRow.user_id);
+  loginThrottle.clearAccount(`u:${tokenRow.user_id}`);
 
   return { success: true, message: 'Password has been reset successfully' };
 }
@@ -669,16 +722,20 @@ function resetPassword(token, newPassword) {
 // without registering. Everyone shares the same guest workspace.
 // (GUEST_USERNAME is defined in CONFIG above.)
 
-function getOrCreateGuestUser() {
+async function getOrCreateGuestUser() {
   let guest = db.getUserByUsername(GUEST_USERNAME);
   if (!guest) {
     const salt = generateSalt();
     // Unusable random password — guests never log in with a password
-    const passwordHash = hashPassword(crypto.randomBytes(32).toString('hex'), salt);
-    const result = db.createUser(GUEST_USERNAME, 'Guest', passwordHash, salt, 'analyst', null, null);
-    if (!result.success) return { success: false, error: result.error };
-    db.createUserNotificationSettings(result.id);
-    guest = db.getUserById(result.id);
+    const passwordHash = await hashPassword(crypto.randomBytes(32).toString('hex'), salt);
+    // Parallel first visits may all get here; only one insert wins, the rest reuse it
+    guest = db.getUserByUsername(GUEST_USERNAME);
+    if (!guest) {
+      const result = db.createUser(GUEST_USERNAME, 'Guest', passwordHash, salt, 'analyst', null, null);
+      if (!result.success) return { success: false, error: result.error };
+      db.createUserNotificationSettings(result.id);
+      guest = db.getUserById(result.id);
+    }
   }
   if (!guest) return { success: false, error: 'Failed to initialize guest account' };
   // Admins can switch guest access off by disabling the guest account
@@ -722,4 +779,5 @@ module.exports = {
   _refreshTokenCount: () => refreshTokens.size,
   _guestRefreshTokenCount: () => guestRefreshTokens.size,
   setCookies: security,  // pass through for routes
+  _loginThrottle: loginThrottle,
 };

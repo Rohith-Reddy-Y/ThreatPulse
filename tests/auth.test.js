@@ -121,12 +121,12 @@ test('changing the password revokes the other sessions but keeps the current one
 // ---------------------------------------------------------------------------
 // Expiry timestamps compared against SQLite datetime('now')
 // ---------------------------------------------------------------------------
-test('password reset tokens actually expire after one hour', () => {
+test('password reset tokens actually expire after one hour', async () => {
   createUser('forgetful', PW, { email: 'forgetful@example.test' });
   // Token issued 61 minutes ago → expired 1 minute ago
   const r = withClock(-61 * 60 * 1000, () => auth.forgotPassword('forgetful@example.test'));
   assert.ok(r._token);
-  const reset = auth.resetPassword(r._token, PW2);
+  const reset = await auth.resetPassword(r._token, PW2);
   assert.strictEqual(reset.success, false, 'expired token must be rejected');
 });
 
@@ -206,7 +206,7 @@ test('a flood of guest sessions is bounded and does not evict real sessions', as
   createUser('survivor', PW);
   const jar = await login('survivor', PW);
   const before = auth._refreshTokenCount();
-  for (let i = 0; i < auth.MAX_GUEST_REFRESH_TOKENS + 50; i++) auth.getOrCreateGuestUser();
+  for (let i = 0; i < auth.MAX_GUEST_REFRESH_TOKENS + 50; i++) await auth.getOrCreateGuestUser();
   assert.ok(auth._guestRefreshTokenCount() <= auth.MAX_GUEST_REFRESH_TOKENS);
   assert.ok(auth._refreshTokenCount() <= before + auth.MAX_GUEST_REFRESH_TOKENS, `store grew to ${auth._refreshTokenCount()}`);
   const r = await request('POST', '/api/auth/refresh', { cookies: { tp_refresh: jar.tp_refresh } });
