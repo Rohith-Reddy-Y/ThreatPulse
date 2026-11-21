@@ -8,7 +8,7 @@ const router = express.Router();
 const db = require('../database');
 const auth = require('../auth');
 const security = require('../security');
-const { sendAlertEmail, sendVerificationEmail } = require('../notifications/email-notifier');
+const { sendAlertEmail, sendVerificationEmail, initTransporter } = require('../notifications/email-notifier');
 const { sendTelegramAlert } = require('../notifications/telegram-notifier');
 const { sendTeamsAlert } = require('../notifications/teams-notifier');
 const { sendWhatsAppAlert } = require('../notifications/whatsapp-notifier');
@@ -280,14 +280,23 @@ router.put('/auth/password', auth.requireAuth, denyGuest, async (req, res) => {
     const newHash = auth.hashPassword(newPassword, newSalt);
     const targetValue = `${newHash}:${newSalt}`;
 
+    const userEmail = user.email || req.user.email;
+    const emailReady = !!userEmail && !!initTransporter();
+
+    // Apply directly (the current password was already verified) when:
+    //  - this is the forced first-login change, or
+    //  - no email/SMTP is available to deliver a code (otherwise the account
+    //    could never complete the change and would be locked out).
+    if (user.must_change_password || !emailReady) {
+      db.updateUserPassword(req.user.id, newHash, newSalt); // also clears must_change_password
+      db.logAudit(req.user.id, 'password_change',
+        user.must_change_password ? 'Forced first-login password change' : 'Password changed (email verification unavailable)', req.ip);
+      return res.json({ success: true, verificationRequired: false, message: 'Password updated successfully' });
+    }
+
     db.createVerificationCode(req.user.id, 'password_change', targetValue, code, expiresAt);
 
     // Send code to current email
-    const userEmail = user.email || req.user.email;
-    if (!userEmail) {
-      return res.status(400).json({ success: false, error: 'No email address registered. Contact admin to set one.' });
-    }
-
     await sendVerificationEmail(userEmail, req.user.displayName, 'password_change', code);
 
     res.json({ success: true, verificationRequired: true, type: 'password_change', email: userEmail });

@@ -1706,6 +1706,15 @@
           $('#verification-notice').textContent = `We sent a 6-digit verification code to your registered email: ${result.email}. Please enter it below to confirm.`;
           state.pendingVerificationType = 'password_change';
           $('#verification-modal').classList.remove('hidden');
+        } else if (result.success) {
+          // Changed directly (first-login change, or email verification unavailable)
+          $('#password-modal').classList.add('hidden');
+          $('#current-password').value = '';
+          $('#new-password').value = '';
+          if (currentUser) currentUser.mustChangePassword = false;
+          $('#cancel-password-btn')?.classList.remove('hidden');
+          $('#password-forced-notice')?.classList.add('hidden');
+          showToast('Password updated', result.message || 'Your password has been changed.', 'success');
         } else {
           errEl.textContent = result.error || 'Failed to change password';
           errEl.classList.remove('hidden');

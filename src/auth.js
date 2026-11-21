@@ -609,5 +609,9 @@ module.exports = {
   sanitizeString,
   validateUrl,
   validatePasswordStrength,
+  // used by the password-change route (were missing → every change crashed)
+  verifyPassword,
+  generateSalt,
+  hashPassword,
   setCookies: security,  // pass through for routes
 };
