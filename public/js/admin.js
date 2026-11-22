@@ -74,6 +74,7 @@
       loadInvites();
       loadSources();
       loadAudit();
+      loadResets();
       loadAiSettings();
     } catch (e) {
       alert('Admin access required. Redirecting to login...');
@@ -280,6 +281,36 @@
     `).join('');
   }
 
+  // SQLite datetime('now') values are UTC without a zone marker
+  function utcDate(v) {
+    if (!v) return null;
+    return new Date(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(v) ? v.replace(' ', 'T') + 'Z' : v);
+  }
+
+  // Pending password resets: with no SMTP the forgot-password link only exists
+  // here (and in the server log), so the admin can hand it to the user.
+  async function loadResets() {
+    const data = await api('GET', d('L2FwaS9hZG1pbi9yZXNldC10b2tlbnM='));
+    if (!data || !Array.isArray(data.tokens)) return;
+    const tbody = $('#resets-tbody');
+    if (!data.tokens.length) {
+      tbody.innerHTML = '<tr><td colspan="5" style="color:var(--text-muted);">No pending reset requests.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = data.tokens.map(t => {
+      const link = `${window.location.origin}/?reset=${encodeURIComponent(t.token)}`;
+      const created = utcDate(t.created_at), expires = utcDate(t.expires_at);
+      return `
+      <tr>
+        <td><strong>${escapeHtml(t.username)}</strong></td>
+        <td>${escapeHtml(t.email || '—')}</td>
+        <td>${created ? relativeTime(created.toISOString()) : '—'}</td>
+        <td>${expires ? escapeHtml(expires.toLocaleTimeString()) : '—'}</td>
+        <td><code class="copy-code" data-copy="${escapeHtml(link)}" style="color:var(--cyan);font-size:11px;cursor:pointer;word-break:break-all;" title="Click to copy">${escapeHtml(link)}</code></td>
+      </tr>`;
+    }).join('');
+  }
+
   // AI settings (Groq + Tavily keys, stored server-side)
   async function loadAiSettings() {
     try {
@@ -350,7 +381,7 @@
         copyCode.textContent = 'Copied!';
         copyCode.style.color = 'var(--green)';
         setTimeout(() => { copyCode.textContent = original; copyCode.style.color = 'var(--cyan)'; }, 1500);
-        showToast('Invite code copied to clipboard', 'success');
+        showToast('Copied to clipboard', 'success');
       }).catch(() => showToast('Could not copy — select and copy manually', 'error'));
     }
   });
@@ -391,6 +422,7 @@
   });
 
   $('#ai-save-btn').addEventListener('click', saveAiSettings);
+  $('#refresh-resets-btn').addEventListener('click', loadResets);
 
   $('#admin-logout-btn').addEventListener('click', async () => {
     try {

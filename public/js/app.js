@@ -18,6 +18,8 @@
   let clockInterval = null;
   let faviconInterval = null;
   let resetAiPanel = () => {}; // assigned in bindEvents (AI panel state lives there)
+  // Public server facts from /api/auth/config (invite codes, SMTP, DB reset time)
+  let serverConfig = { requireInvite: false, emailEnabled: false, dbCreatedAt: null };
 
   //
   //  STATE
@@ -130,8 +132,10 @@
       const data = await res.json();
       if (epoch !== sessionEpoch) return false; // logged out while refreshing
       if (data.success && data.user) {
-        // Refresh payload omits mustChangePassword; keep the flag we already have
-        if (currentUser && currentUser.id === data.user.id && currentUser.mustChangePassword) {
+        // Older servers omitted mustChangePassword from the refresh payload: keep
+        // the flag we have only then (a server "false" means the change is done).
+        if (data.user.mustChangePassword === undefined && currentUser &&
+            currentUser.id === data.user.id && currentUser.mustChangePassword) {
           data.user.mustChangePassword = true;
         }
         currentUser = data.user;
@@ -177,7 +181,8 @@
     ['#email-modal', '#password-modal', '#verification-modal'].forEach(sel => $(sel)?.classList.add('hidden'));
     ['#password-form', '#email-form', '#verification-form', '#notification-form', '#login-form'].forEach(sel => $(sel)?.reset());
     forcedChangeSecret = null;
-    $('#cancel-password-btn')?.classList.remove('hidden');
+    setCurrentPasswordFieldVisible(true);   // the next user must be asked for theirs
+    setForcedPasswordMode(false);
     $('#password-forced-notice')?.classList.add('hidden');
     $('#user-dropdown')?.classList.add('hidden');
     state.pendingVerificationType = null;
@@ -323,6 +328,22 @@
     return d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
   }
 
+  // Local calendar day of a Date as YYYY-MM-DD (the stats API groups by the
+  // viewer's local day when given ?tz=)
+  function localDayKey(date) {
+    const dt = date instanceof Date ? date : new Date(date);
+    return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+  }
+
+  // ISO start/end instants of a local calendar day ('YYYY-MM-DD' or a Date)
+  function localDayBounds(day) {
+    const start = typeof day === 'string' ? new Date(day + 'T00:00:00') : new Date(day);
+    start.setHours(0, 0, 0, 0);
+    const next = new Date(start);
+    next.setDate(next.getDate() + 1);
+    return { start: start.toISOString(), end: new Date(next.getTime() - 1).toISOString() };
+  }
+
   function showToast(title, message, type = 'info') {
     const container = $('#toast-container');
     const toast = document.createElement('div');
@@ -442,7 +463,8 @@
 
   async function fetchStats() {
     try {
-      const stats = await api('GET', d('L2FwaS9hcnRpY2xlcy9zdGF0cw=='));
+      // tz: minutes east of UTC, so "today" / the chart days are the viewer's own
+      const stats = await api('GET', `${d('L2FwaS9hcnRpY2xlcy9zdGF0cw==')}?tz=${-new Date().getTimezoneOffset()}`);
       animateValue($('#stat-threats'), stats.threatsToday || 0);
       animateValue($('#stat-critical'), stats.criticalVulns || 0);
       animateValue($('#stat-pocs'), stats.pocsDetected || 0);
@@ -582,7 +604,7 @@
     const preset = CHART_PRESETS[days] || CHART_PRESETS[7];
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - preset.days);
-    const cutoffStr = cutoff.toISOString().split('T')[0];
+    const cutoffStr = localDayKey(cutoff);   // timeline days are local (see fetchStats)
 
     // Filter out null days and apply date range
     let data = (timeline || []).filter(d => d.day && d.day >= cutoffStr);
@@ -726,10 +748,12 @@
           if (dist < minDist) { minDist = dist; closest = p; }
         }
         if (minDist > 30) return;
-        // Set date filter to that specific day
-        state.filters.start_date = closest.day + 'T00:00:00.000Z';
-        state.filters.end_date = closest.day + 'T23:59:59.999Z';
+        // Set date filter to that (local) day — the timeline counts local days
+        const b = localDayBounds(closest.day);
+        state.filters.start_date = b.start;
+        state.filters.end_date = b.end;
         state.filters.time_range = 'custom';
+        showSelectedRangeTag(b.start, b.end);
         state.currentPage = 1;
         setSelectValue($('#time-range-filter'), 'custom');
         updateClearAllButton();
@@ -751,7 +775,7 @@
         const dayOfWeek = date.getDay();
         const monday = new Date(date);
         monday.setDate(date.getDate() - ((dayOfWeek + 6) % 7));
-        key = monday.toISOString().split('T')[0];
+        key = localDayKey(monday);   // toISOString() shifted east-of-UTC weeks a day back
       } else {
         key = date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0');
       }
@@ -824,19 +848,7 @@
     state.isLoading = true;
     showLoader();
     try {
-      const params = new URLSearchParams({ page, limit: 50 });
-      if (state.filters.category) params.set('category', state.filters.category);
-      if (state.filters.severity) params.set('severity', state.filters.severity);
-      if (state.filters.source_type) params.set('source_type', state.filters.source_type);
-      if (state.filters.search) params.set('search', state.filters.search);
-      if (state.filters.sector) params.set('sector', state.filters.sector);
-      if (state.filters.threat_actor) params.set('threat_actor', state.filters.threat_actor);
-      if (state.filters.has_poc) params.set('has_poc', state.filters.has_poc);
-      if (state.filters.has_mitre) params.set('has_mitre', state.filters.has_mitre);
-      if (state.filters.is_patched !== '') params.set('is_patched', state.filters.is_patched);
-      if (state.filters.time_range) params.set('time_range', state.filters.time_range);
-      if (state.filters.start_date) params.set('start_date', state.filters.start_date);
-      if (state.filters.end_date) params.set('end_date', state.filters.end_date);
+      const params = filterParams(page, 50);
 
       const data = await api('GET', `${d('L2FwaS9hcnRpY2xlcw==')}?${params}`);
       if (seq !== articlesReqSeq) return;     // superseded by a newer request
@@ -1179,9 +1191,9 @@
         ${iocHtml}
         ${reviewHtml}
         <div class="article-actions">
-          <button class="${reviewBtnCls}" data-review-article="${article.id}" title="Start reviewing"${reviewBtnDisabled}>${reviewBtnTxt}</button>
-          <button class="btn-review-done" data-review-done="${article.id}" title="Mark as reviewed"${doneBtnDisabled}>Done</button>
-          <button class="${escalateBtnCls}" data-escalate="${article.id}" title="Escalate"${escalateBtnDisabled}>${escalateBtnTxt}</button>
+          <button class="${reviewBtnCls} guest-hidden" data-review-article="${article.id}" title="Start reviewing"${reviewBtnDisabled}>${reviewBtnTxt}</button>
+          <button class="btn-review-done guest-hidden" data-review-done="${article.id}" title="Mark as reviewed"${doneBtnDisabled}>Done</button>
+          <button class="${escalateBtnCls} guest-hidden" data-escalate="${article.id}" title="Escalate"${escalateBtnDisabled}>${escalateBtnTxt}</button>
           <button class="btn-ai" data-ai-summarize="${article.id}" title="AI summary + triage">AI</button>
         </div>
         <div class="ai-result" data-ai-result="${article.id}" style="display:none;"></div>
@@ -1247,10 +1259,17 @@
   //
   async function addSource(formData) {
     try {
-      await api('POST', d('L2FwaS9zb3VyY2Vz'), formData);
-      showToast('Source Added', `${formData.name} has been added.`, 'success');
+      const r = await api('POST', d('L2FwaS9zb3VyY2Vz'), formData);
+      showToast('Source Added', r && r.fetching
+        ? `${formData.name} has been added and is being fetched now.`
+        : `${formData.name} has been added. It will be fetched on the next scheduled run.`, 'success');
       fetchSources();
       $('#add-source-form').reset();
+      if (r && r.fetching) {
+        // The server fetches the new source in the background: pick up the result
+        setTimeout(() => { Promise.allSettled([fetchSources(), fetchStats(), fetchArticles()]); }, 8000);
+        setTimeout(() => { Promise.allSettled([fetchSources(), fetchStats(), fetchArticles()]); }, 30000);
+      }
     } catch (e) { showToast('Error', e.message, 'error'); }
   }
 
@@ -1284,7 +1303,11 @@
         severity_threshold: $('#notif-severity').value,
         keywords_filter: $('#notif-keywords').value.trim()
       });
-      showToast('Saved', 'Notification settings updated.', 'success');
+      if ($('#notif-email-enabled').checked && !serverConfig.emailEnabled) {
+        showToast('Saved — email alerts unavailable', 'This server has no SMTP configured, so email alerts cannot be sent. Use Telegram, Teams or WhatsApp instead.', 'warning');
+      } else {
+        showToast('Saved', 'Notification settings updated.', 'success');
+      }
       return true;
     } catch (e) { showToast('Error', e.message, 'error'); return false; }
   }
@@ -1305,18 +1328,25 @@
     state.isFetching = true;
     $('#fetch-now-btn').disabled = true;
     showToast('Fetching', 'Fetching latest threats...', 'info');
+    const done = () => { state.isFetching = false; $('#fetch-now-btn').disabled = false; };
+    const reload = () => Promise.allSettled([fetchStats(), fetchArticles(), fetchSources()]);
     try {
-      await api('POST', d('L2FwaS9mZXRjaC1ub3c='));
-      setTimeout(async () => {
-        await Promise.allSettled([fetchStats(), fetchArticles(), fetchSources()]);
-        showToast('Complete', 'Feeds updated.', 'success');
-        state.isFetching = false;
-        $('#fetch-now-btn').disabled = false;
-      }, 5000);
+      // Users' own sources are fetched while the request waits (up to ~25 s) and
+      // the server reports what happened; admins start the full background run.
+      // Don't claim "Feeds updated" for a fetch that is still running.
+      const r = await api('POST', d('L2FwaS9mZXRjaC1ub3c=')) || {};
+      if (r.completed) {
+        await reload();
+        showToast('Fetch complete', r.message || 'Feeds updated.', r.errors ? 'warning' : 'success');
+        done();
+      } else {
+        showToast('Fetch running', r.message || 'New articles will appear as they arrive.', 'info');
+        setTimeout(reload, 10000);
+        setTimeout(() => { reload().then(done); }, 30000);
+      }
     } catch (e) {
       showToast('Error', e.message, 'error');
-      state.isFetching = false;
-      $('#fetch-now-btn').disabled = false;
+      done();
     }
   }
 
@@ -1355,12 +1385,76 @@
     }
   }
 
-  function exportArticles() {
-    const blob = new Blob([JSON.stringify(state.articles, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = `threatpulse-export-${new Date().toISOString().split('T')[0]}.json`;
-    a.click(); URL.revokeObjectURL(url);
+  // Query string for the current feed filters (shared by the feed and export)
+  function filterParams(page, limit) {
+    const params = new URLSearchParams({ page, limit });
+    const f = state.filters;
+    ['category', 'severity', 'source_type', 'search', 'sector', 'threat_actor', 'has_poc', 'has_mitre',
+      'time_range', 'start_date', 'end_date'].forEach(k => { if (f[k]) params.set(k, f[k]); });
+    if (f.is_patched !== '') params.set('is_patched', f.is_patched);
+    return params;
+  }
+
+  // Shape of one exported article: readable fields only (no internal hashes /
+  // flags) and reviews as real objects instead of a JSON string.
+  function exportRecord(a) {
+    let reviews = [];
+    try { reviews = a.reviews ? JSON.parse(a.reviews) : []; } catch (e) { reviews = []; }
+    reviews = (Array.isArray(reviews) ? reviews : []).filter(r => r && r.user_id).map(r => ({
+      reviewer: r.username, status: r.status, started_at: r.started_at, completed_at: r.completed_at, notes: r.notes
+    }));
+    const list = (v) => (v ? String(v).split(',').map(x => x.trim()).filter(Boolean) : []);
+    return {
+      id: a.id, title: a.title, url: a.url, description: a.description,
+      source: a.source_name, source_type: a.source_type, author: a.author || null,
+      published: a.published_date, fetched: a.fetched_date,
+      category: a.category, severity: a.severity, cve: a.cve_id || null,
+      patched: a.is_patched === 1 ? true : a.is_patched === 0 ? false : null,
+      has_poc: !!a.has_poc, mitre: list(a.mitre_ids), sector: a.sector || null,
+      threat_actors: list(a.threat_actors), tags: list(a.tags), iocs: a.iocs || null,
+      owner: a.owner_name || null, reviews
+    };
+  }
+
+  // Exports EVERY article matching the current filters (it used to dump only the
+  // 50 loaded on screen while looking like a full export), within the viewer's
+  // own scope since it goes through the same /api/articles endpoint.
+  const EXPORT_MAX = 5000;
+  async function exportArticles() {
+    const btn = $('#export-btn');
+    if (btn) btn.disabled = true;
+    try {
+      const all = [];
+      let page = 1, totalPages = 1, total = 0;
+      do {
+        const data = await api('GET', `${d('L2FwaS9hcnRpY2xlcw==')}?${filterParams(page, 200)}`);
+        const rows = Array.isArray(data.articles) ? data.articles : [];
+        all.push(...rows);
+        totalPages = data.totalPages || 0;
+        total = data.total || all.length;
+        page++;
+      } while (page <= totalPages && all.length < EXPORT_MAX);
+      const records = all.slice(0, EXPORT_MAX).map(exportRecord);
+      const payload = {
+        exported_at: new Date().toISOString(),
+        filters: Object.fromEntries(Object.entries(state.filters).filter(([, v]) => v !== '')),
+        total_matching: total,
+        count: records.length,
+        articles: records
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `threatpulse-export-${localDayKey(new Date())}.json`;
+      a.click(); URL.revokeObjectURL(url);
+      showToast('Exported', total > records.length
+        ? `Exported the newest ${records.length} of ${total} matching articles.`
+        : `Exported ${records.length} article(s).`, 'success');
+    } catch (e) {
+      showToast('Export failed', e.message, 'error');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
   }
 
   //
@@ -1434,7 +1528,7 @@
           setUser(result.user);
           initDashboard();
         } else {
-          errEl.textContent = (result.error || 'Invalid username/email or password');
+          errEl.textContent = (result.error || 'Invalid username/email or password') + (result.locked ? '' : dbResetHint());
           errEl.classList.remove('hidden');
           $('#login-password').value = '';
           $('#login-password').focus();
@@ -1494,7 +1588,7 @@
       const email = $('#reg-email').value.trim();
       const pw = $('#reg-password').value;
       const confirmPw = $('#reg-confirm').value;
-      const inviteCode = $('#reg-invite').value.trim();
+      const inviteCode = $('#reg-invite').value.trim().toUpperCase();
 
       // Client-side validation — check each field
       if (!username || username.length < 3) {
@@ -1542,8 +1636,13 @@
         errEl.classList.remove('hidden');
         return;
       }
-      // Invite code is optional (open registration) — only required if the
-      // field is visible (i.e. REQUIRE_INVITE_CODE is on).
+      // Invite code: only when the server requires one (REQUIRE_INVITE_CODE);
+      // the field is shown from /api/auth/config.
+      if (serverConfig.requireInvite && !inviteCode) {
+        errEl.textContent = 'An invite code is required to register. Ask your admin for one.';
+        errEl.classList.remove('hidden');
+        return;
+      }
 
       $('#register-btn').disabled = true;
       $('#register-btn').textContent = 'Creating account…';
@@ -1774,6 +1873,11 @@
           $('#verification-notice').textContent = `We sent a 6-digit verification code to your new email: ${result.email}. Please enter it below to confirm.`;
           state.pendingVerificationType = 'email_change';
           $('#verification-modal').classList.remove('hidden');
+        } else if (result.success) {
+          // Applied directly (this server cannot send verification email)
+          if (currentUser) currentUser.email = result.email;
+          $('#email-modal').classList.add('hidden');
+          showToast('Email updated', result.message || 'Your email address has been updated.', 'success');
         } else {
           errEl.textContent = result.error || 'Failed to update email'; errEl.classList.remove('hidden');
         }
@@ -1787,6 +1891,9 @@
       $('#password-modal').classList.remove('hidden');
     });
     $('#cancel-password-btn').addEventListener('click', () => {
+      // In a forced change there is nothing to go back to: the button signs out
+      // (otherwise someone unable to finish the change was stuck on this modal).
+      if (currentUser && currentUser.mustChangePassword) { logout(); return; }
       $('#password-modal').classList.add('hidden');
     });
     $('#password-form').addEventListener('submit', async (e) => {
@@ -1813,8 +1920,7 @@
           setCurrentPasswordFieldVisible(true);
           $('#new-password').value = '';
           if (currentUser) currentUser.mustChangePassword = false;
-          $('#cancel-password-btn')?.classList.remove('hidden');
-          $('#password-forced-notice')?.classList.add('hidden');
+          setForcedPasswordMode(false);
           showToast('Password updated', result.message || 'Your password has been changed.', 'success');
           // Data APIs were blocked until the forced change; load everything now.
           Promise.allSettled([fetchStats(), fetchArticles(), fetchSources(), fetchNotificationSettings()]);
@@ -1855,10 +1961,7 @@
             }
             showToast('Success', 'Password changed successfully.', 'success');
             Promise.allSettled([fetchStats(), fetchArticles(), fetchSources(), fetchNotificationSettings()]);
-            const notice = $('#password-forced-notice');
-            if (notice) notice.classList.add('hidden');
-            const cancelBtn = $('#cancel-password-btn');
-            if (cancelBtn) cancelBtn.classList.remove('hidden');
+            setForcedPasswordMode(false);
           }
           $('#verification-modal').classList.add('hidden');
           $('#password-form').reset();
@@ -2127,17 +2230,26 @@
       card.addEventListener('click', () => {
         const stat = card.dataset.stat;
         clearFilters();
+        // Each card filters the feed to the same window its number counts:
+        // "today" is the viewer's local day (as is the count, see fetchStats),
+        // critical / PoC counts cover the last 7 days.
         if (stat === 'threats') {
-          const today = new Date().toISOString().split('T')[0];
-          state.filters.start_date = today + 'T00:00:00.000Z';
-          state.filters.end_date = today + 'T23:59:59.999Z';
+          const b = localDayBounds(new Date());
+          state.filters.start_date = b.start;
+          state.filters.end_date = b.end;
           state.filters.time_range = 'custom';
+          setSelectValue($('#time-range-filter'), 'custom');
+          showSelectedRangeTag(b.start, b.end);
         } else if (stat === 'critical') {
           state.filters.severity = 'critical';
+          state.filters.time_range = '7d';
           setSelectValue($('#severity-filter'), 'critical');
+          setSelectValue($('#time-range-filter'), '7d');
         } else if (stat === 'pocs') {
           state.filters.has_poc = '1';
+          state.filters.time_range = '7d';
           $('#filter-poc').classList.add('active');
+          setSelectValue($('#time-range-filter'), '7d');
         }
         state.currentPage = 1;
         updateClearAllButton();
@@ -2458,16 +2570,43 @@
     if (!visible) input.value = '';
   }
 
+  // Forced mode: notice shown, Cancel becomes "Sign out" (see its handler)
+  function setForcedPasswordMode(forced) {
+    const cancelBtn = $('#cancel-password-btn');
+    if (cancelBtn) { cancelBtn.classList.remove('hidden'); cancelBtn.textContent = forced ? 'Sign out' : 'Cancel'; }
+    const notice = $('#password-forced-notice');
+    if (notice) notice.classList.toggle('hidden', !forced);
+  }
+
   function enforcePasswordChange() {
     if (!currentUser || !currentUser.mustChangePassword) return;
     const modal = $('#password-modal');
     // If we still hold the sign-in password, don't ask for it again.
     setCurrentPasswordFieldVisible(!forcedChangeSecret);
     modal.classList.remove('hidden');
-    const cancelBtn = $('#cancel-password-btn');
-    if (cancelBtn) cancelBtn.classList.add('hidden');
-    const notice = $('#password-forced-notice');
-    if (notice) notice.classList.remove('hidden');
+    setForcedPasswordMode(true);
+  }
+
+  // Shown under a failed sign-in when this server's database was created at this
+  // boot (ephemeral hosting wipes it on every redeploy/restart): the account or
+  // password the user remembers may simply no longer exist.
+  function dbResetHint() {
+    if (!serverConfig.dbCreatedAt) return '';
+    const when = new Date(serverConfig.dbCreatedAt);
+    if (isNaN(when.getTime())) return '';
+    return ` — Note: this server's database was reset on ${when.toLocaleString()} (e.g. by a redeploy). ` +
+      'Accounts and password changes made before then no longer exist: register again, or sign in as admin with the initial admin password.';
+  }
+
+  function loadServerConfig() {
+    return fetch(d('L2FwaS9hdXRoL2NvbmZpZw==')).then(r => (r.ok ? readJson(r) : {})).then(cfg => {
+      serverConfig = { ...serverConfig, ...(cfg || {}) };
+      const group = $('#reg-invite-group');
+      if (group) group.style.display = serverConfig.requireInvite ? '' : 'none';
+      const inv = $('#reg-invite');
+      if (inv) inv.required = !!serverConfig.requireInvite;
+      return serverConfig;
+    }).catch(() => serverConfig);
   }
 
   async function initDashboard() {
@@ -2593,6 +2732,7 @@
     // Wrap so a single binding error can never leave the login button dead.
     try { bindEvents(); } catch (e) { console.error('[init] bindEvents error:', e); }
     try { initTheme(); } catch (e) { console.error('[init] theme error:', e); }
+    loadServerConfig();
 
     // Arriving from a password-reset email link? Show the reset form.
     const resetToken = new URLSearchParams(window.location.search).get('reset');

@@ -317,6 +317,7 @@
           <option value="rss">RSS Feed</option>
           <option value="api">API</option>
           <option value="darkweb">Dark Web</option>
+          <option value="custom">Website (scraped)</option>
         </select>
         <select id="sector-filter" class="filter-select">
           <option value="">All Sectors</option>
@@ -540,16 +541,15 @@
             <div class="form-group">
               <label for="source-type">Type</label>
               <select id="source-type" class="form-select">
-                <option value="rss">RSS Feed</option>
-                <option value="blog">Blog/Website</option>
-                <option value="api">API</option>
-                <option value="other">Other</option>
+                <option value="rss">RSS / Atom Feed</option>
+                <option value="website">Blog / Website (scraped)</option>
+                <option value="api">API (RSS/JSON endpoint)</option>
               </select>
             </div>
             <div class="form-group">
               <label for="source-category">Category</label>
               <select id="source-category" class="form-select">
-                <option value="general">General</option>
+                <option value="general">General (auto-classify)</option>
                 <option value="vulnerability">Vulnerabilities</option>
                 <option value="malware">Malware</option>
                 <option value="breach">Breaches</option>
