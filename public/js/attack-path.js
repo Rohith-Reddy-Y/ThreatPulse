@@ -78,7 +78,7 @@
       list.forEach((s, k) => {
         s.x = ACTOR_W + Number(lane) * (LANE_W + LANE_GAP) + (LANE_W - FOOT) / 2;
         s.y = top + k * step;
-        s.h = s.how === 'cited' ? H_CITED : H_INFERRED;
+        s.h = s.how === 'cited' ? H_CITED : s.how === 'ai' ? (H_CITED + H_INFERRED) / 2 : H_INFERRED;
       });
     }
     return { article, actors, steps, unmapped, lanesUsed, first, last, gaps };
@@ -158,8 +158,8 @@
     // technique blocks
     model.steps.forEach((s, i) => {
       const shown = s.subId || s.id;
-      const b = box(`ap-tech ${s.how === 'cited' ? 'ap-cited' : 'ap-inferred'}`, s.x, s.y, FOOT, FOOT, s.h,
-        `Step ${i + 1}: ${s.tacticName} — ${shown} ${s.name} (${s.how === 'cited' ? 'cited in the report' : 'inferred'})`);
+      const b = box(`ap-tech ${s.how === 'cited' ? 'ap-cited' : s.how === 'ai' ? 'ap-ai' : 'ap-inferred'}`, s.x, s.y, FOOT, FOOT, s.h,
+        `Step ${i + 1}: ${s.tacticName} — ${shown} ${s.name} (${s.how === 'cited' ? 'cited in the report' : s.how === 'ai' ? 'AI-mapped' : 'inferred'})`);
       b.dataset.step = String(i);
       board.append(b);
       // alternate label heights along the path so neighbouring labels don't collide
@@ -205,6 +205,7 @@
       s.procedure ? el('blockquote', { class: 'ap-proc', text: s.procedure }) : el('p', { class: 'ap-desc', text: 'No sentence quoted.' }),
       el('p', { class: `ap-evidence ${s.how === 'cited' ? 'cited' : 'inferred'}` },
         s.how === 'cited' ? 'Cited: the report names this technique ID.'
+          : s.how === 'ai' ? 'AI-mapped from the sentence above (quoted from the report). Verify before relying on it.'
           : `Inferred: the report describes this behaviour${s.term ? ` (“${s.term}”)` : ''}. Verify before relying on it.`),
       el('div', { class: 'ap-actions' },
         url ? el('a', { class: 'ap-btn ap-btn-primary', href: url, target: '_blank', rel: 'noopener' }, `Open ${shown} on MITRE ATT&CK ↗`) : null,
@@ -235,12 +236,12 @@
       techniques: model.steps.concat(model.unmapped).map((s) => ({
         techniqueID: s.subId || s.id,
         score: s.how === 'cited' ? 2 : 1,
-        color: s.how === 'cited' ? '#3987e5' : '#9cc3f0',
+        color: s.how === 'cited' ? '#3987e5' : s.how === 'ai' ? '#a78bfa' : '#9cc3f0',
         comment: `${s.how}${s.procedure ? ': ' + s.procedure : ''}`.slice(0, 500),
         enabled: true,
       })),
       gradient: { colors: ['#9cc3f0', '#3987e5'], minValue: 1, maxValue: 2 },
-      legendItems: [{ label: 'Cited in report', color: '#3987e5' }, { label: 'Inferred from behaviour', color: '#9cc3f0' }],
+      legendItems: [{ label: 'Cited in report', color: '#3987e5' }, { label: 'AI-mapped (quoted evidence)', color: '#a78bfa' }, { label: 'Inferred from behaviour', color: '#9cc3f0' }],
     };
     const blob = new Blob([JSON.stringify(layer, null, 2)], { type: 'application/json' });
     const link = el('a', { href: URL.createObjectURL(blob), download: `attack-path-${a.id}.json` });
@@ -291,7 +292,7 @@
     stepsList.append(el('li', { 'data-step': '-1', tabindex: '0', onclick: () => select(-1), onkeydown: (e) => { if (e.key === 'Enter') select(-1); } },
       el('span', { class: 'ap-step-tac', text: 'Actor' }), el('span', { class: 'ap-step-name', text: model.actors.join(', ') || 'Unattributed' })));
     model.steps.forEach((s, i) => stepsList.append(el('li', {
-      'data-step': String(i), tabindex: '0', class: s.how === 'cited' ? 'cited' : 'inferred',
+      'data-step': String(i), tabindex: '0', class: s.how === 'cited' ? 'cited' : s.how === 'ai' ? 'ai' : 'inferred',
       onclick: () => select(i), onkeydown: (e) => { if (e.key === 'Enter') select(i); },
     }, el('span', { class: 'ap-step-tac', text: s.tacticName }), el('code', { text: s.subId || s.id }), el('span', { class: 'ap-step-name', text: s.name }))));
 
@@ -318,6 +319,7 @@
         el('div', { class: 'ap-legend' },
           el('span', {}, el('i', { class: 'lg-actor' }), 'Threat actor'),
           el('span', {}, el('i', { class: 'lg-cited' }), 'Cited in report (tall)'),
+          el('span', {}, el('i', { class: 'lg-ai' }), 'AI-mapped (medium)'),
           el('span', {}, el('i', { class: 'lg-inferred' }), 'Inferred (short)'),
           el('span', {}, el('i', { class: 'lg-gap' }), 'Stage not described')),
         el('button', { type: 'button', class: 'ap-btn ap-export', onclick: () => exportLayer(model), title: 'Download an ATT&CK Navigator layer for this report' }, 'Navigator layer ↓')),

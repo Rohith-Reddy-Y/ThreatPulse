@@ -83,6 +83,23 @@ Return JSON exactly in this shape:
   };
 }
 
+function ttpPrompt(article) {
+  return {
+    system: `${INJECTION_GUARD}
+You are a MITRE ATT&CK (Enterprise) mapping analyst. Read the article in the <article> block and list the ATT&CK techniques the attacker activity it describes actually uses, and any named threat actor / group.
+Rules:
+- Only techniques supported by the text. If the article describes no attacker behaviour (e.g. a product release, a patch list without exploitation), return empty lists.
+- "evidence" must be an exact sentence or phrase COPIED VERBATIM from the article (at least a few words) that shows the technique. Do not paraphrase.
+- Use real Enterprise technique IDs (T1xxx or T1xxx.yyy) and the official technique name and tactic name.
+- At most 8 techniques. Prefer precision over recall.
+
+Return JSON exactly in this shape:
+{"techniques": [{"id": "T1566.001", "name": "Spearphishing Attachment", "tactic": "Initial Access", "evidence": "<verbatim text from the article>"}], "actors": ["<threat actor or group named in the article>"]}
+`,
+    user: articleBlock(article, LIMITS.description, [['Source', 'source_name', 'Unknown']])
+  };
+}
+
 function triagePrompt(article) {
   return {
     system: `${INJECTION_GUARD}
@@ -168,4 +185,4 @@ Return JSON exactly in this shape:
   };
 }
 
-module.exports = { summaryPrompt, triagePrompt, iocPrompt, ragPrompt, webQaPrompt, briefingPrompt, LIMITS };
+module.exports = { summaryPrompt, ttpPrompt, triagePrompt, iocPrompt, ragPrompt, webQaPrompt, briefingPrompt, LIMITS };

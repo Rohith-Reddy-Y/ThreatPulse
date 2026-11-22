@@ -411,3 +411,40 @@ test('gpt-oss style citations are normalised to [N]', async () => {
   const r = await client.generate('sys', 'user', { json: false });
   assert.equal(r.text, 'see [2] and [3]');
 });
+
+// ───────────────────────── AI ATT&CK mapping ─────────────────────────
+
+test('AI TTP mapping keeps only real IDs whose evidence is quoted from the article, and caches it', async () => {
+  const u = freshUser();
+  const art = addArticle(u.id, { title: 'Hospital breach', description: 'The attackers sent spearphishing emails with malicious ISO attachments. Later they dumped LSASS memory with Mimikatz. Volt Typhoon was blamed.' });
+  const bodies = captureGroq(JSON.stringify({
+    techniques: [
+      { id: 'T1566.001', name: 'Spearphishing Attachment', tactic: 'Initial Access', evidence: 'sent spearphishing emails with malicious ISO attachments' },
+      { id: 'T1003.001', name: 'LSASS Memory', tactic: 'Credential Access', evidence: 'dumped LSASS memory with Mimikatz' },
+      { id: 'T1486', name: 'Data Encrypted for Impact', tactic: 'Impact', evidence: 'encrypted every server in the hospital' },   // not in the text -> dropped
+      { id: 'T8557', name: 'Fake', tactic: 'Impact', evidence: 'Hospital breach happened today' },                                    // bad ID -> dropped
+      { id: 'T1999', name: 'Made up <script>', tactic: 'Nonsense', evidence: 'Later they dumped LSASS' },                              // unknown tactic -> dropped
+    ],
+    actors: ['Volt Typhoon', 'Imaginary Panda'],
+  }));
+  const r = await call('POST', '/ttps', { user: u, ip: freshIp(), body: { articleId: Number(art) } });
+  assert.equal(r.statusCode, 200, JSON.stringify(r.body));
+  const ai = r.body.ttps.filter(t => t.how === 'ai').map(t => t.subId || t.id).sort();
+  assert.deepEqual(ai, ['T1003.001', 'T1566.001']);
+  assert.deepEqual(r.body.actors, ['Volt Typhoon'], 'actor must appear in the text');
+  assert.ok(r.body.ttps.every(t => /^https:\/\/attack\.mitre\.org\//.test(t.url)));
+
+  // second call is served from cache (no model call)
+  const before = bodies.length;
+  const again = await call('POST', '/ttps', { user: u, ip: freshIp(), body: { articleId: Number(art) } });
+  assert.equal(again.statusCode, 200);
+  assert.equal(bodies.length, before);
+});
+
+test('AI TTP mapping respects article access', async () => {
+  const owner = freshUser(), other = freshUser();
+  const art = addArticle(owner.id, { title: 'Private report', description: 'secret stuff' });
+  captureGroq('{"techniques":[],"actors":[]}');
+  const r = await call('POST', '/ttps', { user: other, ip: freshIp(), body: { articleId: Number(art) } });
+  assert.equal(r.statusCode, 404);
+});

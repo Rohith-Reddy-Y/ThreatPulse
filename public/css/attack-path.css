@@ -33,6 +33,7 @@ body.ap-open { overflow: hidden; }
 .ap-legend i { width: 12px; height: 12px; border-radius: 2px; display: inline-block; }
 .lg-actor { background: #8b5cf6; }
 .lg-cited { background: #3987e5; }
+.lg-ai { background: #4f9be8; box-shadow: inset 0 0 0 2px rgba(167, 139, 250, 0.9); }
 .lg-inferred { background: rgba(57, 135, 229, 0.25); border: 1px dashed #6ea8ee; }
 .lg-gap { background: repeating-linear-gradient(45deg, rgba(240, 160, 60, 0.45) 0 3px, transparent 3px 6px); border: 1px dashed rgba(240, 160, 60, 0.8); }
 .ap-btn {
@@ -112,6 +113,8 @@ body.ap-open { overflow: hidden; }
 .ap-w { top: 0; right: 100%; height: 100%; width: var(--h); transform-origin: right; transform: rotateY(90deg); background: var(--side-a); }
 .ap-inferred { --top: rgba(110, 168, 238, 0.55); --side-a: rgba(57, 135, 229, 0.38); --side-b: rgba(40, 100, 180, 0.38); --edge: #9cc3f0; }
 .ap-inferred .ap-top { border-style: dashed; }
+.ap-ai { --top: #4f9be8; --side-a: #3b7fcc; --side-b: #2d65a8; --edge: #c4b5fd; }
+.ap-ai .ap-top { box-shadow: inset 0 0 0 2px rgba(167, 139, 250, 0.8); }
 .ap-actor { --top: #8b5cf6; --side-a: #6d43d9; --side-b: #5531b3; }
 .ap-unknown { --top: #6b7280; --side-a: #555c68; --side-b: #434953; }
 .ap-box:hover { transform: translateZ(4px); }

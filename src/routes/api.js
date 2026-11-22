@@ -11,6 +11,7 @@ const security = require('../security');
 const crypto = require('crypto');
 const geo = require('../geo');
 const attackKb = require('../attack-kb');
+const aiCache = require('../ai/cache');
 const sourceCatalog = require('../source-catalog');
 const {
   sendAlertEmail, sendVerificationEmail, isEmailConfigured, describeEmail,
@@ -641,7 +642,21 @@ router.get('/articles', auth.requireAuth, (req, res) => {
     // TTPs per report: tactic, technique (linked to MITRE), the procedure sentence,
     // and whether the report cites the ID or only describes the behaviour
     if (result && Array.isArray(result.articles)) {
-      result.articles = result.articles.map((a) => ({ ...a, ttps: attackKb.analyzeTtps(a) }));
+      // plus any AI mapping already done for the article (validated, cached)
+      result.articles = result.articles.map((a) => {
+        let ttps = attackKb.analyzeTtps(a);
+        let aiMapped = false, aiActors = [];
+        const raw = aiCache.get('ttps', String(a.id));
+        if (raw) {
+          try {
+            const m = JSON.parse(raw);
+            ttps = attackKb.mergeTtps(ttps, m.ttps);
+            aiActors = Array.isArray(m.actors) ? m.actors : [];
+            aiMapped = true;
+          } catch { /* ignore a bad cache row */ }
+        }
+        return { ...a, ttps, aiMapped, aiActors };
+      });
     }
     res.json(result);
   } catch (error) {

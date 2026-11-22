@@ -1113,7 +1113,10 @@
     // to its tactic and to the sentence in the report that shows it = the TTP).
     // "cited" = the report names the ID; "inferred" = it describes the behaviour.
     const ttps = Array.isArray(article.ttps) ? article.ttps : null;
-    const actorNames = article.threat_actors ? article.threat_actors.split(',').map(a => a.trim()).filter(Boolean) : [];
+    const actorNames = [...new Set([
+      ...(article.threat_actors ? article.threat_actors.split(',').map(a => a.trim()).filter(Boolean) : []),
+      ...(Array.isArray(article.aiActors) ? article.aiActors : []),
+    ])];
     const actorChips = actorNames.map(name => {
       const cls = actorClass(name);
       const clsTag = cls ? `<span class="ta-class ta-class-${cls.toLowerCase()}">${cls}</span>` : '';
@@ -1122,21 +1125,28 @@
     const ttpItem = (t) => {
       const shown = t.subId || t.id;
       const cited = t.how === 'cited';
-      return `<li class="ti-step ${cited ? 'ti-cited' : 'ti-inferred'}">` +
+      const how = cited ? 'cited' : t.how === 'ai' ? 'AI' : 'inferred';
+      const howTip = cited ? 'Technique ID cited in the report' : t.how === 'ai' ? 'Mapped by AI from the quoted sentence — verify' : 'Inferred from the behaviour the report describes';
+      return `<li class="ti-step ${cited ? 'ti-cited' : t.how === 'ai' ? 'ti-ai' : 'ti-inferred'}">` +
         `<span class="ti-tactic">${escapeHtml(t.tacticName || 'Unmapped')}</span>` +
         `<a class="ti-id" href="${escapeHtml(mitreLink(shown))}" target="_blank" rel="noopener" title="Open ${escapeHtml(shown)} on attack.mitre.org">${escapeHtml(shown)}</a>` +
         `<span class="ti-tech">${escapeHtml(t.name)}</span>` +
-        `<span class="ti-how" title="${cited ? 'Technique ID cited in the report' : 'Inferred from the behaviour the report describes'}">${cited ? 'cited' : 'inferred'}</span>` +
+        `<span class="ti-how" title="${howTip}">${how}</span>` +
         (t.procedure ? `<q class="ti-proc">${escapeHtml(t.procedure)}</q>` : '') +
         `</li>`;
     };
     const tacticCount = ttps ? new Set(ttps.map(t => t.tactic).filter(Boolean)).size : 0;
-    const ttpHtml = ttps && (ttps.length || actorNames.length) ? `<div class="ti-panel" aria-label="Threat actor and MITRE ATT&CK TTPs">` +
+    // AI mapping: on demand, for reports the keyword rules can't fully read
+    const aiBtn = !article.aiMapped
+      ? `<button type="button" class="ti-ai-btn" data-ai-ttps="${article.id}" title="Ask the AI to map this report to MITRE ATT&CK (each technique must quote the report)">${ttps && ttps.length ? 'Refine with AI' : 'Map with AI'}</button>`
+      : '';
+    const ttpHtml = ttps ? `<div class="ti-panel${ttps.length || actorNames.length ? '' : ' ti-empty'}" aria-label="Threat actor and MITRE ATT&CK TTPs">` +
       `<div class="ti-head"><span class="ti-title">MITRE ATT&amp;CK</span>` +
-      `<span class="ti-count">${ttps.length ? `${ttps.length} TTP${ttps.length === 1 ? '' : 's'} · ${tacticCount}/14 tactics` : 'no techniques identified'}</span>` +
+      `<span class="ti-count">${ttps.length ? `${ttps.length} TTP${ttps.length === 1 ? '' : 's'} · ${tacticCount}/14 tactics` : (article.aiMapped ? 'no attacker techniques described' : 'none found by keyword rules')}</span>` +
+      `<span class="ti-head-actions">${aiBtn}` +
       (ttps.length ? `<button type="button" class="ti-3d-btn" data-attack-path="${article.id}" title="See this attack step by step in 3D">3D attack path</button>` : '') +
-      `</div>` +
-      `<div class="ti-actor-row"><span class="ti-label">Threat actor</span>${actorChips || '<span class="ti-none">Not attributed in this report</span>'}</div>` +
+      `</span></div>` +
+      (ttps.length || actorNames.length ? `<div class="ti-actor-row"><span class="ti-label">Threat actor</span>${actorChips || '<span class="ti-none">Not attributed in this report</span>'}</div>` : '') +
       (ttps.length ? `<ol class="ti-steps">${ttps.slice(0, 3).map(ttpItem).join('')}</ol>` +
         (ttps.length > 3 ? `<details class="ti-more"><summary>+${ttps.length - 3} more TTP${ttps.length - 3 === 1 ? '' : 's'}</summary><ol class="ti-steps" start="4">${ttps.slice(3).map(ttpItem).join('')}</ol></details>` : '')
         : '') +
@@ -2238,6 +2248,24 @@
         if (opt) { sel.value = opt.value; sel.dispatchEvent(new Event('change', { bubbles: true })); }
         else { const si = $('#search-input'); si.value = name; si.dispatchEvent(new Event('input', { bubbles: true })); }
         document.querySelector('.filter-bar')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        return;
+      }
+
+      // AI ATT&CK mapping for one article
+      const mapBtn = e.target.closest('[data-ai-ttps]');
+      if (mapBtn) {
+        const id = parseInt(mapBtn.dataset.aiTtps, 10);
+        const art = state.articles.find(a => a.id === id);
+        mapBtn.disabled = true; mapBtn.textContent = 'Mapping…';
+        api('POST', '/api/ai/ttps', { articleId: id }).then((r) => {
+          if (!r.success) throw new Error(r.error || 'AI mapping failed');
+          if (art) { art.ttps = r.ttps; art.aiMapped = true; art.aiActors = r.actors || []; }
+          renderArticles();
+          if (!r.aiTtps) showToast('ATT&CK mapping', 'The AI found no attacker techniques described in this report.', 'info');
+        }).catch((err) => {
+          mapBtn.disabled = false; mapBtn.textContent = 'Map with AI';
+          showToast('ATT&CK mapping', err.message || 'AI mapping failed', 'error');
+        });
         return;
       }
 

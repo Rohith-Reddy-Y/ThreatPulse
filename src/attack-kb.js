@@ -252,4 +252,51 @@ function analyzeTtps(article) {
   return out.sort((a, b) => (order[a.tactic] ?? 99) - (order[b.tactic] ?? 99));
 }
 
-module.exports = { TACTICS, TACTIC_NAME, TECHNIQUES, INFER, ACTOR_ALIASES, canonicalActor, techniqueBase, attackUrl, analyzeTtps, sentenceWith };
+// ── AI-mapped TTPs: validate model output against the article text ──
+// The model proposes {id, name, tactic, evidence}. We keep an item only if the
+// ID is a real Enterprise technique format, the tactic is one of the 14, and
+// the evidence is actually present in the article (no invented procedures).
+const TACTIC_BY_NAME = Object.fromEntries(TACTICS.map(([id, name]) => [name.toLowerCase(), id]));
+const norm = (s) => String(s || '').toLowerCase().replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/\s+/g, ' ').trim();
+function validateAiTtps(article, raw) {
+  const text = norm(`${article.title || ''} ${article.description || ''}`);
+  const out = [];
+  const seen = new Set();
+  for (const t of (Array.isArray(raw) ? raw : []).slice(0, 12)) {
+    if (!t || typeof t !== 'object') continue;
+    const sub = String(t.id || '').trim().toUpperCase();
+    if (!/^T1\d{3}(\.\d{3})?$/.test(sub)) continue;
+    const id = techniqueBase(sub);
+    if (seen.has(id)) continue;
+    const meta = TECHNIQUES[id];
+    const tactic = meta ? meta.tactic : TACTIC_BY_NAME[norm(t.tactic)] || (TACTIC_NAME[String(t.tactic || '').toUpperCase()] ? String(t.tactic).toUpperCase() : null);
+    const name = meta ? meta.name : String(t.name || '').replace(/[^\w\s()/&,.-]/g, '').trim().slice(0, 80);
+    if (!tactic || !name) continue;
+    const evidence = String(t.evidence || '').replace(/\s+/g, ' ').trim().slice(0, 400);
+    if (evidence.length < 12 || !text.includes(norm(evidence))) continue;   // must be quoted from the article
+    seen.add(id);
+    out.push({ id, subId: sub !== id ? sub : null, name, tactic, tacticName: TACTIC_NAME[tactic], desc: meta ? meta.desc : null,
+      how: 'ai', term: null, procedure: evidence, url: attackUrl(sub) });
+  }
+  return out;
+}
+function validateAiActors(article, raw) {
+  const text = norm(`${article.title || ''} ${article.description || ''}`);
+  return [...new Set((Array.isArray(raw) ? raw : []).slice(0, 6)
+    .map((a) => String(a || '').replace(/[^\w\s.-]/g, '').trim().slice(0, 60))
+    .filter((a) => a.length >= 3 && text.includes(norm(a))))];
+}
+// Rule-based TTPs first (cited beats AI beats inferred for the same technique), kill-chain order
+function mergeTtps(rule, aiList) {
+  const byId = new Map();
+  for (const t of rule || []) byId.set(t.id, t);
+  for (const t of aiList || []) {
+    const cur = byId.get(t.id);
+    if (!cur || cur.how === 'inferred') byId.set(t.id, cur && cur.how === 'inferred' ? { ...t, procedure: t.procedure || cur.procedure } : t);
+  }
+  const order = Object.fromEntries(TACTICS.map(([t], i) => [t, i]));
+  return [...byId.values()].sort((a, b) => (order[a.tactic] ?? 99) - (order[b.tactic] ?? 99));
+}
+
+module.exports = { TACTICS, TACTIC_NAME, TECHNIQUES, INFER, ACTOR_ALIASES, canonicalActor, techniqueBase, attackUrl, analyzeTtps, sentenceWith,
+  validateAiTtps, validateAiActors, mergeTtps };

@@ -226,6 +226,37 @@ router.post('/summarize', auth.requireAuth, async (req, res) => {
   }
 });
 
+// ── AI ATT&CK MAPPING (per article) ──
+// Rule-based mapping only sees keywords; this asks the model for techniques and
+// keeps only those whose evidence is quoted verbatim from the article.
+const attackKb = require('../attack-kb');
+router.post('/ttps', auth.requireAuth, async (req, res) => {
+  try {
+    const articleId = parseId((req.body || {}).articleId);
+    if (!articleId) return res.status(400).json({ error: 'articleId required' });
+    const article = db.getArticleById(articleId);
+    if (!article || !canAccessArticle(req.user, article)) return res.status(404).json({ error: 'Article not found' });
+
+    let mapped = cachedJson('ttps', String(article.id), (d) => (d && Array.isArray(d.ttps) ? d : null));
+    if (!mapped) {
+      if (!consumeAiQuota(req, res)) return;
+      const result = await ai.generate(prompts.ttpPrompt(article));
+      if (!result.ok) return res.status(503).json({ success: false, error: result.error });
+      const data = ai.parseJson(result.text) || {};
+      mapped = {
+        ttps: attackKb.validateAiTtps(article, data.techniques),
+        actors: attackKb.validateAiActors(article, data.actors),
+      };
+      cache.set('ttps', String(article.id), JSON.stringify(mapped));
+    }
+    const ttps = attackKb.mergeTtps(attackKb.analyzeTtps(article), mapped.ttps);
+    res.json({ success: true, ttps, aiTtps: mapped.ttps.length, actors: mapped.actors || [] });
+  } catch (e) {
+    console.error('[AI] TTP mapping error:', e.message);
+    res.status(500).json({ error: 'AI ATT&CK mapping failed' });
+  }
+});
+
 // ── AI TRIAGE ──
 router.post('/triage', auth.requireAuth, async (req, res) => {
   try {
