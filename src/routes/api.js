@@ -12,6 +12,7 @@ const crypto = require('crypto');
 const geo = require('../geo');
 const landscape = require('../landscape');
 const attackKb = require('../attack-kb');
+const analytics = require('../analytics');
 const sourceCatalog = require('../source-catalog');
 const {
   sendAlertEmail, sendVerificationEmail, isEmailConfigured, describeEmail,
@@ -705,6 +706,30 @@ router.get('/landscape', auth.requireAuth, (req, res) => {
   } catch (error) {
     console.error('[API] Landscape error:', error.message);
     res.status(500).json({ error: 'Failed to build threat landscape' });
+  }
+});
+
+// Analytics page: severity over time, KPIs vs previous period, categories,
+// top sources, top sources / techniques over time — caller's own reports.
+const analyticsCache = new Map();
+router.get('/analytics', auth.requireAuth, async (req, res) => {
+  try {
+    const days = [1, 7, 14, 30].includes(parseInt(req.query.days, 10)) ? parseInt(req.query.days, 10) : 7;
+    const tz = Math.max(-840, Math.min(840, parseInt(req.query.tz, 10) || 0));
+    const scope = readScope(req.user);
+    const key = `${scope === null ? 'all' : scope}:${days}:${tz}`;
+    const hit = analyticsCache.get(key);
+    if (hit && Date.now() - hit.at < GEO_TTL_MS) return res.json(hit.data);
+    const since = new Date(Date.now() - 2 * days * 86400000).toISOString();
+    const rows = db.getGeoArticles(scope, since, 10000);
+    const sources = scope === null ? db.getAllSources() : scope === db.SYSTEM_SCOPE ? db.getSystemSources() : db.getSourcesForUser(scope);
+    const data = await analytics.buildAnalytics(rows, sources, { days, tz });
+    if (analyticsCache.size > 500) analyticsCache.delete(analyticsCache.keys().next().value);
+    analyticsCache.set(key, { at: Date.now(), data });
+    res.json(data);
+  } catch (error) {
+    console.error('[API] Analytics error:', error.message);
+    res.status(500).json({ error: 'Failed to build analytics' });
   }
 });
 

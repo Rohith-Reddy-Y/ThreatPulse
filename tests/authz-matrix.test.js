@@ -283,6 +283,7 @@ const ROUTES = {
   // server.js
   'GET /healthz': { policy: 'public', allow: [200] },
   'GET /admin': { policy: 'public', allow: [200] }, // static HTML shell; all data is behind /api/admin/*
+  'GET /analytics': { policy: 'public', allow: [200] }, // static HTML shell; data is behind /api/analytics
   // auth (pre-auth)
   'GET /api/auth/config': { policy: 'public', allow: [200] },
   'POST /api/auth/login': { policy: 'public', allow: [200] },
@@ -302,6 +303,7 @@ const ROUTES = {
   'GET /api/articles/stats': { policy: 'auth', allow: [200] },
   'GET /api/geo': { policy: 'auth', allow: [200] },
   'GET /api/landscape': { policy: 'auth', allow: [200] },
+  'GET /api/analytics': { policy: 'auth', allow: [200] },
   'GET /api/search': { policy: 'auth', allow: [200], query: '?q=quokka' },
   'POST /api/articles/:id/review': { policy: 'member', allow: [200], params: ownArticle },
   'PUT /api/articles/:id/review': { policy: 'member', allow: [200], params: ownArticle, body: () => ({ notes: 'n' }) },

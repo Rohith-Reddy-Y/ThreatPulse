@@ -105,3 +105,18 @@ test('articles API returns TTPs per report', async () => {
   assert.ok(ids.includes('T1555') && ids.includes('T1204') && ids.includes('T1059'), ids.join(','));
   assert.ok(a.ttps.every((t) => t.url.startsWith('https://attack.mitre.org/techniques/') && t.tacticName && t.how === 'inferred'));
 });
+
+test('analytics API is per user', async () => {
+  const a = createUser('an_alice', PW), b = createUser('an_bob', PW);
+  const sa = db.addSource({ name: 'AA', url: 'https://feeds.example/aa', user_id: a }).id;
+  const sb = db.addSource({ name: 'BB', url: 'https://feeds.example/bb', user_id: b }).id;
+  article(a, sa, 'Alice report one');
+  article(b, sb, 'Bob report one');
+  article(b, sb, 'Bob report two');
+  const ja = await h.login('an_alice', PW, ip());
+  const r = await request('GET', '/api/analytics?days=7&tz=330', { cookies: ja });
+  assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+  assert.strictEqual(r.body.kpis.reports.value, 1);
+  assert.ok(!JSON.stringify(r.body).includes('Bob'), "another user's data leaked");
+  assert.strictEqual(r.body.kpis.sources.total, 1);
+});

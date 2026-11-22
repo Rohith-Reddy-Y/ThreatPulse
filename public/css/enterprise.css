@@ -379,3 +379,11 @@ a.lp-col-name:hover { color: var(--text-accent); text-decoration: underline; }
 .lp-how-inferred { border-style: dashed; }
 .lp-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 @media (max-width: 900px) { .lp-insp-body { grid-template-columns: 1fr; } .lp-actions { margin-left: 0; } }
+
+/* Dashboard header link to this page */
+.header-nav-link {
+  padding: 6px 12px; border-radius: var(--radius-md); font-size: 13px; font-weight: 500;
+  color: var(--text-secondary); text-decoration: none; border: 1px solid var(--border-subtle);
+}
+.header-nav-link:hover { color: var(--text-primary); border-color: var(--border-light); }
+
