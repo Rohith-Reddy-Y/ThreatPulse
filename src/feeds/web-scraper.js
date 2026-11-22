@@ -5,7 +5,7 @@
 
 const { safeGet } = require('../net-guard');
 const cheerio = require('cheerio');
-const { detectCategory, detectSeverity, extractCVE, detectPOC, detectPatchStatus } = require('./rss-fetcher');
+const { articleCategory, detectCategory, detectSeverity, extractCVE, detectPOC, detectPatchStatus } = require('./rss-fetcher');
 
 const HTTP_CONFIG = {
   timeout: 15000,
@@ -192,7 +192,7 @@ async function scrapeSource(source) {
           user_id: source.user_id || null,
           author: null,
           published_date: new Date().toISOString(),
-          category: source.category && source.category !== 'news' ? source.category : category,
+          category: articleCategory(source, category),
           severity: detectSeverity(title, '', category),
           cve_id: extractCVE(title),
           is_patched: detectPatchStatus(title, ''),
@@ -216,7 +216,7 @@ async function scrapeSource(source) {
           user_id: source.user_id || null,
         author: metadata.author,
         published_date: metadata.publishedDate || new Date().toISOString(),
-        category: source.category && source.category !== 'news' ? source.category : category,
+        category: articleCategory(source, category),
         severity: detectSeverity(metadata.title, metadata.description, category),
         cve_id: extractCVE(fullText),
         is_patched: detectPatchStatus(metadata.title, metadata.description),

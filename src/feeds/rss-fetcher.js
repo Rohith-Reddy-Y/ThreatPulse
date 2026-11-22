@@ -413,6 +413,16 @@ function textOf(v) {
   return String(v);
 }
 
+// A source's category forces the category of its articles, except the
+// "classify for me" values: 'news' (seeded sources) and 'general' (the default
+// choice in the dashboard's Add Source form). 'general' used to be stored on
+// every article, which matched no category filter and disabled classification.
+const AUTO_CATEGORIES = new Set(['', 'news', 'general']);
+function articleCategory(source, detected) {
+  const c = source && typeof source.category === 'string' ? source.category.trim().toLowerCase() : '';
+  return AUTO_CATEGORIES.has(c) ? detected : c;
+}
+
 function itemsToArticles(items, source) {
   const articles = [];
   for (const item of items) {
@@ -431,7 +441,7 @@ function itemsToArticles(items, source) {
       user_id: source.user_id || null,
       author: textOf(item.creator || item.author || item['dc:creator']) || null,
       published_date: item.isoDate || item.pubDate || item.dcDate || new Date().toISOString(),
-      category: source.category !== 'news' ? source.category : category,
+      category: articleCategory(source, category),
       severity: detectSeverity(title, description, category),
       cve_id: extractCVE(`${title} ${description}`),
       is_patched: detectPatchStatus(title, description),
@@ -539,7 +549,7 @@ function generateTags(title, description) {
 }
 
 module.exports = {
-  fetchRSSFeed, detectCategory, detectSeverity, extractCVE, detectPOC, detectPatchStatus, extractMitreIds, detectSector, detectThreatActors,
+  fetchRSSFeed, articleCategory, detectCategory, detectSeverity, extractCVE, detectPOC, detectPatchStatus, extractMitreIds, detectSector, detectThreatActors,
   // internals, exported for tests only
   _internal: { extractCvssScore, sanitizeXml, decodeEntities, lenientParse, stripHtml, generateTags, cleanGoogleNewsTitle, fallbackCache, failureTracker }
 };

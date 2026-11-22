@@ -47,13 +47,46 @@ function readScope(user) {
   return user.id;
 }
 
-// Manual fetch cooldown (non-admins) — a full fetch is heavy on a small VM.
-let lastManualFetch = 0;
-const MANUAL_FETCH_COOLDOWN_MS = 5 * 60 * 1000;
+// "Fetch now": admins run the full platform fetch; everyone else fetches only
+// their OWN enabled sources (all they can see anyway). Previously a user's click
+// started the full ~200-source run (minutes on a 0.1-CPU host), put every other
+// user on a shared 5-minute cooldown, and the UI announced "Feeds updated" after
+// 5 seconds while nothing of theirs had been fetched yet.
+const USER_FETCH_COOLDOWN_MS = 60 * 1000;
+const USER_FETCH_WAIT_MS = 25 * 1000;     // answer with the result if it's done by then
+const userFetchLast = new Map();          // userId -> last start time
+const userFetchRunning = new Set();       // userIds with a fetch in flight
+
+function ownEnabledSources(userId) {
+  return db.getDb().prepare('SELECT * FROM sources WHERE user_id = ? AND enabled = 1').all(userId);
+}
+
+// Fetch the given sources in the background and alert on new articles, exactly
+// like a scheduled run would. Resolves with the aggregator result (or null).
+function fetchInBackground(aggregator, sources) {
+  if (!aggregator || typeof aggregator.fetchSources !== 'function' || !sources.length) return Promise.resolve(null);
+  return aggregator.fetchSources(sources).then(async (result) => {
+    if (result && result.newArticles && result.newArticles.length) await handleNotifications(result.newArticles);
+    return result;
+  }).catch((e) => { console.error('[API] Background fetch error:', e.message); return null; });
+}
 
 // ============================================
 // AUTH ROUTES (public)
 // ============================================
+
+// Public, non-sensitive server facts the sign-in screen needs: whether the
+// register form must show the invite-code field (it was always hidden, so with
+// REQUIRE_INVITE_CODE=true nobody could register), whether this server can send
+// email (reset links / verification codes), and when the database was created
+// if this boot created it (ephemeral hosting: earlier accounts are gone).
+router.get('/auth/config', (req, res) => {
+  res.json({
+    requireInvite: process.env.REQUIRE_INVITE_CODE === 'true',
+    emailEnabled: !!initTransporter(),
+    dbCreatedAt: db.getDbInfo().createdAt
+  });
+});
 
 router.post('/auth/login', async (req, res) => {
   try {
@@ -110,7 +143,14 @@ router.post('/auth/register', async (req, res) => {
   }
 });
 
+const FORGOT_MSG_EMAIL = 'If an account with that email exists, a reset link has been sent.';
+// Without SMTP no email ever leaves the server: saying "a link has been sent"
+// left users waiting for nothing. Same text for every address (no enumeration).
+const FORGOT_MSG_NO_EMAIL = 'This server cannot send email. If an account with that email exists, a reset link was created — ask the administrator to give it to you (Admin panel → Password Resets).';
+
 router.post('/auth/forgot-password', async (req, res) => {
+  const canEmail = !!initTransporter();
+  const genericMessage = canEmail ? FORGOT_MSG_EMAIL : FORGOT_MSG_NO_EMAIL;
   // Simple per-IP throttle: max 3 forgot-password requests per 15 minutes
   const ip = req.ip || req.connection?.remoteAddress || 'unknown';
   if (!forgotPasswordThrottle) forgotPasswordThrottle = new Map();
@@ -120,7 +160,7 @@ router.post('/auth/forgot-password', async (req, res) => {
   const entry = forgotPasswordThrottle.get(key);
   if (entry && now < entry.resetAt && entry.count >= 3) {
     // Still return generic success to prevent enumeration
-    return res.json({ success: true, message: 'If an account with that email exists, a reset link has been sent.' });
+    return res.json({ success: true, message: genericMessage, emailDelivery: canEmail });
   }
   if (!entry || now >= entry.resetAt) {
     forgotPasswordThrottle.set(key, { count: 1, resetAt: now + windowMs });
@@ -181,7 +221,9 @@ router.post('/auth/forgot-password', async (req, res) => {
     }
 
     // Always return generic success (no user enumeration)
-    res.json({ success: result.success, message: result.message, error: result.error });
+    res.json(result.success
+      ? { success: true, message: genericMessage, emailDelivery: canEmail }
+      : { success: false, error: result.error });
   } catch (error) {
     console.error('[API] Forgot password error:', error.message);
     res.status(500).json({ success: false, error: 'Request failed' });
@@ -313,10 +355,15 @@ router.put('/auth/password', auth.requireAuth, denyGuest, async (req, res) => {
       return res.json({ success: true, verificationRequired: false, message: 'Password updated successfully' });
     }
 
-    db.createVerificationCode(req.user.id, 'password_change', targetValue, code, expiresAt);
+    const codeId = db.createVerificationCode(req.user.id, 'password_change', targetValue, code, expiresAt);
 
-    // Send code to current email
-    await sendVerificationEmail(userEmail, req.user.displayName, 'password_change', code);
+    // Send code to current email. If it can't be delivered, say so instead of
+    // telling the user to wait for a code that will never arrive.
+    const sent = await sendVerificationEmail(userEmail, req.user.displayName, 'password_change', code);
+    if (!sent || !sent.success) {
+      if (codeId) db.deleteVerificationCode(codeId);
+      return res.status(502).json({ success: false, error: 'Could not send the verification email. Please try again later.' });
+    }
 
     res.json({ success: true, verificationRequired: true, type: 'password_change', email: userEmail });
   } catch (error) {
@@ -342,14 +389,27 @@ router.put('/auth/email', auth.requireAuth, denyGuest, async (req, res) => {
       return res.status(400).json({ success: false, error: 'That is already your email address' });
     }
 
+    // No SMTP: a verification code could never be delivered, so the change could
+    // never complete (the user was told to enter a code that never came). Apply
+    // it directly — the same policy as password changes without email.
+    if (!initTransporter()) {
+      db.updateUserEmail(req.user.id, email);
+      db.logAudit(req.user.id, 'email_change', `Email updated to ${email} (email verification unavailable)`, req.ip);
+      return res.json({ success: true, verificationRequired: false, email, message: 'Email address updated' });
+    }
+
     // Generate verification code (6 digits)
     const code = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = auth.sqliteDateTime(Date.now() + 15 * 60 * 1000); // 15 mins
 
-    db.createVerificationCode(req.user.id, 'email_change', email, code, expiresAt);
+    const codeId = db.createVerificationCode(req.user.id, 'email_change', email, code, expiresAt);
 
     // Send verification code to the NEW email address
-    await sendVerificationEmail(email, req.user.displayName, 'email_change', code);
+    const sent = await sendVerificationEmail(email, req.user.displayName, 'email_change', code);
+    if (!sent || !sent.success) {
+      if (codeId) db.deleteVerificationCode(codeId);
+      return res.status(502).json({ success: false, error: 'Could not send the verification email. Please check the address and try again.' });
+    }
 
     res.json({ success: true, verificationRequired: true, type: 'email_change', email });
   } catch (error) {
@@ -467,7 +527,8 @@ router.get('/articles', auth.requireAuth, (req, res) => {
 router.get('/articles/stats', auth.requireAuth, (req, res) => {
   try {
     // Admin sees platform-wide totals; guests system content only; users their own.
-    const stats = db.getArticleStats(readScope(req.user));
+    // ?tz = viewer's offset in minutes east of UTC, so "today" is their today
+    const stats = db.getArticleStats(readScope(req.user), { tzOffsetMinutes: req.query.tz });
     res.json(stats);
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch stats' });
@@ -591,7 +652,13 @@ router.post('/sources', auth.requireAuth, denyGuest, (req, res) => {
 
     if (result.success) {
       db.logAudit(req.user.id, 'source_add', `Added source: ${cleanName}`, req.ip);
-      res.status(201).json({ success: true, id: result.id });
+      // Fetch the new source right away instead of leaving it at "Not yet
+      // fetched" until the next scheduled run (up to 15 minutes).
+      const created = db.getDb().prepare('SELECT * FROM sources WHERE id = ?').get(result.id);
+      const aggregator = req.app && req.app.get ? req.app.get('aggregator') : null;
+      const fetching = !!(created && aggregator && typeof aggregator.fetchSources === 'function');
+      if (fetching) fetchInBackground(aggregator, [created]);
+      res.status(201).json({ success: true, id: result.id, fetching });
     } else {
       res.status(409).json({ success: false, error: result.error });
     }
@@ -668,22 +735,53 @@ router.post('/fetch-now', auth.requireAuth, denyGuest, async (req, res) => {
     const aggregator = req.app.get('aggregator');
     if (!aggregator) return res.status(500).json({ error: 'Aggregator not initialized' });
 
-    if (req.user.role !== 'admin') {
-      const wait = lastManualFetch + MANUAL_FETCH_COOLDOWN_MS - Date.now();
-      if (wait > 0) {
-        return res.status(429).json({ error: `A fetch ran recently. Try again in ${Math.ceil(wait / 60000)} minute(s).` });
+    if (req.user.role === 'admin') {
+      if (aggregator.getStatus && aggregator.getStatus().isRunning) {
+        return res.json({ success: true, scope: 'all', alreadyRunning: true, completed: false,
+          message: 'A full fetch is already running. New articles will appear as it progresses.' });
       }
+      res.json({ success: true, scope: 'all', completed: false,
+        message: 'Full fetch of all sources started. This can take several minutes; new articles appear as they arrive.' });
+      const result = await aggregator.fetchAllSources();
+      if (result && result.newArticles && result.newArticles.length > 0) {
+        await handleNotifications(result.newArticles);
+      }
+      return;
     }
-    lastManualFetch = Date.now();
 
-    res.json({ success: true, message: 'Fetch started' });
-
-    const result = await aggregator.fetchAllSources();
-    if (result.newArticles && result.newArticles.length > 0) {
-      await handleNotifications(result.newArticles);
+    const userId = req.user.id;
+    const sources = ownEnabledSources(userId);
+    if (sources.length === 0) {
+      return res.status(400).json({ success: false, error: 'You have no enabled sources to fetch. Add a source first.' });
     }
+    if (userFetchRunning.has(userId)) {
+      return res.json({ success: true, scope: 'own', alreadyRunning: true, completed: false,
+        message: 'Your sources are already being fetched.' });
+    }
+    const wait = (userFetchLast.get(userId) || 0) + USER_FETCH_COOLDOWN_MS - Date.now();
+    if (wait > 0) {
+      return res.status(429).json({ success: false, error: `You fetched recently. Try again in ${Math.ceil(wait / 1000)} second(s).` });
+    }
+    userFetchLast.set(userId, Date.now());
+    userFetchRunning.add(userId);
+    if (userFetchLast.size > 10000) userFetchLast.delete(userFetchLast.keys().next().value);
+
+    const job = fetchInBackground(aggregator, sources).finally(() => userFetchRunning.delete(userId));
+    let timer;
+    const timeout = new Promise(resolve => { timer = setTimeout(() => resolve('timeout'), USER_FETCH_WAIT_MS); });
+    const outcome = await Promise.race([job, timeout]);
+    clearTimeout(timer);
+    if (outcome === 'timeout') {
+      return res.json({ success: true, scope: 'own', completed: false, sources: sources.length,
+        message: `Fetching your ${sources.length} source(s) — still running; new articles will appear shortly.` });
+    }
+    const newCount = outcome ? outcome.new || 0 : 0;
+    const errors = outcome ? outcome.errors || 0 : 0;
+    res.json({ success: true, scope: 'own', completed: true, sources: sources.length, newArticles: newCount, errors,
+      message: `Fetched ${sources.length} source(s): ${newCount} new article(s)${errors ? `, ${errors} source(s) failed (see the source list)` : ''}.` });
   } catch (error) {
     console.error('[API] Fetch error:', error.message);
+    if (!res.headersSent && !res.done) res.status(500).json({ success: false, error: 'Fetch failed' });
   }
 });
 
@@ -1073,3 +1171,4 @@ async function handleNotifications(newArticles) {
 
 module.exports = router;
 module.exports.handleNotifications = handleNotifications;
+module.exports._resetFetchThrottle = () => { userFetchLast.clear(); userFetchRunning.clear(); };

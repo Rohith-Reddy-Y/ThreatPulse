@@ -279,6 +279,14 @@ router.post('/ask', auth.requireAuth, async (req, res) => {
       if (!findThread(req, tid)) return res.status(404).json({ error: 'Thread not found' });
     }
 
+    // RAG needs the model. Without a Groq key the request used to create a
+    // thread, store the question and then fail, so every attempt left another
+    // unanswered chat in the history (and spent quota). Refuse up front.
+    if (mode === 'rag' && !ai.isEnabled()) {
+      return res.status(503).json({ success: false, aiDisabled: true,
+        error: 'The AI assistant is not configured on this server (no Groq API key). An admin can add one under Admin → AI Settings. Web search mode still works.' });
+    }
+
     if (!consumeAiQuota(req, res)) return;
 
     if (!tid) {
