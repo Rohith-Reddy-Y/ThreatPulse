@@ -32,7 +32,18 @@ services:
       - key: ALLOWED_ORIGIN
         sync: false                  # same as BASE_URL
       - key: ADMIN_EMAIL
-        sync: false
+        sync: false                  # your address: lets the admin use "Forgot password"
+      # Registration is invite-only (codes from Admin → Invite Codes).
+      - key: REQUIRE_INVITE_CODE
+        value: "true"
+      # Email (password resets, verification codes, alerts). Render's free tier
+      # blocks SMTP, so mail goes out over Brevo's HTTPS API (free: 300/day).
+      - key: BREVO_API_KEY
+        sync: false                  # Brevo → SMTP & API → API Keys
+      - key: MAIL_FROM
+        sync: false                  # sender address verified in Brevo → Senders
+      - key: MAIL_FROM_NAME
+        value: ThreatPulse
       # Optional API keys
       - key: NVD_API_KEY
         sync: false

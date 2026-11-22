@@ -49,6 +49,7 @@
       <button class="pill" data-admin-tab="sources">All Sources</button>
       <button class="pill" data-admin-tab="audit">Audit Log</button>
       <button class="pill" data-admin-tab="resets">Password Resets</button>
+      <button class="pill" data-admin-tab="email">Email</button>
       <button class="pill" data-admin-tab="ai">AI Settings</button>
     </div>
 
@@ -116,6 +117,37 @@
             <tbody id="resets-tbody"></tbody>
           </table>
         </div>
+      </div>
+    </div>
+
+    <!-- Email Delivery Tab -->
+    <div class="admin-tab hidden" id="tab-email">
+      <div class="sidebar-card" style="max-width:680px;">
+        <h3 class="sidebar-title">Email Delivery <span id="email-status-badge" class="badge badge-breach">checking…</span></h3>
+        <p style="color:var(--text-muted);font-size:12px;margin:0 0 14px;">Password-reset links, password/email change codes, security notices, welcome emails and email alerts all use this. Render's free tier blocks SMTP, so ThreatPulse sends through Brevo's HTTPS API (free: 300 emails/day).</p>
+        <table class="admin-table" style="margin-bottom:14px;">
+          <tbody>
+            <tr><td style="width:40%;color:var(--text-muted);">Provider</td><td id="email-provider">—</td></tr>
+            <tr><td style="color:var(--text-muted);">Sender (MAIL_FROM)</td><td id="email-from">—</td></tr>
+            <tr><td style="color:var(--text-muted);">Your admin email</td><td id="email-admin">—</td></tr>
+            <tr><td style="color:var(--text-muted);">Registration</td><td id="email-invite">—</td></tr>
+          </tbody>
+        </table>
+        <div id="email-problem" class="hidden" style="color:var(--amber, #ffb020);font-size:12px;margin-bottom:12px;"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn btn-primary" id="email-test-btn">Send test email to me</button>
+          <button class="btn btn-ghost" id="email-refresh-btn">Refresh</button>
+        </div>
+        <details style="margin-top:18px;font-size:12.5px;color:var(--text-muted);">
+          <summary style="cursor:pointer;color:var(--text-primary);">How to set up (free, 5 minutes)</summary>
+          <ol style="margin:10px 0 0 18px;line-height:1.7;">
+            <li>Create a free account at brevo.com.</li>
+            <li>Brevo → <b>Senders, Domains &amp; Dedicated IPs → Senders</b> → add the address mail should come from (e.g. your Gmail) and click the link Brevo emails you.</li>
+            <li>Brevo → <b>SMTP &amp; API → API Keys</b> → generate a key.</li>
+            <li>Render → threatpulse → <b>Environment</b>: add <code>BREVO_API_KEY</code> (the key) and <code>MAIL_FROM</code> (the verified sender). Save — Render redeploys.</li>
+            <li>If the test says the IP is unrecognised: Brevo → <b>Security → Authorised IPs</b> → turn off IP blocking (Render's IPs change).</li>
+          </ol>
+        </details>
       </div>
     </div>
 

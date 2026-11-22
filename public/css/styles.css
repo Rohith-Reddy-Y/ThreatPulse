@@ -3743,7 +3743,43 @@ body,
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 10px;
+  gap: 10px;
+  margin: -12px;
+  padding: 12px;
+  cursor: pointer;
+  border-radius: var(--radius-md);
+  user-select: none;
+}
+.notif-channel-head:hover .notif-channel-title { color: var(--cyan); }
+.notif-channel-head:focus-visible { outline: 2px solid var(--cyan); outline-offset: -2px; }
+.notif-channel-controls { display: inline-flex; align-items: center; gap: 10px; }
+.notif-channel-body { display: none; padding-top: 12px; margin-top: 12px; border-top: 1px solid var(--border-subtle); }
+.notif-channel.open .notif-channel-body { display: block; animation: notifReveal .18s ease-out; }
+.notif-channel.open { border-color: var(--border-strong, var(--border-subtle)); }
+.notif-chev { width: 16px; height: 16px; flex: none; color: var(--text-muted); transition: transform .2s ease, color .2s ease; }
+.notif-channel.open > .notif-channel-head .notif-chev,
+.notif-panel-toggle[aria-expanded="true"] .notif-chev { transform: rotate(180deg); color: var(--cyan); }
+.notif-panel-title { margin-bottom: 0; }
+.notif-card.open .notif-panel-title { margin-bottom: 16px; }
+.notif-panel-toggle {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  background: none; border: 0; padding: 0; margin: 0;
+  font: inherit; color: inherit; text-align: left; cursor: pointer;
+}
+.notif-panel-toggle:focus-visible { outline: 2px solid var(--cyan); outline-offset: 4px; border-radius: 6px; }
+.notif-panel-toggle .notif-chev { margin-left: 4px; }
+.notif-summary {
+  margin-left: auto; font-size: 10.5px; font-weight: 600; letter-spacing: .3px;
+  padding: 2px 8px; border-radius: 999px; color: var(--text-muted);
+  border: 1px solid var(--border-subtle); background: var(--bg-input);
+}
+.notif-summary.on { color: var(--cyan); border-color: var(--cyan); }
+.notification-form.is-collapsed { display: none; }
+.notif-card.open .notification-form { animation: notifReveal .2s ease-out; }
+@keyframes notifReveal { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .notif-chev { transition: none; }
+  .notif-channel.open .notif-channel-body, .notif-card.open .notification-form { animation: none; }
 }
 .notif-channel-title {
   font-size: 13px;

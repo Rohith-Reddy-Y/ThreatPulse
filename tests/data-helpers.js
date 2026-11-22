@@ -10,6 +10,8 @@ const SRC = path.join(__dirname, '..', 'src');
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'x'.repeat(48);
 delete process.env.SMTP_HOST; delete process.env.SMTP_USER; delete process.env.SMTP_PASS;
 delete process.env.TELEGRAM_BOT_TOKEN; delete process.env.TELEGRAM_CHAT_ID;
+process.env.REQUIRE_INVITE_CODE = 'false'; // invite-only is the default; tests that cover it opt in
+delete process.env.BREVO_API_KEY; delete process.env.MAIL_FROM;
 
 // api.js starts a 15-min cleanup interval at load; don't let it keep the test
 // process alive.

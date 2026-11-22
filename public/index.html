@@ -143,10 +143,10 @@
           </div>
           <span id="confirm-match" class="input-hint hidden" style="color:var(--red);">Passwords do not match</span>
         </div>
-        <div class="form-group" id="reg-invite-group" style="display:none;">
-          <label for="reg-invite">Invite Code</label>
-          <input type="text" id="reg-invite" placeholder="e.g. A1B2C3D4" style="font-family:'JetBrains Mono',monospace;letter-spacing:2px;text-transform:uppercase;">
-          <span class="input-hint">Get an invite code from your admin to join.</span>
+        <div class="form-group" id="reg-invite-group">
+          <label for="reg-invite">Invite Code <span style="color:var(--red, #ff4d6d);">*</span></label>
+          <input type="text" id="reg-invite" placeholder="e.g. A1B2C3D4" required maxlength="32" autocomplete="off" spellcheck="false" style="font-family:'JetBrains Mono',monospace;letter-spacing:2px;text-transform:uppercase;">
+          <span class="input-hint">ThreatPulse is invite-only. Ask your administrator for a one-time invite code.</span>
         </div>
         <div id="register-error" class="auth-error hidden"></div>
         <button type="submit" class="btn btn-primary btn-full" id="register-btn">
@@ -594,70 +594,95 @@
         </div>
       </div>
 
-      <div class="sidebar-card guest-hidden">
-        <h3 class="sidebar-title">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-          Notifications
+      <div class="sidebar-card guest-hidden notif-card">
+        <h3 class="sidebar-title notif-panel-title">
+          <button type="button" class="notif-panel-toggle" id="notif-panel-toggle" aria-expanded="false" aria-controls="notification-form">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+            <span>Notifications</span>
+            <span class="notif-summary" id="notif-summary">Off</span>
+            <svg class="notif-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
         </h3>
-        <form id="notification-form" class="notification-form">
+        <form id="notification-form" class="notification-form is-collapsed">
 
           <!-- Email -->
-          <div class="notif-channel">
-            <div class="notif-channel-head">
+          <div class="notif-channel" data-channel="email">
+            <div class="notif-channel-head" role="button" tabindex="0" aria-expanded="false">
               <span class="notif-channel-title">Email</span>
-              <label class="toggle-switch"><input type="checkbox" id="notif-email-enabled"><span class="toggle-slider"></span></label>
+              <span class="notif-channel-controls">
+                <label class="toggle-switch"><input type="checkbox" id="notif-email-enabled"><span class="toggle-slider"></span></label>
+                <svg class="notif-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+              </span>
             </div>
-            <div class="form-group">
-              <input type="email" id="notif-email" placeholder="you@company.com">
+            <div class="notif-channel-body">
+              <div class="form-group">
+                <input type="email" id="notif-email" placeholder="you@company.com">
+              </div>
+              <p class="notif-hint">No setup needed — just enter your email and we'll send alerts from ThreatPulse.</p>
+              <button type="button" class="btn btn-ghost notif-test" data-test="email">Test Email</button>
             </div>
-            <p class="notif-hint">No setup needed — just enter your email and we'll send alerts from ThreatPulse.</p>
-            <button type="button" class="btn btn-ghost notif-test" data-test="email">Test Email</button>
           </div>
 
           <!-- Telegram -->
-          <div class="notif-channel">
-            <div class="notif-channel-head">
+          <div class="notif-channel" data-channel="telegram">
+            <div class="notif-channel-head" role="button" tabindex="0" aria-expanded="false">
               <span class="notif-channel-title">Telegram</span>
-              <label class="toggle-switch"><input type="checkbox" id="notif-telegram-enabled"><span class="toggle-slider"></span></label>
+              <span class="notif-channel-controls">
+                <label class="toggle-switch"><input type="checkbox" id="notif-telegram-enabled"><span class="toggle-slider"></span></label>
+                <svg class="notif-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+              </span>
             </div>
-            <div class="form-group">
-              <input type="text" id="notif-telegram" placeholder="Chat ID (e.g., 123456789)">
+            <div class="notif-channel-body">
+              <div class="form-group">
+                <input type="text" id="notif-telegram" placeholder="Chat ID (e.g., 123456789)">
+              </div>
+              <div class="form-group">
+                <input type="text" id="notif-telegram-token" placeholder="Bot token (e.g., 123456:ABC-DEF...)">
+              </div>
+              <button type="button" class="btn btn-ghost notif-test" data-test="telegram">Test Telegram</button>
             </div>
-            <div class="form-group">
-              <input type="text" id="notif-telegram-token" placeholder="Bot token (e.g., 123456:ABC-DEF...)">
-            </div>
-            <button type="button" class="btn btn-ghost notif-test" data-test="telegram">Test Telegram</button>
           </div>
 
           <!-- Microsoft Teams -->
-          <div class="notif-channel">
-            <div class="notif-channel-head">
+          <div class="notif-channel" data-channel="teams">
+            <div class="notif-channel-head" role="button" tabindex="0" aria-expanded="false">
               <span class="notif-channel-title">Microsoft Teams</span>
-              <label class="toggle-switch"><input type="checkbox" id="notif-teams-enabled"><span class="toggle-slider"></span></label>
+              <span class="notif-channel-controls">
+                <label class="toggle-switch"><input type="checkbox" id="notif-teams-enabled"><span class="toggle-slider"></span></label>
+                <svg class="notif-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+              </span>
             </div>
-            <div class="form-group">
-              <input type="text" id="notif-teams-webhook" placeholder="Teams incoming webhook URL">
+            <div class="notif-channel-body">
+              <div class="form-group">
+                <input type="text" id="notif-teams-webhook" placeholder="Teams incoming webhook URL">
+              </div>
+              <button type="button" class="btn btn-ghost notif-test" data-test="teams">Test Teams</button>
             </div>
-            <button type="button" class="btn btn-ghost notif-test" data-test="teams">Test Teams</button>
           </div>
 
           <!-- WhatsApp -->
-          <div class="notif-channel">
-            <div class="notif-channel-head">
+          <div class="notif-channel" data-channel="whatsapp">
+            <div class="notif-channel-head" role="button" tabindex="0" aria-expanded="false">
               <span class="notif-channel-title">WhatsApp</span>
-              <label class="toggle-switch"><input type="checkbox" id="notif-whatsapp-enabled"><span class="toggle-slider"></span></label>
+              <span class="notif-channel-controls">
+                <label class="toggle-switch"><input type="checkbox" id="notif-whatsapp-enabled"><span class="toggle-slider"></span></label>
+                <svg class="notif-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+              </span>
             </div>
-            <div class="form-group">
-              <input type="text" id="notif-whatsapp-number" placeholder="Number w/ country code (e.g., 14155551234)">
+            <div class="notif-channel-body">
+              <div class="form-group">
+                <input type="text" id="notif-whatsapp-number" placeholder="Number w/ country code (e.g., 14155551234)">
+              </div>
+              <div class="form-group">
+                <input type="text" id="notif-whatsapp-apikey" placeholder="CallMeBot API key">
+              </div>
+              <p class="notif-hint">One-time setup: message <b>+34 644 51 95 23</b> on WhatsApp with “I allow callmebot to send me messages” to get your API key.</p>
+              <button type="button" class="btn btn-ghost notif-test" data-test="whatsapp">Test WhatsApp</button>
             </div>
-            <div class="form-group">
-              <input type="text" id="notif-whatsapp-apikey" placeholder="CallMeBot API key">
-            </div>
-            <p class="notif-hint">One-time setup: message <b>+34 644 51 95 23</b> on WhatsApp with “I allow callmebot to send me messages” to get your API key.</p>
-            <button type="button" class="btn btn-ghost notif-test" data-test="whatsapp">Test WhatsApp</button>
           </div>
 
           <hr class="notif-divider">
+          <p class="notif-hint notif-general-hint">These apply to every channel above.</p>
 
           <div class="form-group">
             <label for="notif-severity">Severity Threshold</label>

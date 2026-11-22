@@ -303,6 +303,10 @@ function requireAdmin(req, res, next) {
 // AUTH OPERATIONS
 // ============================================
 
+function inviteRequired() {
+  return String(process.env.REQUIRE_INVITE_CODE || '').trim().toLowerCase() !== 'false';
+}
+
 async function registerUser(username, displayName, password, inviteCode, email = null) {
   // Input validation
   if (!username || username.length < 3 || username.length > 32) {
@@ -328,9 +332,9 @@ async function registerUser(username, displayName, password, inviteCode, email =
   const pwCheck = validatePasswordStrength(password);
   if (!pwCheck.valid) return { success: false, error: pwCheck.error };
 
-  // Verify invite code — but only when open registration is disabled.
-  // Open registration (default) lets anyone sign up with no invite code.
-  const requireInvite = process.env.REQUIRE_INVITE_CODE === 'true';
+  // Invite-only by default: nobody can register without a valid, unused code
+  // from an admin. REQUIRE_INVITE_CODE=false switches to open registration.
+  const requireInvite = inviteRequired();
   // Codes are generated as upper-case hex; the form only *displays* upper case
   // (CSS text-transform), so a correctly typed lower-case code used to be refused.
   inviteCode = typeof inviteCode === 'string' ? inviteCode.trim().toUpperCase() : '';
@@ -695,7 +699,8 @@ function forgotPassword(email) {
     _token: token,
     _userId: user.id,
     _email: user.email,
-    _username: user.username
+    _username: user.username,
+    _name: user.display_name || user.username
   };
 }
 
@@ -728,7 +733,7 @@ async function resetPassword(token, newPassword) {
   revokeUserSessions(tokenRow.user_id);
   loginThrottle.clearAccount(`u:${tokenRow.user_id}`);
 
-  return { success: true, message: 'Password has been reset successfully' };
+  return { success: true, message: 'Password has been reset successfully', _userId: tokenRow.user_id };
 }
 
 // ============================================
@@ -779,6 +784,7 @@ module.exports = {
   requireAdmin,
   ensureAdminExists,
   forgotPassword,
+  inviteRequired,
   resetPassword,
   getOrCreateGuestUser,
   sanitizeString,

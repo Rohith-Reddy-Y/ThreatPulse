@@ -18,7 +18,8 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tp-test-'));
 process.env.DB_PATH = path.join(tmp, 'test.db');
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'x'.repeat(48);
 delete process.env.SMTP_HOST;
-delete process.env.REQUIRE_INVITE_CODE;
+process.env.REQUIRE_INVITE_CODE = 'false'; // invite-only is the default; tests that cover it opt in
+delete process.env.BREVO_API_KEY; delete process.env.MAIL_FROM;
 
 // The app's housekeeping intervals would keep the test process alive forever
 const realSetInterval = global.setInterval;

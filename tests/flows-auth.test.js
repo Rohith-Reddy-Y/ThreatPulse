@@ -166,7 +166,7 @@ test('/auth/config tells the sign-in page about invites, email and a freshly cre
   process.env.REQUIRE_INVITE_CODE = 'true';
   try {
     assert.strictEqual((await request('GET', '/api/auth/config')).body.requireInvite, true);
-  } finally { delete process.env.REQUIRE_INVITE_CODE; }
+  } finally { process.env.REQUIRE_INVITE_CODE = 'false'; }
 });
 
 test('invite-only registration: code required, accepted in lower case, single use', async () => {
@@ -185,7 +185,7 @@ test('invite-only registration: code required, accepted in lower case, single us
       body: { ...base, username: 'inv2', email: 'inv2@example.test', inviteCode: 'ABCD1234' } });
     assert.strictEqual(reuse.body.success, false);
     assert.match(reuse.body.error, /already used/);
-  } finally { delete process.env.REQUIRE_INVITE_CODE; }
+  } finally { process.env.REQUIRE_INVITE_CODE = 'false'; }
   // Open registration ignores the code entirely
   const open = await request('POST', '/api/auth/register', { ip: ip(),
     body: { username: 'open1', displayName: 'Open', password: PW, email: 'open1@example.test', inviteCode: 'whatever' } });

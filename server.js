@@ -15,7 +15,7 @@ const aiRoutes = require('./src/routes/ai');
 const { handleNotifications } = require('./src/routes/api');
 const aggregator = require('./src/feeds/aggregator');
 const { seedDefaultSources } = require('./src/feeds/default-sources');
-const { initTransporter } = require('./src/notifications/email-notifier');
+const mailer = require('./src/notifications/mailer');
 const auth = require('./src/auth');
 
 const app = express();
@@ -232,7 +232,7 @@ async function initialize() {
 
   // 4. Initialize email transporter
   console.log('[Init] Setting up email notifications...');
-  initTransporter();
+  mailer.logStatus();
 
   // 5. Register notification handler
   aggregator.setOnFetchComplete(async (newArticles) => {

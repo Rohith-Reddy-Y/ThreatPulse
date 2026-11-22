@@ -327,6 +327,8 @@ const ROUTES = {
   'GET /api/admin/stats': { policy: 'admin', allow: [200] },
   'GET /api/admin/audit-log': { policy: 'admin', allow: [200] },
   'GET /api/admin/reset-tokens': { policy: 'admin', allow: [200] },
+  'GET /api/admin/email-status': { policy: 'admin', allow: [200] },
+  'POST /api/admin/email-test': { policy: 'admin', allow: [200, 400, 429, 502] },
   'GET /api/admin/ai-settings': { policy: 'admin', allow: [200] },
   'PUT /api/admin/ai-settings': { policy: 'admin', allow: [200] },
   // AI (no GROQ key in tests -> generation answers 503 once past the gates)

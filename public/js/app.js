@@ -19,7 +19,8 @@
   let faviconInterval = null;
   let resetAiPanel = () => {}; // assigned in bindEvents (AI panel state lives there)
   // Public server facts from /api/auth/config (invite codes, SMTP, DB reset time)
-  let serverConfig = { requireInvite: false, emailEnabled: false, dbCreatedAt: null };
+  let emailNudged = false;
+  let serverConfig = { requireInvite: true, emailEnabled: false, dbCreatedAt: null };
 
   //
   //  STATE
@@ -241,6 +242,12 @@
       $('#change-email-btn').classList.remove('hidden');
       $('#change-password-btn').classList.remove('hidden');
       $('#logout-btn').classList.remove('hidden');
+    }
+    // Accounts without an email can't receive reset links or security notices
+    if (!isGuest && !currentUser.email && !currentUser.mustChangePassword && !emailNudged) {
+      emailNudged = true;
+      setTimeout(() => showToast('Add your email address',
+        'Your account has no email, so password-reset links and security alerts cannot reach you. Open your user menu → Change Email.', 'warning'), 1500);
     }
   }
 
@@ -899,7 +906,17 @@
       $('#notif-whatsapp-enabled').checked = !!s.whatsapp_enabled;
       setSelectValue($('#notif-severity'), s.severity_threshold || 'critical');
       $('#notif-keywords').value = s.keywords_filter || '';
+      updateNotifSummary();
     } catch (e) { console.error('Notification settings error:', e); }
+  }
+
+  // "2 on" / "Off" chip on the collapsed Notifications header
+  function updateNotifSummary() {
+    const el = $('#notif-summary');
+    if (!el) return;
+    const on = [...$$('.notif-channel .toggle-switch input')].filter(i => i.checked).length;
+    el.textContent = on ? `${on} on` : 'Off';
+    el.classList.toggle('on', on > 0);
   }
 
   //
@@ -1304,7 +1321,7 @@
         keywords_filter: $('#notif-keywords').value.trim()
       });
       if ($('#notif-email-enabled').checked && !serverConfig.emailEnabled) {
-        showToast('Saved — email alerts unavailable', 'This server has no SMTP configured, so email alerts cannot be sent. Use Telegram, Teams or WhatsApp instead.', 'warning');
+        showToast('Saved — email alerts unavailable', 'Email delivery is not set up on this server yet, so email alerts cannot be sent. Use Telegram, Teams or WhatsApp for now.', 'warning');
       } else {
         showToast('Saved', 'Notification settings updated.', 'success');
       }
@@ -1636,9 +1653,9 @@
         errEl.classList.remove('hidden');
         return;
       }
-      // Invite code: only when the server requires one (REQUIRE_INVITE_CODE);
-      // the field is shown from /api/auth/config.
-      if (serverConfig.requireInvite && !inviteCode) {
+      // Invite code: required unless the server runs open registration
+      // (REQUIRE_INVITE_CODE=false, reported by /api/auth/config).
+      if (serverConfig.requireInvite !== false && !inviteCode) {
         errEl.textContent = 'An invite code is required to register. Ask your admin for one.';
         errEl.classList.remove('hidden');
         return;
@@ -1717,11 +1734,8 @@
           body: JSON.stringify({ email })
         }).then(r => r.json());
         if (result.success) {
-          let msg = result.message || 'If that email exists, a reset link has been sent.';
-          if (result._devResetLink) {
-            msg += '\n\n⚠️ SMTP not configured. Copy this link to reset:\n' + result._devResetLink;
-          }
-          okEl.textContent = msg;
+          okEl.textContent = (result.message || 'If that email exists, a reset link has been sent.') +
+            (result.emailDelivery ? ' Check your inbox and spam folder — the link expires in 1 hour.' : '');
           okEl.classList.remove('hidden');
         } else {
           errEl.textContent = (result.error || 'Request failed');
@@ -2321,6 +2335,36 @@
       }
     });
 
+    // Notifications panel: the whole card and each channel open like dropdowns
+    $('#notif-panel-toggle')?.addEventListener('click', () => {
+      const btn = $('#notif-panel-toggle');
+      const open = btn.getAttribute('aria-expanded') !== 'true';
+      btn.setAttribute('aria-expanded', String(open));
+      $('#notification-form').classList.toggle('is-collapsed', !open);
+      btn.closest('.notif-card')?.classList.toggle('open', open);
+    });
+    const setChannelOpen = (channel, open) => {
+      channel.classList.toggle('open', open);
+      channel.querySelector('.notif-channel-head')?.setAttribute('aria-expanded', String(open));
+    };
+    $$('.notif-channel-head').forEach(head => {
+      const channel = head.closest('.notif-channel');
+      head.addEventListener('click', (e) => {
+        if (e.target.closest('.toggle-switch')) return; // the on/off switch has its own job
+        setChannelOpen(channel, !channel.classList.contains('open'));
+      });
+      head.addEventListener('keydown', (e) => {
+        if (e.target !== head || (e.key !== 'Enter' && e.key !== ' ')) return;
+        e.preventDefault();
+        setChannelOpen(channel, !channel.classList.contains('open'));
+      });
+      // Switching a channel on opens it so its fields can be filled in
+      head.querySelector('.toggle-switch input')?.addEventListener('change', (e) => {
+        if (e.target.checked) setChannelOpen(channel, true);
+        updateNotifSummary();
+      });
+    });
+
     // Notification form
     $('#notification-form').addEventListener('submit', (e) => {
       e.preventDefault();
@@ -2744,6 +2788,15 @@
       showAuth();
       $('#login-form')?.classList.add('hidden');
       $('#reset-password-form')?.classList.remove('hidden');
+      return;
+    }
+
+    // "Secure my account" link in the password-changed email: open Forgot password
+    if (new URLSearchParams(window.location.search).get('forgot') === '1') {
+      history.replaceState(null, '', window.location.pathname);
+      showAuth();
+      $('#login-form')?.classList.add('hidden');
+      $('#forgot-password-form')?.classList.remove('hidden');
       return;
     }
 

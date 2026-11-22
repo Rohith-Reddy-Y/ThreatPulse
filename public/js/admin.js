@@ -75,6 +75,7 @@
       loadSources();
       loadAudit();
       loadResets();
+      loadEmailStatus();
       loadAiSettings();
     } catch (e) {
       alert('Admin access required. Redirecting to login...');
@@ -320,6 +321,37 @@
     }).join('');
   }
 
+  // Email delivery status (Brevo / SMTP) + test message
+  async function loadEmailStatus() {
+    try {
+      const s = await api('GET', d('L2FwaS9hZG1pbi9lbWFpbC1zdGF0dXM='));
+      if (!s) return;
+      const badge = $('#email-status-badge');
+      badge.textContent = s.configured ? 'working config' : 'not set up';
+      badge.className = 'badge ' + (s.configured ? 'badge-advisory' : 'badge-breach');
+      $('#email-provider').textContent = s.provider === 'brevo' ? 'Brevo HTTPS API' : s.provider === 'smtp' ? 'SMTP' : 'None';
+      $('#email-from').textContent = s.from || '—';
+      $('#email-admin').textContent = s.adminEmail || 'none — add one with Change Email on the dashboard';
+      $('#email-invite').textContent = s.inviteRequired ? 'Invite code required' : 'Open (anyone can register)';
+      const prob = $('#email-problem');
+      prob.textContent = s.problem || '';
+      prob.classList.toggle('hidden', !s.problem);
+    } catch (e) { /* api() already redirects on 401/403 */ }
+  }
+
+  async function sendTestEmail() {
+    const btn = $('#email-test-btn');
+    btn.disabled = true; btn.textContent = 'Sending…';
+    try {
+      const r = await api('POST', d('L2FwaS9hZG1pbi9lbWFpbC10ZXN0'));
+      if (r && r.success) showToast(`Test email sent to ${r.to} — check inbox and spam`, 'success');
+      else showToast((r && r.error) || 'Test email failed', 'error');
+    } catch (e) {
+      showToast(e.message || 'Test email failed', 'error');
+    }
+    btn.disabled = false; btn.textContent = 'Send test email to me';
+  }
+
   // AI settings (Groq + Tavily keys, stored server-side)
   async function loadAiSettings() {
     try {
@@ -431,6 +463,8 @@
   });
 
   $('#ai-save-btn').addEventListener('click', saveAiSettings);
+  $('#email-test-btn').addEventListener('click', sendTestEmail);
+  $('#email-refresh-btn').addEventListener('click', loadEmailStatus);
   $('#refresh-resets-btn').addEventListener('click', loadResets);
 
   $('#admin-logout-btn').addEventListener('click', async () => {

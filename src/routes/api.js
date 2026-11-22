@@ -8,7 +8,11 @@ const router = express.Router();
 const db = require('../database');
 const auth = require('../auth');
 const security = require('../security');
-const { sendAlertEmail, sendVerificationEmail, initTransporter } = require('../notifications/email-notifier');
+const crypto = require('crypto');
+const {
+  sendAlertEmail, sendVerificationEmail, isEmailConfigured, describeEmail,
+  sendPasswordResetEmail, sendPasswordChangedEmail, sendEmailChangedEmails, sendWelcomeEmail,
+} = require('../notifications/email-notifier');
 const { sendTelegramAlert } = require('../notifications/telegram-notifier');
 const { sendTeamsAlert } = require('../notifications/teams-notifier');
 const { sendWhatsAppAlert } = require('../notifications/whatsapp-notifier');
@@ -70,6 +74,16 @@ function publicBaseUrl(req) {
   if (configured) return configured.replace(/\/+$/, '');
   console.warn('[Auth] ⚠️  BASE_URL not set — link uses the request Host header.');
   return `${req.protocol}://${req.get('host')}`;
+}
+
+// "Your password was changed" notice — fire-and-forget, never blocks the change.
+function notifyPasswordChanged(userId, method, req) {
+  try {
+    const u = db.getUserById(userId);
+    if (!u || !u.email || !isEmailConfigured()) return;
+    sendPasswordChangedEmail(u.email, u.display_name || u.username, method, req && req.ip, publicBaseUrl(req))
+      .catch((e) => console.error('[API] Password-changed notice failed:', e.message));
+  } catch (e) { console.error('[API] Password-changed notice error:', e.message); }
 }
 
 // Source types the aggregator knows. 'browser' drives a headless Chrome at the
@@ -223,8 +237,8 @@ function fetchInBackground(aggregator, sources) {
 // if this boot created it (ephemeral hosting: earlier accounts are gone).
 router.get('/auth/config', (req, res) => {
   res.json({
-    requireInvite: process.env.REQUIRE_INVITE_CODE === 'true',
-    emailEnabled: !!initTransporter(),
+    requireInvite: auth.inviteRequired(),
+    emailEnabled: isEmailConfigured(),
     dbCreatedAt: db.getDbInfo().createdAt
   });
 });
@@ -274,6 +288,10 @@ router.post('/auth/register', async (req, res) => {
       security.setCsrfCookie(res);
 
       db.logAudit(result.user.id, 'register', 'New user registered', ip);
+      if (result.user.email && isEmailConfigured()) {
+        sendWelcomeEmail(result.user.email, result.user.displayName || result.user.username, result.user.username, publicBaseUrl(req))
+          .catch((e) => console.error('[API] Welcome email failed:', e.message));
+      }
       return res.json({ success: true, user: result.user });
     }
 
@@ -290,7 +308,7 @@ const FORGOT_MSG_EMAIL = 'If an account with that email exists, a reset link has
 const FORGOT_MSG_NO_EMAIL = 'This server cannot send email. If an account with that email exists, a reset link was created — ask the administrator to give it to you (Admin panel → Password Resets).';
 
 router.post('/auth/forgot-password', async (req, res) => {
-  const canEmail = !!initTransporter();
+  const canEmail = isEmailConfigured();
   const genericMessage = canEmail ? FORGOT_MSG_EMAIL : FORGOT_MSG_NO_EMAIL;
   // Simple per-IP throttle: max 3 forgot-password requests per 15 minutes
   const ip = req.ip || req.connection?.remoteAddress || 'unknown';
@@ -313,50 +331,23 @@ router.post('/auth/forgot-password', async (req, res) => {
     const { email } = req.body;
     const result = auth.forgotPassword(auth.sanitizeString(email, 255));
 
-    // If user was found, send reset email
+    // If a user was found, email the reset link. Sent in the background so the
+    // response time is the same whether or not the address has an account.
     if (result._token && result._email) {
       // Prefer the configured public URL; falling back to the Host header lets an
       // attacker poison reset links (publicBaseUrl warns when it has to).
-      const baseUrl = publicBaseUrl(req);
-      const resetLink = `${baseUrl}/?reset=${result._token}`;
-      
-      // Always log the reset link so admins can find it via `docker logs`
-      console.log(`[Auth] Password reset link for ${result._email}: ${resetLink}`);
-
-      let emailSent = false;
-      try {
-        const { sendAlertEmail } = require('../notifications/email-notifier');
-        const resetArticle = [{
-          title: '🔑 Password Reset Request',
-          description: `Hello ${result._username}, you (or someone) requested a password reset. Click the link below to reset your password. This link expires in 1 hour. If you did not request this, ignore this email.`,
-          url: resetLink,
-          source_name: 'ThreatPulse Security',
-          published_date: new Date().toISOString(),
-          category: 'advisory',
-          severity: 'high',
-          cve_id: null,
-          is_patched: -1,
-          has_poc: 0,
-          tags: 'password-reset'
-        }];
-        const emailResult = await sendAlertEmail(resetArticle, result._email);
-        emailSent = emailResult.success && !emailResult.mock;
-        if (emailResult.mock) {
-          console.log('[Auth] ⚠️  SMTP not configured — email NOT sent');
-        } else if (emailResult.success) {
-          console.log(`[Auth] Password reset email sent to ${result._email}`);
-        } else {
-          console.log(`[Auth] ⚠️  SMTP send failed: ${emailResult.error}`);
-        }
-      } catch (emailErr) {
-        console.error(`[Auth] Failed to send reset email: ${emailErr.message}`);
-      }
-
-      // SECURITY: never return the reset link in the HTTP response — that would let
-      // anyone reset any account whose email they know. If email couldn't be sent,
-      // the link is only in the server logs above (admin-only via `docker logs`).
-      if (!emailSent) {
-        console.log('[Auth] ⚠️  Reset email not delivered — link is available only in these server logs.');
+      const resetLink = `${publicBaseUrl(req)}/?reset=${result._token}`;
+      if (canEmail) {
+        sendPasswordResetEmail(result._email, result._name || result._username, resetLink, ip)
+          .then((r) => {
+            if (r.success) console.log(`[Auth] Password reset email sent to user #${result._userId}`);
+            else console.log(`[Auth] ⚠️  Reset email to user #${result._userId} failed: ${r.error} — the link is in Admin → Password Resets`);
+          })
+          .catch((e) => console.error('[Auth] Reset email error:', e.message));
+      } else {
+        // SECURITY: the link is never returned in the HTTP response; without email
+        // it is only reachable by admins (logs / Admin → Password Resets).
+        console.log(`[Auth] Email not configured — reset link for user #${result._userId}: ${resetLink}`);
       }
     }
 
@@ -380,9 +371,9 @@ router.post('/auth/reset-password', async (req, res) => {
     
     if (result.success) {
       console.log('[Auth] Password reset completed via token');
+      notifyPasswordChanged(result._userId, 'reset', req);
     }
-    
-    res.json(result);
+    res.json({ success: result.success, message: result.message, error: result.error });
   } catch (error) {
     console.error('[API] Reset password error:', error.message);
     res.status(500).json({ success: false, error: 'Reset failed' });
@@ -472,7 +463,7 @@ router.put('/auth/password', auth.requireAuth, denyGuest, async (req, res) => {
     }
 
     // Generate verification code (6 digits)
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const code = String(crypto.randomInt(100000, 1000000));
     const expiresAt = auth.sqliteDateTime(Date.now() + 15 * 60 * 1000); // 15 mins
 
     // Hash the new password and store it as newHash:newSalt in target_value
@@ -481,7 +472,7 @@ router.put('/auth/password', auth.requireAuth, denyGuest, async (req, res) => {
     const targetValue = `${newHash}:${newSalt}`;
 
     const userEmail = user.email || req.user.email;
-    const emailReady = !!userEmail && !!initTransporter();
+    const emailReady = !!userEmail && isEmailConfigured();
 
     // Apply directly (the current password was already verified) when:
     //  - this is the forced first-login change, or
@@ -492,6 +483,7 @@ router.put('/auth/password', auth.requireAuth, denyGuest, async (req, res) => {
       auth.revokeUserSessions(req.user.id, req.cookies?.tp_refresh); // log out other sessions
       db.logAudit(req.user.id, 'password_change',
         user.must_change_password ? 'Forced first-login password change' : 'Password changed (email verification unavailable)', req.ip);
+      notifyPasswordChanged(req.user.id, user.must_change_password ? 'forced' : 'change', req);
       return res.json({ success: true, verificationRequired: false, message: 'Password updated successfully' });
     }
 
@@ -540,14 +532,14 @@ router.put('/auth/email', auth.requireAuth, denyGuest, async (req, res) => {
     // No SMTP: a verification code could never be delivered, so the change could
     // never complete (the user was told to enter a code that never came). Apply
     // it directly — the same policy as password changes without email.
-    if (!initTransporter()) {
+    if (!isEmailConfigured()) {
       db.updateUserEmail(req.user.id, email);
       db.logAudit(req.user.id, 'email_change', `Email updated to ${email} (email verification unavailable)`, req.ip);
       return res.json({ success: true, verificationRequired: false, email, message: 'Email address updated' });
     }
 
     // Generate verification code (6 digits)
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const code = String(crypto.randomInt(100000, 1000000));
     const expiresAt = auth.sqliteDateTime(Date.now() + 15 * 60 * 1000); // 15 mins
 
     const codeId = db.createVerificationCode(req.user.id, 'email_change', email, code, expiresAt);
@@ -591,27 +583,9 @@ router.post('/auth/verify-change', auth.requireAuth, denyGuest, (req, res) => {
       db.logAudit(req.user.id, 'email_change', `Email updated to ${newEmail} via verification code`, req.ip);
       db.deleteVerificationCode(verification.id);
 
-      // Notify old and new emails
-      (async () => {
-        try {
-          const when = new Date().toLocaleString();
-          const confirm = [{
-            title: '✉️ Your ThreatPulse email was changed',
-            description: `Hi ${req.user.displayName}, the email on your ThreatPulse account was updated to ${newEmail} on ${when}. If you made this change, no action is needed.`,
-            url: publicBaseUrl(req),
-            source_name: 'ThreatPulse Security',
-            published_date: new Date().toISOString(),
-            category: 'advisory', severity: 'high',
-            cve_id: null, is_patched: -1, has_poc: 0, tags: 'account-security'
-          }];
-          await sendAlertEmail(confirm, newEmail);
-          if (previousEmail) {
-            await sendAlertEmail(confirm, previousEmail);
-          }
-        } catch (mailErr) {
-          console.error('[API] Verification notification email failed:', mailErr.message);
-        }
-      })();
+      // Confirm to the new address and warn the old one
+      sendEmailChangedEmails(req.user.displayName || req.user.username, previousEmail, newEmail, publicBaseUrl(req))
+        .catch((mailErr) => console.error('[API] Email-change notice failed:', mailErr.message));
 
       return res.json({ success: true, email: newEmail, message: 'Email address updated successfully' });
 
@@ -621,6 +595,7 @@ router.post('/auth/verify-change', auth.requireAuth, denyGuest, (req, res) => {
       db.updateUserPassword(req.user.id, newHash, newSalt); // also clears must_change_password
       auth.revokeUserSessions(req.user.id, req.cookies?.tp_refresh); // log out other sessions
       db.logAudit(req.user.id, 'password_change', 'Password changed via verification code', req.ip);
+      notifyPasswordChanged(req.user.id, 'change', req);
       db.deleteVerificationCode(verification.id);
 
       return res.json({ success: true, message: 'Password updated successfully' });
@@ -1143,7 +1118,6 @@ router.delete('/admin/users/:id', auth.requireAuth, auth.requireAdmin, (req, res
 
 router.post('/admin/invite-codes', auth.requireAuth, auth.requireAdmin, (req, res) => {
   try {
-    const crypto = require('crypto');
     const code = crypto.randomBytes(4).toString('hex').toUpperCase();
     const result = db.createInviteCode(req.user.id, code);
     db.logAudit(req.user.id, 'invite_code_create', `Created invite code: ${code}`, req.ip);
@@ -1223,7 +1197,7 @@ router.get('/admin/reset-tokens', auth.requireAuth, auth.requireAdmin, (req, res
     // Manual recovery only: with SMTP working the user gets the link by email,
     // so the token is never shown. Links for OTHER admin accounts are always
     // withheld — otherwise one admin could take over another admin's account.
-    const emailWorks = !!initTransporter();
+    const emailWorks = isEmailConfigured();
     const pending = db.getPendingResetTokens().map((t) => {
       const owner = db.getUserById(t.user_id);
       const otherAdmin = owner && owner.role === 'admin' && owner.id !== req.user.id;
@@ -1239,6 +1213,31 @@ router.get('/admin/reset-tokens', auth.requireAuth, auth.requireAdmin, (req, res
     res.json({ tokens: pending });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch reset tokens' });
+  }
+});
+
+// Admin: email delivery status + a test message to the admin's own address
+router.get('/admin/email-status', auth.requireAuth, auth.requireAdmin, (req, res) => {
+  const d = describeEmail();
+  const me = db.getUserById(req.user.id);
+  res.json({
+    configured: !!d.provider, provider: d.provider || null, from: d.from || null, problem: d.problem || null,
+    adminEmail: (me && me.email) || null, inviteRequired: auth.inviteRequired(),
+  });
+});
+
+router.post('/admin/email-test', auth.requireAuth, auth.requireAdmin, async (req, res) => {
+  try {
+    const me = db.getUserById(req.user.id);
+    if (!me || !me.email) return res.status(400).json({ success: false, error: 'Your admin account has no email address. Add one with Change Email first.' });
+    if (!isEmailConfigured()) return res.status(400).json({ success: false, error: 'Email delivery is not configured. Set BREVO_API_KEY and MAIL_FROM on the server.' });
+    const wait = consumeNotifyTest(req.user.id);
+    if (wait) return res.status(429).json({ success: false, error: `Too many test messages — try again in ${wait}s` });
+    const r = await sendWelcomeEmail(me.email, me.display_name || me.username, me.username, publicBaseUrl(req));
+    db.logAudit(req.user.id, 'email_test', r.success ? `Test email sent to ${me.email}` : `Test email failed: ${r.error}`, req.ip);
+    res.status(r.success ? 200 : 502).json(r.success ? { success: true, to: me.email } : { success: false, error: r.error });
+  } catch (e) {
+    res.status(500).json({ success: false, error: 'Failed to send test email' });
   }
 });
 
