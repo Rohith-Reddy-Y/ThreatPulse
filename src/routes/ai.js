@@ -6,6 +6,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../database');
 const auth = require('../auth');
+const { parseId } = require('../security');
 const ai = require('../ai/client');
 const prompts = require('../ai/prompts');
 const cache = require('../ai/cache');
@@ -199,7 +200,7 @@ function cachedJson(kind, key, cleaner) {
 // ── AI SUMMARY ──
 router.post('/summarize', auth.requireAuth, async (req, res) => {
   try {
-    const articleId = parseInt((req.body || {}).articleId, 10);
+    const articleId = parseId((req.body || {}).articleId);
     if (!articleId) return res.status(400).json({ error: 'articleId required' });
 
     const article = db.getArticleById(articleId);
@@ -228,7 +229,7 @@ router.post('/summarize', auth.requireAuth, async (req, res) => {
 // ── AI TRIAGE ──
 router.post('/triage', auth.requireAuth, async (req, res) => {
   try {
-    const articleId = parseInt((req.body || {}).articleId, 10);
+    const articleId = parseId((req.body || {}).articleId);
     if (!articleId) return res.status(400).json({ error: 'articleId required' });
 
     const article = db.getArticleById(articleId);
@@ -275,7 +276,7 @@ router.post('/ask', auth.requireAuth, async (req, res) => {
     const userId = req.user.id;
     let tid = null;
     if (body.threadId !== undefined && body.threadId !== null && body.threadId !== '') {
-      tid = parseInt(body.threadId, 10);
+      tid = parseId(body.threadId);
       if (!findThread(req, tid)) return res.status(404).json({ error: 'Thread not found' });
     }
 
@@ -348,7 +349,7 @@ router.get('/threads', auth.requireAuth, (req, res) => {
 
 router.get('/threads/:id', auth.requireAuth, (req, res) => {
   try {
-    const thread = findThread(req, parseInt(req.params.id, 10));
+    const thread = findThread(req, parseId(req.params.id));
     if (!thread) return res.status(404).json({ error: 'Thread not found' });
     thread.messages = thread.messages.map(m => ({ ...m, sources: m.sources ? safeParseJson(m.sources) : null }));
     res.json({ thread });
@@ -359,7 +360,7 @@ router.get('/threads/:id', auth.requireAuth, (req, res) => {
 
 router.delete('/threads/:id', auth.requireAuth, (req, res) => {
   try {
-    const tid = parseInt(req.params.id, 10);
+    const tid = parseId(req.params.id);
     if (!findThread(req, tid)) return res.status(404).json({ success: false, error: 'Thread not found' });
     const result = db.deleteThread(tid, req.user.id);
     if (!result.success) return res.status(404).json(result);

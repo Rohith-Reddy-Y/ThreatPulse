@@ -157,12 +157,13 @@ test('sources: a regular user cannot pick the headless-browser / dark-web fetche
   for (const type of ['browser', 'darkweb', 'nonsense', '']) {
     const res = await call(env, 'POST', '/sources', { user: u, body: { url: `https://x.example.com/${type}`, name: 'n', type } });
     if (type === '') { assert.strictEqual(res.statusCode, 201); continue; } // empty -> default 'rss'
-    assert.strictEqual(res.statusCode, 400, `user type=${type} -> ${res.statusCode}`);
+    // admin-only fetchers are refused as forbidden (403), unknown types as invalid (400)
+    assert.strictEqual(res.statusCode, type === 'nonsense' ? 400 : 403, `user type=${type} -> ${res.statusCode}`);
   }
   const ok = await call(env, 'POST', '/sources', { user: u, body: { url: 'https://x.example.com/rss', name: 'n', type: 'rss' } });
   assert.strictEqual(ok.statusCode, 201);
   const put = await call(env, 'PUT', '/sources/:id', { user: u, params: { id: String(ok.body.id) }, body: { type: 'browser' } });
-  assert.strictEqual(put.statusCode, 400);
+  assert.strictEqual(put.statusCode, 403);
   assert.strictEqual(env.db.getDb().prepare('SELECT type FROM sources WHERE id = ?').get(ok.body.id).type, 'rss');
   // admins keep the special fetchers
   const a = await call(env, 'POST', '/sources', { user: admin, body: { url: 'https://cf.example.com/feed', name: 'cf', type: 'browser' } });
