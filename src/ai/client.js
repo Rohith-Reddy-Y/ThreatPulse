@@ -7,7 +7,17 @@
 const axios = require('axios');
 
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const MODEL = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
+// Groq retires model IDs (llama-3.3-70b-versatile was shut down 2026-08-16 and
+// started returning 404). GROQ_MODEL wins; otherwise we use the first default
+// and automatically fall through the list when a model is retired, then stick
+// with whichever one answered.
+const DEFAULT_MODELS = ['openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'llama-3.1-8b-instant'];
+const CONFIGURED_MODEL = (process.env.GROQ_MODEL || '').trim();
+let activeModel = CONFIGURED_MODEL || DEFAULT_MODELS[0];
+function modelCandidates() {
+  return [...new Set([activeModel, CONFIGURED_MODEL, ...DEFAULT_MODELS].filter(Boolean))];
+}
+const isReasoningModel = m => /^openai\/gpt-oss/i.test(m);
 // Per-attempt timeout and an overall deadline for one generate() call (including
 // retries + backoff), so a slow/hung provider can never hold a request open for
 // minutes. Overridable for tests/tuning.
@@ -24,6 +34,7 @@ const ERR = {
   badKey: 'Groq API key is invalid or unauthorized. Check it in Admin -> AI Settings.',
   timeout: 'AI request timed out. Please try again.',
   tooLarge: 'The request was too large for the AI model. Try a shorter question or start a new chat.',
+  noModel: 'None of the configured Groq models are available. Set GROQ_MODEL to a current model from console.groq.com/docs/models.',
   generic: 'AI service is temporarily unavailable. Please try again later.'
 };
 
@@ -80,18 +91,26 @@ async function generate(systemInstruction, userContent, opts = {}) {
   const temperature = opts.temperature ?? 0.3;
   const jsonMode = opts.json !== false;
 
-  const body = {
-    model: MODEL,
-    messages: [
-      { role: 'system', content: system },
-      { role: 'user', content: user }
-    ],
-    temperature,
-    max_tokens: 2048
+  // Per-model request body. gpt-oss models reason before answering, so they get
+  // low reasoning effort and a larger token budget so the answer isn't cut off.
+  // `dropped` holds optional params a model rejected (retried without them).
+  const dropped = new Set();
+  const buildBody = (model) => {
+    const b = {
+      model,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user }
+      ],
+      temperature,
+      max_tokens: isReasoningModel(model) ? 4096 : 2048
+    };
+    if (jsonMode && !dropped.has('response_format')) b.response_format = { type: 'json_object' };
+    if (isReasoningModel(model) && !dropped.has('reasoning_effort')) b.reasoning_effort = 'low';
+    return b;
   };
-  if (jsonMode) {
-    body.response_format = { type: 'json_object' };
-  }
+  const candidates = modelCandidates();
+  let modelIdx = 0;
 
   const deadline = Date.now() + DEADLINE_MS;
   let lastError = null;
@@ -104,7 +123,7 @@ async function generate(systemInstruction, userContent, opts = {}) {
     let timer = null;
     try {
       const resp = await Promise.race([
-        axios.post(GROQ_URL, body, {
+        axios.post(GROQ_URL, buildBody(candidates[modelIdx]), {
           headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
           timeout: attemptTimeout,
           ...(controller ? { signal: controller.signal } : {})
@@ -113,6 +132,10 @@ async function generate(systemInstruction, userContent, opts = {}) {
       ]);
       clearTimeout(timer);
       const content = resp?.data?.choices?.[0]?.message?.content;
+      if (activeModel !== candidates[modelIdx]) {
+        activeModel = candidates[modelIdx];
+        console.log(`[AI] Using Groq model ${activeModel}`);
+      }
       return { ok: true, text: typeof content === 'string' ? content : '' };
     } catch (e) {
       clearTimeout(timer);
@@ -121,6 +144,18 @@ async function generate(systemInstruction, userContent, opts = {}) {
       const status = e.response?.status;
       const msg = String(e.response?.data?.error?.message || e.message || '');
 
+      // Retired / unknown model — move to the next candidate (doesn't use a retry).
+      if (status === 404 || /model.*(not found|does not exist|decommissioned|deprecated)|model_not_found|model_decommissioned/i.test(msg)) {
+        console.error(`[AI] Groq model ${candidates[modelIdx]} unavailable (${status || ''} ${msg.slice(0, 120)})`);
+        if (modelIdx + 1 < candidates.length) { modelIdx++; attempt--; continue; }
+        return { ok: false, error: ERR.noModel };
+      }
+      // An optional parameter the model doesn't support — drop it and retry once.
+      if (status === 400) {
+        const PARAM_ERR = { reasoning_effort: /reasoning.?effort/i, response_format: /response.?format|json_validate|json mode/i };
+        const p = Object.keys(PARAM_ERR).find(k => !dropped.has(k) && PARAM_ERR[k].test(msg));
+        if (p) { dropped.add(p); attempt--; continue; }
+      }
       // Invalid / unauthorized key — not retryable.
       if (status === 401 || status === 403 || /invalid.*api key|unauthorized|authentication/i.test(msg)) {
         return { ok: false, error: ERR.badKey };
@@ -211,4 +246,8 @@ function tryParse(s) {
   }
 }
 
-module.exports = { generate, parseJson, isEnabled, MODEL };
+module.exports = {
+  generate, parseJson, isEnabled,
+  DEFAULT_MODELS,
+  get MODEL() { return activeModel; }
+};

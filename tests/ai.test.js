@@ -340,3 +340,43 @@ test('websearch only talks to fixed hosts regardless of the query', async () => 
   assert.ok(res[0].title.length <= 300, 'tavily title not truncated');
   assert.ok(res[0].url.length <= 600, 'tavily url not truncated');
 });
+
+// ───────────────────────── retired-model fallback ─────────────────────────
+
+test('retired Groq model (404) falls through to the next model and sticks with it', async () => {
+  const tried = [];
+  axiosStub.post = async (url, body) => {
+    tried.push(body.model);
+    if (body.model === 'openai/gpt-oss-120b') throw httpError(404, 'The model `openai/gpt-oss-120b` does not exist');
+    return groqReply('{"ok":true}');
+  };
+  const r1 = await client.generate('sys', 'user');
+  assert.equal(r1.ok, true);
+  assert.deepEqual(tried.slice(0, 2), ['openai/gpt-oss-120b', 'openai/gpt-oss-20b']);
+  assert.equal(client.MODEL, 'openai/gpt-oss-20b');
+  tried.length = 0;
+  await client.generate('sys', 'user');
+  assert.deepEqual(tried, ['openai/gpt-oss-20b'], 'remembers the working model');
+});
+
+test('gpt-oss requests use low reasoning effort; rejected optional params are dropped', async () => {
+  const bodies = [];
+  axiosStub.post = async (url, body) => {
+    bodies.push(body);
+    if (body.reasoning_effort) throw httpError(400, 'property reasoning_effort is unsupported');
+    return groqReply('{"ok":true}');
+  };
+  const r = await client.generate('sys', 'user');
+  assert.equal(r.ok, true);
+  assert.equal(bodies[0].reasoning_effort, 'low');
+  assert.ok(bodies[0].max_tokens >= 4096);
+  assert.equal(bodies[1].reasoning_effort, undefined);
+  assert.deepEqual(bodies[1].response_format, { type: 'json_object' });
+});
+
+test('every model retired -> clean, actionable error', async () => {
+  axiosStub.post = async () => { throw httpError(404, 'model_not_found'); };
+  const r = await client.generate('sys', 'user');
+  assert.equal(r.ok, false);
+  assert.match(r.error, /GROQ_MODEL/);
+});

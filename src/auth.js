@@ -592,7 +592,11 @@ async function ensureAdminExists() {
       console.log('[Auth] Default admin created');
       console.log('[Auth] FIRST-RUN ADMIN CREDENTIALS (shown once)');
       console.log(`[Auth] Username: admin`);
-      console.log(`[Auth] Password: ${initialPassword}`);
+      // Never echo an operator-chosen password into hosted logs; only a freshly
+      // generated one (which the owner has no other way to learn) is shown.
+      console.log(process.env.ADMIN_INITIAL_PASSWORD
+        ? '[Auth] Password: (set from ADMIN_INITIAL_PASSWORD)'
+        : `[Auth] Password: ${initialPassword}`);
       console.log('[Auth] You will be required to change this password on first login.');
 
       // Generate 10 invite codes for the team

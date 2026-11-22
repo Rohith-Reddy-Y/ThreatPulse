@@ -1342,7 +1342,7 @@ router.get('/admin/ai-settings', auth.requireAuth, auth.requireAdmin, (req, res)
       tavily_api_key: maskSecret(tavily),
       groq_set: !!(groq || process.env.GROQ_API_KEY),
       tavily_set: !!(tavily || process.env.TAVILY_API_KEY),
-      model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile'
+      model: require('../ai/client').MODEL
     });
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch AI settings' });
