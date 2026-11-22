@@ -9,6 +9,7 @@
   //  AUTH STATE (cookie-based httpOnly JWT — no localStorage)
   //
   let currentUser = null;
+  const aiResultCache = new Map(); // articleId -> { html, open }: AI card results kept across re-renders
   let forcedChangeSecret = null; // sign-in password, held only until a forced change completes
   // Access token lifetime is 15 min; refresh proactively at 13 min
   const REFRESH_MARGIN = 13 * 60 * 1000; // refresh 2 min before expiry
@@ -170,7 +171,7 @@
 
   function setUser(user) {
     // Switching account (e.g. guest -> signed in): drop the previous user's AI chat
-    if (!currentUser || currentUser.id !== user.id) resetAiPanel();
+    if (!currentUser || currentUser.id !== user.id) { resetAiPanel(); aiResultCache.clear(); }
     currentUser = user;
     updateUserMenu();
     scheduleAutoRefresh();
@@ -197,6 +198,7 @@
     renderSources();
     renderEscalatedSidebar([]);
     resetAiPanel();
+    aiResultCache.clear();
   }
 
   function logout() {
@@ -895,7 +897,8 @@
       const s = await api('GET', d('L2FwaS9ub3RpZmljYXRpb25zL3NldHRpbmdz'));
       if (!s) return;
       // Assign unconditionally so a previous user's values never linger in the form
-      $('#notif-email').value = s.email || '';
+      // Alerts can only go to the account's own address
+      $('#notif-email').value = s.email || (currentUser && currentUser.email) || '';
       $('#notif-email-enabled').checked = !!s.email_enabled;
       $('#notif-telegram').value = s.telegram_chat_id || '';
       $('#notif-telegram-token').value = s.telegram_bot_token || '';
@@ -945,6 +948,14 @@
     // Render sidebar escalated/reviewed items
     renderEscalatedSidebar(resolved);
 
+    if (active.length === 0 && state.currentPage < (state.totalPages || 1)) {
+      // Everything on this page was reviewed/escalated (moved to the sidebar) but
+      // more pages exist: keep "Load more" reachable instead of an empty dashboard.
+      container.innerHTML = '<p class="empty-sources" style="padding:16px;">Everything on this page has been reviewed. Load more to see older threats.</p>';
+      empty.classList.add('hidden');
+      loadMore.classList.remove('hidden');
+      return;
+    }
     if (active.length === 0) {
       container.innerHTML = '';
       empty.classList.remove('hidden');
@@ -1232,7 +1243,9 @@
           <button class="${escalateBtnCls} guest-hidden" data-escalate="${article.id}" title="Escalate"${escalateBtnDisabled}>${escalateBtnTxt}</button>
           <button class="btn-ai" data-ai-summarize="${article.id}" title="AI summary + triage">AI</button>
         </div>
-        <div class="ai-result" data-ai-result="${article.id}" style="display:none;"></div>
+        ${(() => { const c = aiResultCache.get(article.id); return c && c.open
+          ? `<div class="ai-result" data-ai-result="${article.id}" data-loaded="1" style="display:block;">${c.html}</div>`
+          : `<div class="ai-result" data-ai-result="${article.id}" style="display:none;"></div>`; })()}
       </article>`;
   }
 
@@ -2048,6 +2061,13 @@
           '#time-range-filter': 'time_range'
         };
         state.filters[filterMap[sel]] = e.target.value;
+        // Picking a preset (or "All Time") drops an earlier custom/card date range;
+        // otherwise the stale start/end dates kept filtering the feed and exports.
+        if (sel === '#time-range-filter' && e.target.value !== 'custom') {
+          state.filters.start_date = '';
+          state.filters.end_date = '';
+          document.querySelectorAll('.selected-range-tag').forEach(t => t.remove());
+        }
         e.target.classList.toggle('has-value', e.target.value !== '');
         state.currentPage = 1;
         updateClearAllButton();
@@ -2204,6 +2224,7 @@
         if (resultEl && resultEl.style.display !== 'none' && resultEl.dataset.loaded) {
           // Toggle off
           resultEl.style.display = 'none';
+          const c = aiResultCache.get(articleId); if (c) c.open = false;
           aiBtn.textContent = 'AI';
           aiBtn.disabled = false;
           return;
@@ -2234,6 +2255,11 @@
             resultEl.innerHTML = `${triageBadge}${summaryText}`;
             resultEl.style.display = 'block';
             resultEl.dataset.loaded = '1';
+            // Survives the 60 s auto-refresh re-render (HTML above is fully escaped)
+            if (sum.success) {
+              if (aiResultCache.size > 200) aiResultCache.delete(aiResultCache.keys().next().value);
+              aiResultCache.set(articleId, { html: resultEl.innerHTML, open: true });
+            }
           }
           aiBtn.textContent = 'AI';
           aiBtn.disabled = false;
@@ -2481,6 +2507,16 @@
       $('#ai-panel').classList.add('hidden');
     });
 
+    // Minimal, safe markdown for AI answers: escape first, then only add <strong>
+    // and bullet glyphs (the model often answers with **bold** and "* " lists).
+    function formatAnswer(raw) {
+      return escapeHtml(String(raw || '')).split('\n').map(line => {
+        let l = line.replace(/^\s{0,3}#{1,6}\s+(.+)$/, '**$1**')
+                    .replace(/^(\s*)[*\-]\s+/, (m, sp) => `${sp.replace(/ /g, '&nbsp;')}&bull; `);
+        return l.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/【(\d+)(?:†[^】]*)?】/g, '[$1]');
+      }).join('<br>');
+    }
+
     function renderSources(sources) {
       if (!sources || !sources.length) return '';
       const links = sources.map(s => {
@@ -2520,7 +2556,7 @@
           if (m.role === 'user') {
             body.insertAdjacentHTML('beforeend', `<div class="ai-message ai-user">${escapeHtml(m.content)}</div>`);
           } else {
-            const answerHtml = escapeHtml(m.content || '').replace(/\n/g, '<br>');
+            const answerHtml = formatAnswer(m.content);
             body.insertAdjacentHTML('beforeend', `<div class="ai-message ai-bot">${answerHtml}${renderSources(m.sources)}</div>`);
           }
         });
@@ -2572,7 +2608,7 @@
 
         if (result.success) {
           aiThreadId = result.threadId || aiThreadId;
-          const answerHtml = escapeHtml(result.answer || '').replace(/\n/g, '<br>');
+          const answerHtml = formatAnswer(result.answer);
           let extra = '';
           // Both modes return clickable sources (feed articles in RAG mode)
           if (Array.isArray(result.sources) && result.sources.length) {

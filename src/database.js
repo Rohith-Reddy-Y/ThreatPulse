@@ -284,6 +284,8 @@ function initializeSchema() {
   try { d.prepare('ALTER TABLE users ADD COLUMN must_change_password INTEGER DEFAULT 0').run(); } catch(e) { /* already exists */ }
   // Forced password changes were removed (they looped on ephemeral hosting); clear legacy flags.
   try { d.prepare('UPDATE users SET must_change_password = 0 WHERE must_change_password != 0').run(); } catch(e) { /* ignore */ }
+  // When the password last changed (unix seconds): access tokens issued earlier are rejected.
+  try { d.prepare('ALTER TABLE users ADD COLUMN password_changed_at INTEGER DEFAULT 0').run(); } catch(e) { /* already exists */ }
 
   // Step 5: Create indexes AFTER all columns are guaranteed to exist
   const indexes = [
@@ -538,6 +540,14 @@ function createPasswordResetToken(userId, token, expiresAt) {
   ).run(userId, token, expiresAt);
 }
 
+// True when a still-valid reset/change link was issued to this user recently
+// (per-account throttle: stops reset-email floods and link cancelling).
+function hasRecentResetToken(userId, withinMinutes = 5) {
+  return !!getDb().prepare(
+    `SELECT 1 FROM password_reset_tokens WHERE user_id = ? AND used = 0 AND expires_at > datetime('now') AND created_at > datetime('now', ?)`
+  ).get(userId, `-${Number(withinMinutes) || 5} minutes`);
+}
+
 function validatePasswordResetToken(token) {
   const row = getDb().prepare(
     'SELECT * FROM password_reset_tokens WHERE token = ? AND used = 0 AND expires_at > datetime(\'now\')'
@@ -591,7 +601,8 @@ function updateUser(id, updates) {
 
 function updateUserPassword(id, passwordHash, salt) {
   // Changing the password always clears the "must change password" flag
-  getDb().prepare('UPDATE users SET password_hash = ?, salt = ?, must_change_password = 0 WHERE id = ?').run(passwordHash, salt, id);
+  getDb().prepare('UPDATE users SET password_hash = ?, salt = ?, must_change_password = 0, password_changed_at = ? WHERE id = ?')
+    .run(passwordHash, salt, Math.floor(Date.now() / 1000), id);
   return { success: true };
 }
 
@@ -825,6 +836,10 @@ function insertArticle(article) {
   if (!article || !isHttpUrl(article.url)) {
     return { success: false, isNew: false, error: 'Rejected non-http(s) article URL' };
   }
+  // Every fetcher funnels through here: bound untrusted text before enrichment.
+  if (typeof article.title === 'string' && article.title.length > 500) article.title = article.title.slice(0, 500);
+  if (typeof article.description === 'string' && article.description.length > 5000) article.description = article.description.slice(0, 5000);
+  if (typeof article.author === 'string' && article.author.length > 200) article.author = article.author.slice(0, 200);
   // Cheap check first: already stored? Skip BEFORE the (CPU-heavy) enrichment.
   // Every 15-min cycle re-reads thousands of known items; on a small CPU share,
   // enriching them all blocked the event loop and failed health checks.
@@ -1344,6 +1359,22 @@ function getSetting(key) {
   } catch (e) { return null; }
 }
 
+// Random id of this database instance. Ephemeral hosting wipes the DB on
+// restart and user ids start again at 1, while JWT_SECRET stays the same:
+// tokens carry this id so a pre-restart token can't map onto a new user.
+let instanceIdCache = null;
+function getInstanceId() {
+  if (instanceIdCache) return instanceIdCache;
+  let id = getSetting('db_instance_id');
+  if (!id) {
+    id = require('crypto').randomBytes(12).toString('hex');
+    getDb().prepare('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)').run('db_instance_id', id);
+    id = getSetting('db_instance_id') || id;
+  }
+  instanceIdCache = id;
+  return id;
+}
+
 function setSetting(key, value) {
   if (value == null || value === '') {
     getDb().prepare('DELETE FROM app_settings WHERE key = ?').run(key);
@@ -1429,6 +1460,7 @@ module.exports = {
   createPasswordResetToken,
   validatePasswordResetToken,
   markResetTokenUsed,
+  hasRecentResetToken,
   cleanupExpiredResetTokens,
   getPendingResetTokens,
   // Invite Codes
@@ -1481,6 +1513,7 @@ module.exports = {
   // Utils
   hashUrl,
   getSetting,
+  getInstanceId,
   setSetting,
   // AI chat threads
   createThread,

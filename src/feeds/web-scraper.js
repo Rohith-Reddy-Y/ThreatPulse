@@ -100,13 +100,9 @@ function extractArticleLinks($, baseUrl) {
       if (href.includes('#') || href.includes('javascript:') || href.includes('/tag/') ||
           href.includes('/category/') || href.includes('/author/') || href.includes('/page/')) return;
 
-      if (!seen.has(href)) {
-        seen.add(href);
-        links.push({
-          url: href,
-          title: $(el).text().trim() || null
-        });
-      }
+      // Keep every anchor (cleanLinks picks the best title per URL), but cap the work
+      seen.add(href);
+      if (links.length < 400) links.push({ url: href, title: $(el).text().trim() || null });
     });
   }
 
@@ -130,10 +126,8 @@ function extractArticleLinks($, baseUrl) {
         if (!rest || rest.includes('/') || rest.length < 8 || !/[a-z0-9]-[a-z0-9]/i.test(rest)) return;
         if (/^(page|tag|tags|category|categories|author|search)\b/i.test(rest)) return;
         const key = u.origin + u.pathname;
-        if (!seen.has(key)) {
-          seen.add(key);
-          links.push({ url: key, title: $(el).text().trim() || null });
-        }
+        seen.add(key);
+        if (links.length < 400) links.push({ url: key, title: $(el).text().trim() || null });
       });
     }
   }
@@ -167,6 +161,36 @@ async function scrapeUrl(url) {
 /**
  * Scrape a source — either a single article or a blog/news index page
  */
+// Index pages often link each post several times ("Read more", an image, the
+// headline). Anchor text like "Read more" is not a title: fall back to the URL slug.
+const GENERIC_LINK_TEXT = /^(read( the)? more|more|continue( reading)?|learn more|view( more| all)?|details|full story|articles?|posts?|blog|news|research|click here|here|»|›|→)\W*$/i;
+const INDEX_SLUG = /^((research|security|threat)-)?(articles?|blogs?|news|posts|research|insights|resources|publications|reports)$/i;
+function titleFromSlug(url) {
+  try {
+    const seg = new URL(url).pathname.replace(/\/$/, '').split('/').pop() || '';
+    const words = decodeURIComponent(seg).replace(/\.(html?|php|aspx?)$/i, '').split(/[-_]+/).filter(Boolean);
+    if (words.length < 2) return '';
+    const t = words.join(' ');
+    return t.charAt(0).toUpperCase() + t.slice(1);
+  } catch { return ''; }
+}
+function cleanLinks(links) {
+  const byUrl = new Map();
+  for (const l of links) {
+    let seg = '';
+    try { seg = new URL(l.url).pathname.replace(/\/$/, '').split('/').pop() || ''; } catch { /* ignore */ }
+    if (INDEX_SLUG.test(seg)) continue;                      // section index, not a post
+    const text = (l.title || '').replace(/\s+/g, ' ').trim();
+    const good = text && text.length >= 12 && !GENERIC_LINK_TEXT.test(text) ? text : '';
+    const prev = byUrl.get(l.url);
+    if (!prev) byUrl.set(l.url, { url: l.url, title: good });
+    else if (!prev.title && good) prev.title = good;
+  }
+  return [...byUrl.values()]
+    .map(l => ({ url: l.url, title: l.title || titleFromSlug(l.url) }))
+    .filter(l => l.title);
+}
+
 async function scrapeSource(source) {
   try {
     const response = await safeGet(source.url, HTTP_CONFIG);
@@ -174,7 +198,7 @@ async function scrapeSource(source) {
     const articles = [];
 
     // First check if this is a single article or an index page
-    const articleLinks = extractArticleLinks($, source.url);
+    const articleLinks = cleanLinks(extractArticleLinks($, source.url));
 
     if (articleLinks.length > 0) {
       // It's an index page — scrape each article link

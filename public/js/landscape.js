@@ -86,8 +86,10 @@
 
   // ── Data ──
   async function load() {
-    if (state.loading) return;
+    // A newer request (day switch, sign-in) during a load runs right after it
+    if (state.loading) { state.pending = true; return; }
     state.loading = true;
+    state.pending = false;
     root.setAttribute('aria-busy', 'true');
     try {
       const r = await fetch(`/api/landscape?days=${state.days}`, { credentials: 'same-origin', headers: { Accept: 'application/json' } });
@@ -95,6 +97,7 @@
     } catch (_) { state.data = null; }
     state.loading = false;
     root.removeAttribute('aria-busy');
+    if (state.pending) { state.pending = false; return load(); }
     render();
   }
 
@@ -251,12 +254,19 @@
     const who = el('div', { class: 'lp-insp-col lp-insp-side' }, el('h5', null, 'Threat actors in these reports'));
     if (t.actors && t.actors.length) {
       who.append(el('div', { class: 'lp-chips' }, ...t.actors.map((a) =>
-        el('button', { type: 'button', class: 'lp-chip', onclick: () => filterFeed(a.name, a.name), title: `Filter the feed by ${a.name}` }, `${a.name} (${a.count})`))));
+        el('button', { type: 'button', class: 'lp-chip', onclick: () => filterFeed(actorTerm(a.name), a.name), title: `Filter the feed by ${a.name}` }, `${a.name} (${a.count})`))));
     } else who.append(el('p', { class: 'lp-muted' }, 'No named actor in these reports.'));
     who.append(el('p', { class: 'lp-note', style: { marginTop: '12px' } },
       'TTP = Tactic › Technique › Procedure. A procedure is the reported behaviour in the source’s own words.'));
     insp.append(el('div', { class: 'lp-insp-body' }, procs, who));
     panel.append(insp);
+  }
+
+  // Reports store the original spelling ("Fancy Bear"), the inspector shows the
+  // canonical name ("APT28"): search with the spelling the feed actually uses.
+  function actorTerm(name) {
+    const hit = state.data && Array.isArray(state.data.actors) && state.data.actors.find((x) => x.name === name);
+    return (hit && hit.term) || name;
   }
 
   // ── ATT&CK Navigator layer (v4.5) export ──

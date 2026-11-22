@@ -115,7 +115,9 @@ function detectThreatActors(text) {
 
 // ── MITRE ATT&CK technique / tactic IDs ──────────────────────
 function extractMitreIds(text) {
-  const matches = String(text || '').match(/\b(T[1-9]\d{3}(\.\d{3})?|TA00\d{2})\b/g);
+  // Enterprise ATT&CK IDs are T1xxx (and TA00xx tactics). "T8557" (a bug-tracker
+  // id) or "SPPA-T3000" (a product name) are not techniques.
+  const matches = String(text || '').match(/(?<![\w-])(T1\d{3}(\.\d{3})?|TA00\d{2})\b/g);
   if (!matches || matches.length === 0) return null;
   return [...new Set(matches.map(m => m.toUpperCase()))].join(',');
 }

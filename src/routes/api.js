@@ -686,7 +686,7 @@ router.get('/landscape', auth.requireAuth, (req, res) => {
     const hit = landscapeCache.get(key);
     if (hit && Date.now() - hit.at < GEO_TTL_MS) return res.json(hit.data);
     const since = new Date(Date.now() - days * 86400000).toISOString();
-    const data = landscape.buildLandscape(db.getGeoArticles(scope, since), days);
+    const data = landscape.buildLandscape(db.getGeoArticles(scope, since, 10000), days);
     if (landscapeCache.size > 500) landscapeCache.delete(landscapeCache.keys().next().value);
     landscapeCache.set(key, { at: Date.now(), data });
     res.json(data);
@@ -699,21 +699,32 @@ router.get('/landscape', auth.requireAuth, (req, res) => {
 // Analytics page: severity over time, KPIs vs previous period, categories,
 // top sources, top sources / techniques over time — caller's own reports.
 const analyticsCache = new Map();
+const analyticsInflight = new Map();
 router.get('/analytics', auth.requireAuth, async (req, res) => {
   try {
     const days = [1, 7, 14, 30].includes(parseInt(req.query.days, 10)) ? parseInt(req.query.days, 10) : 7;
-    const tz = Math.max(-840, Math.min(840, parseInt(req.query.tz, 10) || 0));
+    // Real offsets are multiples of 15 min; round to 30 so the cache can't be
+    // busted with hundreds of distinct tz values (each miss is a full rebuild).
+    const tz = Math.round(Math.max(-840, Math.min(840, parseInt(req.query.tz, 10) || 0)) / 30) * 30;
     const scope = readScope(req.user);
     const key = `${scope === null ? 'all' : scope}:${days}:${tz}`;
     const hit = analyticsCache.get(key);
     if (hit && Date.now() - hit.at < GEO_TTL_MS) return res.json(hit.data);
-    const since = new Date(Date.now() - 2 * days * 86400000).toISOString();
-    const rows = db.getGeoArticles(scope, since, 10000);
-    const sources = scope === null ? db.getAllSources() : scope === db.SYSTEM_SCOPE ? db.getSystemSources() : db.getSourcesForUser(scope);
-    const data = await analytics.buildAnalytics(rows, sources, { days, tz });
-    if (analyticsCache.size > 500) analyticsCache.delete(analyticsCache.keys().next().value);
-    analyticsCache.set(key, { at: Date.now(), data });
-    res.json(data);
+    // One build per key at a time; concurrent requests share it.
+    let p = analyticsInflight.get(key);
+    if (!p) {
+      p = (async () => {
+        const since = new Date(Date.now() - 2 * days * 86400000).toISOString();
+        const rows = db.getGeoArticles(scope, since, 10000);
+        const sources = scope === null ? db.getAllSources() : scope === db.SYSTEM_SCOPE ? db.getSystemSources() : db.getSourcesForUser(scope);
+        const data = await analytics.buildAnalytics(rows, sources, { days, tz });
+        if (analyticsCache.size > 500) analyticsCache.delete(analyticsCache.keys().next().value);
+        analyticsCache.set(key, { at: Date.now(), data });
+        return data;
+      })().finally(() => analyticsInflight.delete(key));
+      analyticsInflight.set(key, p);
+    }
+    res.json(await p);
   } catch (error) {
     console.error('[API] Analytics error:', error.message);
     res.status(500).json({ error: 'Failed to build analytics' });
@@ -1035,6 +1046,25 @@ router.get('/notifications/settings', auth.requireAuth, (req, res) => {
   }
 });
 
+// Alert emails go only to the account's own (verified) address — an arbitrary
+// address would let anyone use the server's sender to mail third parties and
+// burn the shared daily email quota. Admins may use any address.
+function alertEmailAllowed(user, email) {
+  if (!email) return false;
+  if (user && user.role === 'admin') return true;
+  return !!(user && user.email && String(email).toLowerCase() === String(user.email).toLowerCase());
+}
+const alertEmailDaily = new Map(); // userId -> { day, count }
+const ALERT_EMAILS_PER_DAY = 20;
+function consumeAlertEmail(userId) {
+  const day = new Date().toISOString().slice(0, 10);
+  const e = alertEmailDaily.get(userId);
+  if (!e || e.day !== day) { alertEmailDaily.set(userId, { day, count: 1 }); return true; }
+  if (e.count >= ALERT_EMAILS_PER_DAY) return false;
+  e.count++;
+  return true;
+}
+
 router.put('/notifications/settings', auth.requireAuth, denyGuest, (req, res) => {
   try {
     // Fields used to be stored unvalidated: arrays/objects -> 500, megabyte
@@ -1042,6 +1072,10 @@ router.put('/notifications/settings', auth.requireAuth, denyGuest, (req, res) =>
     // webhook URLs, unknown severity thresholds.
     const { error, clean } = validateNotificationSettings(req.body);
     if (error) return res.status(400).json({ success: false, error });
+    if (clean.email && !alertEmailAllowed(req.user, clean.email)) {
+      return res.status(400).json({ success: false,
+        error: 'Email alerts can only go to your account email address. To use a different one, change your account email first (user menu → Change Email).' });
+    }
     const result = db.updateNotificationSettings(clean, req.user.id);
     res.json(result);
   } catch (error) {
@@ -1071,6 +1105,7 @@ router.post('/notifications/test', auth.requireAuth, denyGuest, async (req, res)
 
     if (type === 'email') {
       if (!settings.email) return res.status(400).json({ error: 'No email address configured' });
+      if (!alertEmailAllowed(req.user, settings.email)) return res.status(400).json({ error: 'Email alerts can only go to your account email address.' });
       return res.json(await sendAlertEmail([testArticle], settings.email));
     } else if (type === 'telegram') {
       const { token, chatId } = telegramTarget(req.user, settings);
@@ -1397,6 +1432,14 @@ async function handleNotifications(newArticles) {
       const settings = db.getNotificationSettings(user.id);
       if (!settings) continue;
 
+      // Only fresh items: a newly added source's first fetch returns its whole
+      // backlog, which used to fire dozens of stale alerts at once.
+      const freshSince = Date.now() - 48 * 3600 * 1000;
+      userArticles = userArticles.filter(a => {
+        const t = Date.parse(a.published_date || '');
+        return Number.isNaN(t) || t >= freshSince;
+      });
+
       // Severity threshold filter
       const sevOrder = { critical: 4, high: 3, medium: 2, low: 1 };
       const threshold = sevOrder[settings.severity_threshold] || 2;
@@ -1445,8 +1488,14 @@ async function handleNotifications(newArticles) {
 
       // Email
       if (settings.email_enabled && settings.email) {
-        console.log(`[Notifications] ${user.username}: ${userArticles.length} via Email`);
-        logAll('email', settings.email, await sendAlertEmail(userArticles, settings.email));
+        if (!alertEmailAllowed(db.getUserById(user.id), settings.email)) {
+          console.log(`[Notifications] ${user.username}: alert email skipped (not the account address)`);
+        } else if (!consumeAlertEmail(user.id)) {
+          console.log(`[Notifications] ${user.username}: daily alert-email cap reached`);
+        } else {
+          console.log(`[Notifications] ${user.username}: ${userArticles.length} via Email`);
+          logAll('email', settings.email, await sendAlertEmail(userArticles.slice(0, 25), settings.email));
+        }
       }
     }
 

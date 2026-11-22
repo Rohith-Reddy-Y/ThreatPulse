@@ -285,3 +285,22 @@ test('a delete that fails part-way is rolled back', async () => {
   const n = db.getDb().prepare('SELECT COUNT(*) AS c FROM sources WHERE user_id = ?').get(target).c;
   assert.strictEqual(n, 1, 'their sources must not be half-deleted');
 });
+
+test('access tokens issued before a password reset stop working immediately', async () => {
+  createUser('stolen', PW, { email: 'stolen@example.test' });
+  const jar = await login('stolen', PW);
+  assert.strictEqual((await request('GET', '/api/articles', { cookies: jar })).status, 200);
+  const realNow = Date.now;
+  Date.now = () => realNow() + 2000;   // the reset happens after the token was issued
+  try {
+    const f = auth.forgotPassword('stolen@example.test');
+    assert.strictEqual((await auth.resetPassword(f._token, PW2)).success, true);
+    const r = await request('GET', '/api/articles', { cookies: { tp_access: jar.tp_access } });
+    assert.strictEqual(r.status, 401, 'old access token rejected');
+  } finally { Date.now = realNow; }
+});
+
+test('only real Enterprise ATT&CK IDs are extracted', () => {
+  const { extractMitreIds } = require('../src/enrich');
+  assert.strictEqual(extractMitreIds('GnuPG advisory (T8557), SPPA-T3000 flaws, uses T1059.001 and TA0002'), 'T1059.001,TA0002');
+});

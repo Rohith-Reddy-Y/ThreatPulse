@@ -101,7 +101,7 @@ function mint(payload, { secret = SECRET, header = { alg: 'HS256', typ: 'JWT' },
   const now = Math.floor(Date.now() / 1000);
   const hd = b64(header);
   // jti keeps every token unique, so a logout in one case can't blacklist another
-  const pl = b64({ iat: now, exp: now + expIn, jti: crypto.randomBytes(8).toString('hex'), ...payload });
+  const pl = b64({ iat: now, exp: now + expIn, jti: crypto.randomBytes(8).toString('hex'), iid: db.getInstanceId(), ...payload });
   const sig = hash ? crypto.createHmac(hash, secret).update(`${hd}.${pl}`).digest('base64url') : '';
   return `${hd}.${pl}.${sig}`;
 }
@@ -540,10 +540,13 @@ test('notification settings are per-user: B reads/writes only B\'s row, secrets 
   const gb = (await call('b', 'GET', '/api/notifications/settings')).body;
   assert.strictEqual(gb.user_id, ids.b);
   assert.ok(!JSON.stringify(gb).includes('AAAA-secret') && !JSON.stringify(gb).includes('BBBB-secret'));
-  const r = await call('b', 'PUT', '/api/notifications/settings', { email: 'b2@example.test', user_id: ids.a, id: 1 });
+  const bEmail = db.getUserById(ids.b).email;
+  const r = await call('b', 'PUT', '/api/notifications/settings', { email: bEmail, user_id: ids.a, id: 1 });
   assert.strictEqual(r.status, 200);
   assert.strictEqual(db.getNotificationSettings(ids.a).email, 'alerts-a@example.test', 'B overwrote A\'s settings');
-  assert.strictEqual(db.getNotificationSettings(ids.b).email, 'b2@example.test');
+  assert.strictEqual(db.getNotificationSettings(ids.b).email, bEmail);
+  // and B can't point alerts at someone else's address
+  assert.strictEqual((await call('b', 'PUT', '/api/notifications/settings', { email: 'victim@example.test' })).status, 400);
   // guest gets the shared guest row but can never write it
   assert.strictEqual((await call('guest', 'PUT', '/api/notifications/settings', { email: 'x@example.test' })).status, 403);
 });
@@ -817,8 +820,14 @@ test('method / route confusion: unregistered methods and look-alike paths do not
 });
 
 test('token tampering: claims in the token never override the database', async () => {
-  // payload says admin + another user's name; userId is what counts
-  const at = mint({ userId: ids.a, username: 'root_admin', role: 'admin' });
+  // a username that doesn't match the id's user is refused outright
+  const mismatch = mint({ userId: ids.a, username: 'root_admin', role: 'admin' });
+  assert.strictEqual((await dispatch('GET', '/api/auth/me', { cookies: { tp_access: mismatch } })).status, 401);
+  // a token from another (wiped) database instance is refused even if id/username match
+  const other = mint({ userId: ids.a, username: 'analyst_a', role: 'analyst', iid: 'previous-db' });
+  assert.strictEqual((await dispatch('GET', '/api/auth/me', { cookies: { tp_access: other } })).status, 401);
+  // role claim says admin; the DB role is what counts
+  const at = mint({ userId: ids.a, username: 'analyst_a', role: 'admin' });
   const me = await dispatch('GET', '/api/auth/me', { cookies: { tp_access: at } });
   assert.strictEqual(me.body.user.id, ids.a);
   assert.strictEqual(me.body.user.role, 'analyst');

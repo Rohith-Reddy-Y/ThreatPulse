@@ -41,7 +41,13 @@ app.use('/api', (req, res, next) => {
   // from CSRF — these are the endpoints that establish/give tokens
   const csrfExempt = ['/auth/login', '/auth/register', '/auth/forgot-password',
                       '/auth/reset-password', '/auth/refresh', '/auth/guest'];
-  if (csrfExempt.some(p => req.path === p)) return next();
+  if (csrfExempt.some(p => req.path === p)) {
+    // These can't use the double-submit token (no session yet), so refuse
+    // cross-site requests instead: blocks login CSRF / forced guest sessions.
+    const site = req.get('sec-fetch-site');
+    if (site === 'cross-site') return res.status(403).json({ success: false, error: 'Cross-site request blocked' });
+    return next();
+  }
   return csrfMiddleware(req, res, next);
 });
 

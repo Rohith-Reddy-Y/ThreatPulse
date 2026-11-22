@@ -127,6 +127,7 @@ function createToken(payload) {
   const now = Math.floor(Date.now() / 1000);
   const tokenPayload = {
     ...payload,
+    iid: db.getInstanceId(),
     iat: now,
     exp: now + ACCESS_TOKEN_EXPIRY
   };
@@ -262,9 +263,17 @@ function requireAuth(req, res, next) {
   }
 
   // Verify user still exists and is active
+  // Token from a previous database (wiped on restart) or for a user whose id was reused
+  if (payload.iid !== db.getInstanceId()) {
+    return res.status(401).json({ error: 'Session expired. Please sign in again.' });
+  }
   const user = db.getUserById(payload.userId);
-  if (!user || !user.is_active) {
+  if (!user || !user.is_active || (payload.username && payload.username !== user.username)) {
     return res.status(401).json({ error: 'Account disabled or not found' });
+  }
+  // Issued before the last password change -> no longer valid
+  if (user.password_changed_at && payload.iat < user.password_changed_at) {
+    return res.status(401).json({ error: 'Your password was changed. Please sign in again.' });
   }
 
   // A forced password change (first-run admin) must be done before anything else —
@@ -687,6 +696,8 @@ function forgotPassword(email) {
 
   const user = db.getUserByEmail(email);
   if (!user) return genericResponse;
+  // A link was sent in the last few minutes: don't send (or cancel) another one.
+  if (db.hasRecentResetToken(user.id, 5)) return genericResponse;
 
   const token = crypto.randomBytes(32).toString('hex');
   const expiresAt = sqliteDateTime(Date.now() + 60 * 60 * 1000);

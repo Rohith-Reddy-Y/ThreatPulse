@@ -224,7 +224,7 @@ test('PUT /notifications/settings: hostile values are a 400, never a 500', async
 
 test('PUT /notifications/settings: recipient lists, internal webhooks and bad enums are rejected', async () => {
   const env = load();
-  const u = makeUser(env.db);
+  const u = makeUser(env.db, { email: 'me@example.com' });
   const bad = [
     { email: 'me@example.com, victim1@example.org' },
     { email: 'me@example.com\r\nBcc: victim@example.org' },
@@ -264,7 +264,7 @@ test('PUT /notifications/settings: recipient lists, internal webhooks and bad en
 
 test('POST /notifications/test is rate-limited per user (no unbounded email/webhook sends)', async () => {
   const env = load();
-  const u = makeUser(env.db);
+  const u = makeUser(env.db, { email: 'a@example.com' });
   env.db.updateNotificationSettings({ email: 'a@example.com' }, u.id);
   const codes = [];
   for (let i = 0; i < 15; i++) {
@@ -273,7 +273,7 @@ test('POST /notifications/test is rate-limited per user (no unbounded email/webh
   assert.ok(codes.includes(429), `no throttle: ${codes.join(',')}`);
   assert.strictEqual(codes[0], 200);
   // another user is unaffected
-  const other = makeUser(env.db);
+  const other = makeUser(env.db, { email: 'b@example.com' });
   env.db.updateNotificationSettings({ email: 'b@example.com' }, other.id);
   assert.strictEqual((await call(env, 'POST', '/notifications/test', { user: other, body: { type: 'email' } })).statusCode, 200);
 });

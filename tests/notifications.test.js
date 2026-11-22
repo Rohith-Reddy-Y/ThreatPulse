@@ -64,9 +64,9 @@ test('articles from system sources (user_id NULL on a fresh DB) alert the admin'
 test('no SMTP configured: email alerts are logged as failed and nothing throws', async () => {
   const env = load();
   const { db } = env;
-  const u = makeUser(db);
+  const u = makeUser(db, { email: 'u@example.com' });
   db.updateNotificationSettings({ email_enabled: 1, email: 'u@example.com', severity_threshold: 'low' }, u.id);
-  const a = insert(db, art({ user_id: u.id, severity: 'high' }));
+  const a = insert(db, art({ user_id: u.id, severity: 'high', published_date: new Date().toISOString() }));
   await env.api.handleNotifications([a]);
   const log = db.getDb().prepare('SELECT * FROM notification_log').get();
   assert.strictEqual(log.status, 'failed');
@@ -110,4 +110,21 @@ test('telegram message escapes source/author/cve/url (Bot API HTML rules)', asyn
   assert.ok(text.includes('MITRE ATT&amp;CK Blog'), text);
   assert.ok(text.includes('A &lt;b'));
   assert.ok(text.includes('href="https://x.example/?a=1&amp;b=&quot;2&quot;"'));
+});
+
+test('alerts skip stale backlog items and never email an address other than the account email', async () => {
+  const env = load();
+  const { db } = env;
+  const u = makeUser(db, { email: 'own@example.com' });
+  db.updateNotificationSettings({ email_enabled: 1, email: 'own@example.com', severity_threshold: 'low' }, u.id);
+  const old = insert(db, art({ user_id: u.id, severity: 'high', published_date: new Date(Date.now() - 10 * 86400000).toISOString() }));
+  db.getDb().prepare('DELETE FROM notification_log').run();
+  await env.api.handleNotifications([old]);
+  assert.strictEqual(db.getDb().prepare('SELECT COUNT(*) c FROM notification_log').get().c, 0, 'stale item: no alert');
+
+  // An address that isn't the account's (e.g. stored before this rule) is skipped at send time
+  db.updateNotificationSettings({ email_enabled: 1, email: 'victim@example.org', severity_threshold: 'low' }, u.id);
+  const fresh = insert(db, art({ user_id: u.id, severity: 'high', published_date: new Date().toISOString() }));
+  await env.api.handleNotifications([fresh]);
+  assert.strictEqual(db.getDb().prepare("SELECT COUNT(*) c FROM notification_log WHERE recipient = 'victim@example.org'").get().c, 0);
 });

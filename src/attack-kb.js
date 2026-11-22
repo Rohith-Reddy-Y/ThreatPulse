@@ -21,6 +21,8 @@ const TACTICS = [
 // several tactics are listed under the one they are most often reported for.
 // Descriptions are short summaries; the MITRE page is the authoritative source.
 const TECHNIQUES = {
+  T1620: { name: 'Reflective Code Loading', tactic: 'TA0005', desc: 'Loading code straight into a process\'s memory to avoid writing it to disk.' },
+  T1665: { name: 'Hide Infrastructure', tactic: 'TA0011', desc: 'Masking or filtering command-and-control infrastructure to avoid detection and takedown.' },
   T1595: { name: 'Active Scanning', tactic: 'TA0043', desc: 'Probing victim infrastructure (ports, services, vulnerabilities) to find targets.' },
   T1592: { name: 'Gather Victim Host Information', tactic: 'TA0043', desc: 'Collecting details about victim hosts such as software, configuration and hardware.' },
   T1589: { name: 'Gather Victim Identity Information', tactic: 'TA0043', desc: 'Collecting names, emails and credentials of people at the target.' },
@@ -215,7 +217,7 @@ function analyzeTtps(article) {
   const seen = new Set();
   for (const raw of String(article.mitre_ids || '').split(',')) {
     const sub = raw.trim().toUpperCase();
-    if (!/^T\d{4}(\.\d{3})?$/.test(sub)) continue;
+    if (!/^T1\d{3}(\.\d{3})?$/.test(sub)) continue;   // real Enterprise IDs only (stored rows may hold older false hits)
     const id = techniqueBase(sub);
     if (seen.has(id)) continue;
     seen.add(id);

@@ -44,8 +44,9 @@ const ts = (v) => { const t = Date.parse(v); return Number.isFinite(t) ? t : NaN
  */
 async function buildAnalytics(rows, sources, { days, tz, now = Date.now() }) {
   const B = bucketer(days, tz, now);
-  const windowStart = now - days * 86400000;
-  const prevStart = now - 2 * days * 86400000;
+  // KPI window = exactly the charted buckets, so headline numbers match the charts
+  const windowStart = Date.parse(B.starts[0]);
+  const prevStart = windowStart - (now - windowStart);
 
   const sev = Object.fromEntries(SEVERITIES.map((s) => [s, zeros(B.n)]));
   const total = zeros(B.n);

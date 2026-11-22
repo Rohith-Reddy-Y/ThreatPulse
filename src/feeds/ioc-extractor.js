@@ -9,8 +9,25 @@
  * @param {string} text - Article title + description
  * @returns {{ ips: string[], domains: string[], hashes: {md5:string[],sha1:string[],sha256:string[]}, emails: string[] }}
  */
+const MAX_SCAN = 8000;
+// Anchored, per-token domain check. The old unanchored /\b(?:label\.)+tld\b/g
+// backtracked quadratically on long dotted runs ("1.1.1.1…" with no letter TLD)
+// and a single crafted feed title could block the event loop for minutes.
+const DOMAIN_TOKEN_RE = /^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
+function domainCandidates(text) {
+  const out = [];
+  for (let tok of text.split(/[\s\/\\:@<>()\[\]{}"'`,;|!?*=&#%+~^$]+/)) {
+    tok = tok.replace(/^[.\-_]+|[.\-_]+$/g, '');
+    if (tok.length < 4 || tok.length > 253 || tok.indexOf('.') === -1) continue;
+    if (DOMAIN_TOKEN_RE.test(tok)) out.push(tok);
+  }
+  return out;
+}
+
 function extractIOCs(text) {
   if (!text) return { ips: [], domains: [], hashes: { md5: [], sha1: [], sha256: [] }, emails: [] };
+  // Feed text is attacker-controlled: bound the work per article.
+  text = String(text).slice(0, MAX_SCAN);
 
   const results = {
     ips: [],
@@ -58,8 +75,7 @@ function extractIOCs(text) {
   }))];
 
   // ── Domains (no IPs, no TLD-only) ──
-  const domainRe = /\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}\b/g;
-  const domainMatches = text.match(domainRe) || [];
+  const domainMatches = domainCandidates(text);
   results.domains = [...new Set(domainMatches.filter(d => {
     // Exclude IPs, common false positives, very short domains
     if (/^\d+\.\d+\.\d+\.\d+$/.test(d)) return false;
@@ -85,7 +101,7 @@ function extractIOCs(text) {
   results.hashes.sha256 = results.hashes.sha256.filter(h => !/^[0-9]+$/.test(h) && !/^0+$/.test(h));
 
   // ── Emails (limited) ──
-  const emailRe = /\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b/g;
+  const emailRe = /\b[a-zA-Z0-9._%+-]{1,64}@[a-zA-Z0-9.-]{1,253}\.[a-zA-Z]{2,24}\b/g;
   results.emails = [...new Set(text.match(emailRe) || [])].slice(0, 10);
 
   return results;

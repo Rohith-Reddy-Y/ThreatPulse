@@ -269,19 +269,24 @@
     if (link) m.append(' ', el('a', { href: '/' }, link));
     m.classList.remove('hidden');
   }
+  let loadSeq = 0;
   async function load() {
     const main = $('#an-main');
     main.setAttribute('aria-busy', 'true');
+    const seq = ++loadSeq;   // only the latest range click may update the page
     try {
       const r = await get(`/api/analytics?days=${state.days}&tz=${tz}`);
+      if (seq !== loadSeq) return;
       if (r.status === 401) { message('Your session has ended.', 'Open the dashboard to sign in or browse as a guest, then come back.'); return; }
       if (!r.ok) { message('Analytics are unavailable right now. Try again in a minute.'); return; }
-      state.data = await r.json();
+      const data = await r.json();
+      if (seq !== loadSeq) return;
+      state.data = data;
       $('#an-message').classList.add('hidden');
       render();
     } catch (_) {
       message('Could not reach the server.');
-    } finally { main.removeAttribute('aria-busy'); }
+    } finally { if (seq === loadSeq) main.removeAttribute('aria-busy'); }
   }
   async function scope() {
     try {

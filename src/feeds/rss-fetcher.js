@@ -423,12 +423,14 @@ function articleCategory(source, detected) {
   return AUTO_CATEGORIES.has(c) ? detected : c;
 }
 
+// Feeds are untrusted: cap items per fetch and field sizes before any processing.
+const MAX_ITEMS_PER_FETCH = 200;
 function itemsToArticles(items, source) {
   const articles = [];
-  for (const item of items) {
+  for (const item of (items || []).slice(0, MAX_ITEMS_PER_FETCH)) {
     if (!item) continue;
-    const title = textOf(item.title).trim() || 'Untitled';
-    const description = stripHtml(textOf(item.contentSnippet || item.content || item.contentEncoded || item.summary || ''));
+    const title = textOf(item.title).trim().slice(0, 500) || 'Untitled';
+    const description = stripHtml(textOf(item.contentSnippet || item.content || item.contentEncoded || item.summary || '').slice(0, 20000)).slice(0, 5000);
     const category = detectCategory(title, description);
 
     articles.push({
@@ -439,7 +441,7 @@ function itemsToArticles(items, source) {
       source_type: 'rss',
       source_id: source.id,
       user_id: source.user_id || null,
-      author: textOf(item.creator || item.author || item['dc:creator']) || null,
+      author: textOf(item.creator || item.author || item['dc:creator']).slice(0, 200) || null,
       published_date: item.isoDate || item.pubDate || item.dcDate || new Date().toISOString(),
       category: articleCategory(source, category),
       severity: detectSeverity(title, description, category),

@@ -112,7 +112,7 @@ test('sources: invalid / private URLs rejected on create', async () => {
 
 test('notification settings are per-user and secrets are masked', async () => {
   const env = load();
-  const u1 = makeUser(env.db), u2 = makeUser(env.db);
+  const u1 = makeUser(env.db, { email: 'u1@example.com' }), u2 = makeUser(env.db);
   await call(env, 'PUT', '/notifications/settings', { user: u1, body: { email: 'u1@example.com', telegram_bot_token: '123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ', email_enabled: 1 } });
   const s2 = await call(env, 'GET', '/notifications/settings', { user: u2 });
   assert.strictEqual(s2.body.email, undefined);
@@ -126,7 +126,7 @@ test('notification settings are per-user and secrets are masked', async () => {
 
 test('notification settings accept JSON booleans for *_enabled', async () => {
   const env = load();
-  const u = makeUser(env.db);
+  const u = makeUser(env.db, { email: 'a@example.com' });
   const res = await call(env, 'PUT', '/notifications/settings', { user: u, body: { email: 'a@example.com', email_enabled: true, telegram_enabled: false } });
   assert.strictEqual(res.statusCode, 200);
   assert.strictEqual(env.db.getNotificationSettings(u.id).email_enabled, 1);
@@ -134,7 +134,7 @@ test('notification settings accept JSON booleans for *_enabled', async () => {
 
 test('notification test: no SMTP / Telegram configured -> clean error, no throw', async () => {
   const env = load();
-  const u = makeUser(env.db);
+  const u = makeUser(env.db, { email: 'a@example.com' });
   env.db.createUserNotificationSettings(u.id);
   env.db.updateNotificationSettings({ email: 'a@example.com' }, u.id);
   const e = await call(env, 'POST', '/notifications/test', { user: u, body: { type: 'email' } });
@@ -148,7 +148,7 @@ test('notification test: no SMTP / Telegram configured -> clean error, no throw'
 
 test('notification test: Teams webhook pointing at an internal address is not requested (SSRF)', async () => {
   const env = load();
-  const u = makeUser(env.db);
+  const u = makeUser(env.db, { email: 'a@example.com' });
   env.db.updateNotificationSettings({ teams_webhook: 'http://169.254.169.254/latest/meta-data/' }, u.id);
   axios.calls.length = 0;
   const res = await call(env, 'POST', '/notifications/test', { user: u, body: { type: 'teams' } });

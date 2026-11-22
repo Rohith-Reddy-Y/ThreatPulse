@@ -97,7 +97,9 @@
 
   function relativeTime(dateStr) {
     if (!dateStr) return 'Never';
-    const diff = Math.floor((Date.now() - new Date(dateStr)) / 1000);
+    // SQLite datetime('now') strings have no zone but are UTC
+    const when = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(dateStr) ? new Date(dateStr.replace(' ', 'T') + 'Z') : new Date(dateStr);
+    const diff = Math.floor((Date.now() - when) / 1000);
     if (diff < 60) return 'Just now';
     if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
     if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
@@ -434,7 +436,11 @@
     const btn = $('#ai-save-btn');
     btn.disabled = true; btn.textContent = 'Saving...';
     try {
-      const result = await api('PUT', d('L2FwaS9hZG1pbi9haS1zZXR0aW5ncw=='), { groq_api_key: groq, tavily_api_key: tavily });
+      // Only send fields that were filled in: a blank box means "keep", not "delete"
+      const body = {};
+      if (groq.trim()) body.groq_api_key = groq.trim();
+      if (tavily.trim()) body.tavily_api_key = tavily.trim();
+      const result = await api('PUT', d('L2FwaS9hZG1pbi9haS1zZXR0aW5ncw=='), body);
       if (result && result.success) {
         $('#ai-groq-key').value = '';
         $('#ai-tavily-key').value = '';

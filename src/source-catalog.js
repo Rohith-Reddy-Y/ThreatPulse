@@ -23,7 +23,9 @@ function canonicalUrl(raw) {
   try { u = new URL(raw.trim()); } catch { return raw.trim().toLowerCase(); }
   const host = u.hostname.toLowerCase().replace(/^www\./, '').replace(/\.$/, '');
   const port = u.port && !['80', '443'].includes(u.port) ? `:${u.port}` : '';
-  let path = decodeURI(u.pathname).replace(/\/{2,}/g, '/').replace(/\/+$/, '');
+  let decoded;
+  try { decoded = decodeURI(u.pathname); } catch { decoded = u.pathname; } // malformed %-escapes
+  let path = decoded.replace(/\/{2,}/g, '/').replace(/\/+$/, '');
   if (/\/index\.(html?|php|xml)$/i.test(path)) path = path.replace(/\/index\.(html?|php|xml)$/i, '');
   const params = [...u.searchParams.entries()]
     .filter(([k]) => !TRACKING_PARAMS.test(k))
