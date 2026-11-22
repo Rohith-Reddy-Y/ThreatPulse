@@ -4248,3 +4248,56 @@ body.guest-mode .guest-hidden { display: none !important; }
   outline: 2px solid var(--cyan);
   outline-offset: 2px;
 }
+
+
+/* ═══════════════════ 3D THREAT GLOBE (decorative WebGL) ═══════════════════ */
+.globe3d { display: block; opacity: 0; transition: opacity 1.4s var(--ease-out, ease-out); }
+.globe3d.ready { opacity: 1; }
+.globe3d.globe3d-off { display: none; }
+
+/* Sign-in: full-bleed globe behind the card */
+.globe3d-auth { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 0; touch-action: none; cursor: grab; }
+.globe3d-auth.dragging { cursor: grabbing; }
+#auth-overlay > .auth-card { z-index: 1; }
+@media (max-width: 900px) { .globe3d-auth.ready { opacity: 0.55; } }
+
+/* Sidebar card */
+.globe-card { overflow: hidden; }
+.globe-card .sidebar-title { margin-bottom: 12px; }
+.globe-badge {
+  margin-left: auto; font-size: 9.5px; font-weight: 800; letter-spacing: 1.2px;
+  padding: 2px 7px; border-radius: 999px; color: #0a0b12;
+  background: linear-gradient(135deg, #7c5cff, #22d3ee);
+  box-shadow: 0 0 12px rgba(34, 211, 238, 0.35);
+}
+.globe-stage {
+  position: relative; height: 260px; margin: 0 -2px; border-radius: 14px; overflow: hidden;
+  background:
+    radial-gradient(ellipse 60% 55% at 50% 48%, rgba(124, 92, 255, 0.16), transparent 70%),
+    radial-gradient(ellipse 80% 40% at 50% 110%, rgba(34, 211, 238, 0.12), transparent 70%),
+    #05070f;
+  border: 1px solid rgba(124, 92, 255, 0.18);
+  box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.6);
+}
+.globe-stage::after { /* subtle scanlines for a HUD feel */
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.018) 0 1px, transparent 1px 3px);
+}
+.globe-stage canvas { width: 100%; height: 100%; cursor: grab; touch-action: pan-y; }
+.globe-stage canvas.dragging { cursor: grabbing; }
+.globe-hud {
+  position: absolute; left: 10px; bottom: 8px; z-index: 1; pointer-events: none;
+  display: inline-flex; align-items: center; gap: 6px;
+  font: 600 9.5px/1 var(--font-mono, 'JetBrains Mono', monospace); letter-spacing: 0.4px;
+  color: rgba(200, 210, 240, 0.6);
+}
+.globe-hud-dot { width: 6px; height: 6px; border-radius: 50%; background: #22d3ee; box-shadow: 0 0 8px #22d3ee; animation: globePing 2s ease-in-out infinite; }
+@keyframes globePing { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+.globe-legend { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 10px; font-size: 10.5px; color: var(--text-muted); }
+.globe-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.globe-legend i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.globe-legend .sev-critical { background: #ff4d6d; box-shadow: 0 0 6px #ff4d6d; }
+.globe-legend .sev-high { background: #ffb020; box-shadow: 0 0 6px #ffb020; }
+.globe-legend .sev-medium { background: #22d3ee; box-shadow: 0 0 6px #22d3ee; }
+.globe-legend .sev-low { background: #8c6bff; box-shadow: 0 0 6px #8c6bff; }
+@media (prefers-reduced-motion: reduce) { .globe-hud-dot { animation: none; } }
