@@ -381,9 +381,12 @@ a.lp-col-name:hover { color: var(--text-accent); text-decoration: underline; }
 @media (max-width: 900px) { .lp-insp-body { grid-template-columns: 1fr; } .lp-actions { margin-left: 0; } }
 
 /* Dashboard header link to this page */
+.header-nav { display: flex; gap: 4px; margin-left: 14px; }
 .header-nav-link {
   padding: 6px 12px; border-radius: var(--radius-md); font-size: 13px; font-weight: 500;
-  color: var(--text-secondary); text-decoration: none; border: 1px solid var(--border-subtle);
+  color: var(--text-secondary); text-decoration: none; white-space: nowrap;
 }
-.header-nav-link:hover { color: var(--text-primary); border-color: var(--border-light); }
+.header-nav-link:hover { color: var(--text-primary); background: var(--bg-card-hover); }
+.header-nav-link.active { color: var(--text-primary); background: var(--cyan-dim); }
+@media (max-width: 1280px) { .header-tagline { display: none; } }
 
