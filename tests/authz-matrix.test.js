@@ -301,6 +301,7 @@ const ROUTES = {
   'GET /api/articles': { policy: 'auth', allow: [200] },
   'GET /api/articles/stats': { policy: 'auth', allow: [200] },
   'GET /api/geo': { policy: 'auth', allow: [200] },
+  'GET /api/landscape': { policy: 'auth', allow: [200] },
   'GET /api/search': { policy: 'auth', allow: [200], query: '?q=quokka' },
   'POST /api/articles/:id/review': { policy: 'member', allow: [200], params: ownArticle },
   'PUT /api/articles/:id/review': { policy: 'member', allow: [200], params: ownArticle, body: () => ({ notes: 'n' }) },

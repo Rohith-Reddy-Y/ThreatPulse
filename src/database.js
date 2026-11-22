@@ -909,7 +909,8 @@ function getGeoArticles(userId, sinceIso, limit = 4000) {
   else if (userId) { where.push('articles.user_id = ?'); params.push(userId); }
   params.push(Math.max(1, Math.min(10000, limit | 0)));
   return getDb().prepare(
-    `SELECT id, title, substr(description, 1, 1500) AS description, severity, threat_actors
+    `SELECT id, title, substr(description, 1, 1500) AS description, severity, threat_actors,
+            mitre_ids, sector, cve_id, has_poc, is_patched, tags, published_date
        FROM articles WHERE ${where.join(' AND ')}
       ORDER BY published_date DESC LIMIT ?`
   ).all(...params);
@@ -962,9 +963,9 @@ function getArticles({ page = 1, limit = 50, category, severity, search, source_
     params.push(parseInt(is_patched, 10));
   }
   if (search) {
-    where.push("(articles.title LIKE ? ESCAPE '\\' OR articles.description LIKE ? ESCAPE '\\' OR articles.cve_id LIKE ? ESCAPE '\\' OR articles.author LIKE ? ESCAPE '\\' OR articles.tags LIKE ? ESCAPE '\\' OR articles.threat_actors LIKE ? ESCAPE '\\')");
+    where.push("(articles.title LIKE ? ESCAPE '\\' OR articles.description LIKE ? ESCAPE '\\' OR articles.cve_id LIKE ? ESCAPE '\\' OR articles.author LIKE ? ESCAPE '\\' OR articles.tags LIKE ? ESCAPE '\\' OR articles.threat_actors LIKE ? ESCAPE '\\' OR articles.mitre_ids LIKE ? ESCAPE '\\' OR articles.sector LIKE ? ESCAPE '\\')");
     const term = likeContains(search);
-    params.push(term, term, term, term, term, term);
+    params.push(term, term, term, term, term, term, term, term);
   }
   if (startDate) {
     where.push('articles.published_date >= ?');

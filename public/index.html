@@ -8,6 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/css/styles.css">
+  <link rel="stylesheet" href="/css/enterprise.css">
   <link rel="icon" id="dynamic-favicon" href="">
 
 
@@ -38,7 +39,6 @@
 
   <!-- ═══════════════════ LOGIN OVERLAY ═══════════════════ -->
   <div id="auth-overlay" class="auth-overlay">
-    <canvas class="globe3d globe3d-auth" data-globe="auth" aria-hidden="true"></canvas>
     <div class="auth-card">
       <div class="auth-logo">
         <span class="logo-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg></span>
@@ -286,6 +286,35 @@
     </div>
   </section>
 
+  <!-- ═══════════════════ THREAT LANDSCAPE ═══════════════════ -->
+  <section class="landscape" id="landscape" aria-labelledby="landscape-title">
+    <div class="landscape-head">
+      <div class="landscape-titles">
+        <h3 class="chart-title" id="landscape-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+          Threat Landscape
+        </h3>
+        <p class="landscape-sub" id="landscape-sub">Loading…</p>
+      </div>
+      <div class="chart-time-pills" role="group" aria-label="Landscape time range">
+        <button type="button" class="pill" data-landscape-days="1">24h</button>
+        <button type="button" class="pill active" data-landscape-days="7">7d</button>
+        <button type="button" class="pill" data-landscape-days="30">30d</button>
+      </div>
+    </div>
+    <div class="landscape-tabs" role="tablist" aria-label="Threat landscape views">
+      <button type="button" role="tab" id="lt-attack" aria-controls="lp-attack" data-landscape-tab="attack">ATT&amp;CK techniques <span class="lt-count" id="lt-count-attack"></span></button>
+      <button type="button" role="tab" id="lt-actors" aria-controls="lp-actors" data-landscape-tab="actors">Threat actors <span class="lt-count" id="lt-count-actors"></span></button>
+      <button type="button" role="tab" id="lt-cves" aria-controls="lp-cves" data-landscape-tab="cves">Vulnerabilities <span class="lt-count" id="lt-count-cves"></span></button>
+      <button type="button" role="tab" id="lt-targeting" aria-controls="lp-targeting" data-landscape-tab="targeting">Targeting <span class="lt-count" id="lt-count-targeting"></span></button>
+    </div>
+    <div class="landscape-panel" role="tabpanel" id="lp-attack" aria-labelledby="lt-attack"></div>
+    <div class="landscape-panel hidden" role="tabpanel" id="lp-actors" aria-labelledby="lt-actors"></div>
+    <div class="landscape-panel hidden" role="tabpanel" id="lp-cves" aria-labelledby="lt-cves"></div>
+    <div class="landscape-panel hidden" role="tabpanel" id="lp-targeting" aria-labelledby="lt-targeting"></div>
+    <div class="sr-only" id="landscape-live" aria-live="polite"></div>
+  </section>
+
   <!-- ═══════════════════ FILTER / SEARCH BAR ═══════════════════ -->
   <section class="filter-bar">
     <div class="search-box">
@@ -524,33 +553,6 @@
 
     <!-- ─────── SIDEBAR ─────── -->
     <aside class="sidebar" id="sidebar">
-      <div class="sidebar-card globe-card">
-        <h3 class="sidebar-title">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
-          Global Threat Pulse
-          <span class="globe-badge">3D</span>
-        </h3>
-        <div class="globe-stage">
-          <canvas class="globe3d" data-globe="card" role="img" aria-label="3D globe of countries named in your threat feed, with attributed origin-to-target paths"></canvas>
-          <div class="globe-hud" aria-hidden="true"><span class="globe-hud-dot"></span><span class="globe-hud-text">Loading threat geography…</span></div>
-        </div>
-        <div class="globe-meta">
-          <div class="globe-range" role="group" aria-label="Time range">
-            <button type="button" data-globe-days="1">24h</button>
-            <button type="button" data-globe-days="7" class="active">7d</button>
-            <button type="button" data-globe-days="30">30d</button>
-          </div>
-          <span class="globe-summary">Loading…</span>
-        </div>
-        <ol class="globe-top" aria-label="Most-named countries in your feed"></ol>
-        <div class="globe-legend" aria-hidden="true">
-          <span><i class="sev-critical"></i>Critical</span>
-          <span><i class="sev-high"></i>High</span>
-          <span><i class="sev-medium"></i>Medium</span>
-          <span><i class="sev-low"></i>Low</span>
-          <span class="globe-legend-note">Beacon = country named in your reports · arc = attributed actor origin → named target</span>
-        </div>
-      </div>
       <div class="sidebar-card guest-hidden">
         <h3 class="sidebar-title">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
@@ -852,7 +854,7 @@
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M12 3l1.9 5.8L20 10.7l-6.1 1.9L12 18.4l-1.9-5.8L4 10.7l6.1-1.9z"/></svg>
   </button>
 
-  <script src="/js/globe3d.js" defer></script>
   <script src="/js/app.js"></script>
+  <script src="/js/landscape.js" defer></script>
 </body>
 </html>

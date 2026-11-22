@@ -10,6 +10,7 @@ const auth = require('../auth');
 const security = require('../security');
 const crypto = require('crypto');
 const geo = require('../geo');
+const landscape = require('../landscape');
 const sourceCatalog = require('../source-catalog');
 const {
   sendAlertEmail, sendVerificationEmail, isEmailConfigured, describeEmail,
@@ -677,6 +678,27 @@ router.get('/geo', auth.requireAuth, (req, res) => {
   } catch (error) {
     console.error('[API] Geo error:', error.message);
     res.status(500).json({ error: 'Failed to build threat geography' });
+  }
+});
+
+// Threat Landscape: ATT&CK techniques (explicit vs inferred), threat actors,
+// vulnerabilities, sectors and countries — from the caller's own articles.
+const landscapeCache = new Map();
+router.get('/landscape', auth.requireAuth, (req, res) => {
+  try {
+    const days = [1, 7, 30].includes(parseInt(req.query.days, 10)) ? parseInt(req.query.days, 10) : 7;
+    const scope = readScope(req.user);
+    const key = `${scope === null ? 'all' : scope}:${days}`;
+    const hit = landscapeCache.get(key);
+    if (hit && Date.now() - hit.at < GEO_TTL_MS) return res.json(hit.data);
+    const since = new Date(Date.now() - days * 86400000).toISOString();
+    const data = landscape.buildLandscape(db.getGeoArticles(scope, since), days);
+    if (landscapeCache.size > 500) landscapeCache.delete(landscapeCache.keys().next().value);
+    landscapeCache.set(key, { at: Date.now(), data });
+    res.json(data);
+  } catch (error) {
+    console.error('[API] Landscape error:', error.message);
+    res.status(500).json({ error: 'Failed to build threat landscape' });
   }
 });
 

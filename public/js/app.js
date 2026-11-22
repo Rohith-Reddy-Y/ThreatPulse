@@ -592,12 +592,13 @@
       grid: isLight ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.04)',
       axisLabel: isLight ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.35)',
       xLabel: isLight ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.42)',
-      dotFill: isLight ? '#f6f8fd' : '#0d0f1a',
-      areaTop: isLight ? 'rgba(8,145,178,0.25)' : 'rgba(34,211,238,0.28)',
-      areaMid: isLight ? 'rgba(109,75,255,0.1)' : 'rgba(124,92,255,0.12)',
-      areaBot: isLight ? 'rgba(109,75,255,0.02)' : 'rgba(124,92,255,0.02)',
-      line: isLight ? '#0891b2' : '#22d3ee',
-      glow: isLight ? 'rgba(8,145,178,0.4)' : 'rgba(34,211,238,0.6)'
+      dotFill: isLight ? '#ffffff' : '#1a1a19',
+      // One series, one hue: 2px line + ~10% area wash, no glow
+      areaTop: isLight ? 'rgba(42,120,214,0.14)' : 'rgba(57,135,229,0.16)',
+      areaMid: isLight ? 'rgba(42,120,214,0.08)' : 'rgba(57,135,229,0.08)',
+      areaBot: isLight ? 'rgba(42,120,214,0.01)' : 'rgba(57,135,229,0.01)',
+      line: isLight ? '#2a78d6' : '#3987e5',
+      glow: 'rgba(0,0,0,0)'
     };
   }
 
