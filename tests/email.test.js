@@ -137,33 +137,52 @@ test('forgot password emails a one-time reset link built from BASE_URL; unknown 
   });
 });
 
-test('password change: code by email, then a "password changed" notice; forced first change sends only the notice', async () => {
+test('password change: a one-time link by email, the link sets the new password, then a "password changed" notice', async () => {
   createUser('changer', PW, { email: 'changer@example.test' });
-  let jar = await h.login('changer', PW, ip());
+  const jar = await h.login('changer', PW, ip());
   await withBrevo(async (sent) => {
-    const start = await request('PUT', '/api/auth/password', { cookies: jar, headers: csrf(jar), body: { currentPassword: PW, newPassword: PW2 } });
-    assert.strictEqual(start.body.verificationRequired, true, JSON.stringify(start.body));
+    const start = await request('POST', '/api/auth/password/request-link', { cookies: jar, headers: csrf(jar), body: {} });
+    assert.strictEqual(start.body.success, true, JSON.stringify(start.body));
+    assert.strictEqual(start.body.email, 'ch***r@example.test', 'address is masked in the response');
     assert.strictEqual(sent.length, 1);
-    const code = sent[0].body.subject.match(/^(\d{6}) is your ThreatPulse password change code$/);
-    assert.ok(code, sent[0].body.subject);
-    assert.ok(sent[0].body.htmlContent.includes(code[1]));
-    const done = await request('POST', '/api/auth/verify-change', { cookies: jar, headers: csrf(jar), body: { type: 'password_change', code: code[1] } });
+    assert.deepStrictEqual(sent[0].body.to, [{ email: 'changer@example.test' }]);
+    assert.match(sent[0].body.subject, /Confirm your ThreatPulse password change/);
+    const link = sent[0].body.htmlContent.match(/\?reset=([0-9a-f]{64})/);
+    assert.ok(link, 'email carries the link');
+    assert.ok(!JSON.stringify(start.body).includes(link[1]), 'token never in the HTTP response');
+
+    // The old in-app route can no longer change the password directly: it just sends a link too
+    const legacy = await request('PUT', '/api/auth/password', { cookies: jar, headers: csrf(jar), body: { currentPassword: PW, newPassword: PW2 } });
+    assert.strictEqual(legacy.body.emailSent, true);
+    const newest = sent[1].body.htmlContent.match(/\?reset=([0-9a-f]{64})/)[1];
+
+    // An older link is invalidated by a newer one
+    const stale = await request('POST', '/api/auth/reset-password', { ip: ip(), body: { token: link[1], newPassword: PW2 } });
+    assert.strictEqual(stale.body.success, false);
+
+    const done = await request('POST', '/api/auth/reset-password', { ip: ip(), body: { token: newest, newPassword: PW2 } });
     await settle();
     assert.strictEqual(done.body.success, true, JSON.stringify(done.body));
-    assert.strictEqual(sent.length, 2);
-    assert.match(sent[1].body.subject, /password was changed/);
-    assert.deepStrictEqual(sent[1].body.to, [{ email: 'changer@example.test' }]);
+    assert.match(sent[sent.length - 1].body.subject, /password was changed/);
+    const again = await request('POST', '/api/auth/reset-password', { ip: ip(), body: { token: newest, newPassword: 'Passw0rdC' } });
+    assert.strictEqual(again.body.success, false, 'single use');
   });
 
-  createUser('firsttimer', PW, { email: 'first@example.test', mustChange: true });
-  jar = await h.login('firsttimer', PW, ip());
+  // No email on the account -> clear message, nothing sent
+  const noId = createUser('noemail', PW);
+  db.getDb().prepare('UPDATE users SET email = NULL WHERE id = ?').run(noId);
+  const jar2 = await h.login('noemail', PW, ip());
   await withBrevo(async (sent) => {
-    const r = await request('PUT', '/api/auth/password', { cookies: jar, headers: csrf(jar), body: { currentPassword: PW, newPassword: PW2 } });
-    await settle();
-    assert.strictEqual(r.body.verificationRequired, false);
-    assert.strictEqual(sent.length, 1);
-    assert.match(sent[0].body.htmlContent, /during first sign-in/);
+    const r = await request('POST', '/api/auth/password/request-link', { cookies: jar2, headers: csrf(jar2), body: {} });
+    assert.strictEqual(r.status, 400);
+    assert.strictEqual(r.body.needsEmail, true);
+    assert.strictEqual(sent.length, 0);
   });
+});
+
+test('first-run admin is never forced to change the password (no loop on ephemeral hosting)', () => {
+  const admin = db.getUserByUsername('admin');
+  if (admin) assert.strictEqual(admin.must_change_password, 0);
 });
 
 test('email change: code to the new address, then confirmation to the new one and a warning to the old one', async () => {

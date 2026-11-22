@@ -39,64 +39,38 @@ async function signIn(b, username, password) {
 }
 
 // ---------------------------------------------------------------------------
-// Forced first-login change
+// Password change: no forced modal, change goes through an emailed link
 // ---------------------------------------------------------------------------
-test('forced change reuses the sign-in password; "Cancel" becomes "Sign out"; success restores the normal form', async () => {
+test('signing in never pops a forced "change your password" modal', async () => {
   const b = createBrowser({ routes: baseRoutes({
     'POST /api/auth/login': { success: true, user: { ...ADMIN, mustChangePassword: true } },
-    'PUT /api/auth/password': { success: true, verificationRequired: false, message: 'Password updated successfully' },
   }) });
   await b.settle();
   await signIn(b, 'admin', 'Init1al Pw!');
-
-  assert.ok(b.visible('password-modal'), 'forced modal shown');
-  assert.ok(b.el('current-password').closest('.form-group').classList.contains('hidden'), 'current password not asked again');
-  assert.equal(b.el('current-password').required, false);
-  assert.equal(b.el('cancel-password-btn').textContent, 'Sign out');
-  assert.ok(!b.el('cancel-password-btn').classList.contains('hidden'));
-  assert.ok(b.visible('password-forced-notice'));
-
-  b.el('new-password').value = 'BrandN3wPass';
-  await b.el('password-form').fire('submit');
-  await b.settle();
-  const put = b.req('PUT', '/api/auth/password')[0];
-  assert.deepEqual(put.body, { currentPassword: 'Init1al Pw!', newPassword: 'BrandN3wPass' }, 'exact sign-in password, untrimmed');
-  assert.ok(put.headers['X-CSRF-Token'], 'CSRF header sent');
-  assert.ok(!b.visible('password-modal'));
-  assert.ok(!b.visible('password-forced-notice'));
-  assert.equal(b.el('cancel-password-btn').textContent, 'Cancel');
-  assert.ok(!b.el('current-password').closest('.form-group').classList.contains('hidden'), 'next change asks for the current password');
-  assert.ok(b.toastTexts().some(t => /Password updated/.test(t)));
+  assert.ok(!b.visible('password-modal'), 'no forced modal');
 });
 
-test('reload mid-forced-change: modal asks for the current password; "Sign out" really signs out', async () => {
-  const b = createBrowser({ routes: baseRoutes({
-    'GET /api/auth/me': { success: true, user: { ...ADMIN, mustChangePassword: true } },
-    'GET /api/articles/stats': { status: 403, body: { success: false, error: 'You must change your password before continuing.', mustChangePassword: true } },
-  }) });
-  await b.settle();
-  assert.ok(b.visible('password-modal'));
-  assert.ok(!b.el('current-password').closest('.form-group').classList.contains('hidden'), 'no secret held after a reload: ask');
-  assert.equal(b.el('current-password').required, true);
-  await b.el('cancel-password-btn').fire('click');
-  await b.settle();
-  assert.equal(b.req('POST', '/api/auth/logout').length, 1);
-  assert.ok(b.visible('auth-overlay'), 'back on the sign-in screen');
-  assert.ok(!b.visible('password-modal'));
-});
-
-test('a wrong current password during a normal change shows the server message', async () => {
+test('Change Password emails a link and says where it went; errors show the server message', async () => {
   const b = createBrowser({ routes: baseRoutes({
     'GET /api/auth/me': { success: true, user: ALICE },
-    'PUT /api/auth/password': { status: 400, body: { success: false, error: 'Current password is incorrect' } },
+    'POST /api/auth/password/request-link': { success: true, emailSent: true, email: 'al***e@example.test' },
   }) });
   await b.settle();
-  b.el('current-password').value = 'typo';
-  b.el('new-password').value = 'BrandN3wPass';
+  await b.el('change-password-btn').fire('click');
+  assert.ok(b.visible('password-modal'));
+  assert.equal(b.el('password-link-email').textContent, 'alice@example.test');
   await b.el('password-form').fire('submit');
   await b.settle();
-  assert.equal(b.req('PUT', '/api/auth/password')[0].body.currentPassword, 'typo');
-  assert.equal(b.el('password-error').textContent, 'Current password is incorrect');
+  const post = b.req('POST', '/api/auth/password/request-link');
+  assert.equal(post.length, 1);
+  assert.ok(post[0].headers['X-CSRF-Token'], 'CSRF header sent');
+  assert.equal(b.req('PUT', '/api/auth/password').length, 0, 'never changes the password in-app');
+  assert.match(b.el('password-success').textContent, /al\*\*\*e@example\.test/);
+
+  b.routes['POST /api/auth/password/request-link'] = { status: 400, body: { success: false, needsEmail: true, error: 'Add an email address to your account first' } };
+  await b.el('password-form').fire('submit');
+  await b.settle();
+  assert.equal(b.el('password-error').textContent, 'Add an email address to your account first');
 });
 
 // ---------------------------------------------------------------------------

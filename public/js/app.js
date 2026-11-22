@@ -1923,51 +1923,41 @@
       }
     });
 
-    // Change password
+    // Change password: confirmed by email. We email a one-time link; the link
+    // opens the "choose a new password" page (same as forgot-password).
     $('#change-password-btn').addEventListener('click', () => {
+      $('#password-error').classList.add('hidden');
+      $('#password-success').classList.add('hidden');
+      $('#password-link-email').textContent = (currentUser && currentUser.email) || 'your email address';
+      const btn = $('#password-link-submit');
+      btn.disabled = false; btn.textContent = 'Email me a link';
       $('#password-modal').classList.remove('hidden');
     });
     $('#cancel-password-btn').addEventListener('click', () => {
-      // In a forced change there is nothing to go back to: the button signs out
-      // (otherwise someone unable to finish the change was stuck on this modal).
-      if (currentUser && currentUser.mustChangePassword) { logout(); return; }
       $('#password-modal').classList.add('hidden');
     });
     $('#password-form').addEventListener('submit', async (e) => {
       e.preventDefault();
-      const errEl = $('#password-error');
-      errEl.classList.add('hidden');
+      const errEl = $('#password-error'), okEl = $('#password-success'), btn = $('#password-link-submit');
+      errEl.classList.add('hidden'); okEl.classList.add('hidden');
+      btn.disabled = true; btn.textContent = 'Sending…';
       try {
-        const result = await api('PUT', d('L2FwaS9hdXRoL3Bhc3N3b3Jk'), {
-          currentPassword: forcedChangeSecret || $('#current-password').value,
-          newPassword: $('#new-password').value
-        });
-        if (result.success && result.verificationRequired) {
-          $('#password-modal').classList.add('hidden');
-          $('#verification-code').value = '';
-          $('#verification-error').classList.add('hidden');
-          $('#verification-notice').textContent = `We sent a 6-digit verification code to your registered email: ${result.email}. Please enter it below to confirm.`;
-          state.pendingVerificationType = 'password_change';
-          $('#verification-modal').classList.remove('hidden');
-        } else if (result.success) {
-          // Changed directly (first-login change, or email verification unavailable)
-          $('#password-modal').classList.add('hidden');
-          $('#current-password').value = '';
-          forcedChangeSecret = null;
-          setCurrentPasswordFieldVisible(true);
-          $('#new-password').value = '';
-          if (currentUser) currentUser.mustChangePassword = false;
-          setForcedPasswordMode(false);
-          showToast('Password updated', result.message || 'Your password has been changed.', 'success');
-          // Data APIs were blocked until the forced change; load everything now.
-          Promise.allSettled([fetchStats(), fetchArticles(), fetchSources(), fetchNotificationSettings()]);
+        const result = await api('POST', '/api/auth/password/request-link', {});
+        if (result.success) {
+          okEl.textContent = `Link sent to ${result.email}. Check your inbox (and spam folder) and open it within 60 minutes to set your new password.`;
+          okEl.classList.remove('hidden');
+          btn.textContent = 'Send again';
         } else {
-          errEl.textContent = result.error || 'Failed to change password';
+          errEl.textContent = result.error || 'Could not send the link';
           errEl.classList.remove('hidden');
+          btn.textContent = 'Email me a link';
         }
       } catch (err) {
         errEl.textContent = err.message;
         errEl.classList.remove('hidden');
+        btn.textContent = 'Email me a link';
+      } finally {
+        btn.disabled = false;
       }
     });
 
@@ -2584,9 +2574,8 @@
           aiThreadId = result.threadId || aiThreadId;
           const answerHtml = escapeHtml(result.answer || '').replace(/\n/g, '<br>');
           let extra = '';
-          if (result.mode === 'rag' && Array.isArray(result.citations) && result.citations.length) {
-            extra = `<br><br>[Citations: ${escapeHtml(result.citations.join(', '))}]`;
-          } else if (result.mode === 'web') {
+          // Both modes return clickable sources (feed articles in RAG mode)
+          if (Array.isArray(result.sources) && result.sources.length) {
             extra = renderSources(result.sources);
           }
           body.insertAdjacentHTML('beforeend', `<div class="ai-message ai-bot">${answerHtml}${extra}</div>`);
@@ -2645,14 +2634,10 @@
     if (notice) notice.classList.toggle('hidden', !forced);
   }
 
-  function enforcePasswordChange() {
-    if (!currentUser || !currentUser.mustChangePassword) return;
-    const modal = $('#password-modal');
-    // If we still hold the sign-in password, don't ask for it again.
-    setCurrentPasswordFieldVisible(!forcedChangeSecret);
-    modal.classList.remove('hidden');
-    setForcedPasswordMode(true);
-  }
+  // Forced password changes were removed: they looped on ephemeral hosting, and
+  // every password change now goes through the emailed link instead.
+  function enforcePasswordChange() { /* intentionally empty */ }
+
 
   // Shown under a failed sign-in when this server's database was created at this
   // boot (ephemeral hosting wipes it on every redeploy/restart): the account or

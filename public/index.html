@@ -786,21 +786,16 @@
   <div id="password-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="password-modal-title">
     <div class="auth-card" style="max-width: 400px;">
       <h2 id="password-modal-title" style="color: var(--cyan); margin-bottom: 1rem;">Change Password</h2>
-      <div id="password-forced-notice" class="auth-error hidden" style="margin-bottom:1rem;">
-        For security, you must set a new password before continuing.
-      </div>
       <form id="password-form">
-        <div class="form-group">
-          <label for="current-password">Current Password</label>
-          <input type="password" id="current-password" required autocomplete="current-password">
-        </div>
-        <div class="form-group">
-          <label for="new-password">New Password</label>
-          <input type="password" id="new-password" required minlength="8" autocomplete="new-password">
-        </div>
+        <p id="password-link-intro" style="color: var(--text-secondary); font-size: 0.9rem; line-height: 1.5; margin-bottom: 1rem;">
+          For your security, password changes are confirmed by email. We'll send a one-time link to
+          <b id="password-link-email" style="color: var(--text-primary);">your email address</b>.
+          Open it to choose your new password &mdash; it expires in 60 minutes.
+        </p>
+        <div id="password-success" class="auth-success hidden" style="margin-bottom:1rem;"></div>
         <div id="password-error" class="auth-error hidden"></div>
         <div style="display: flex; gap: 8px;">
-          <button type="submit" class="btn btn-primary" style="flex:1;">Save</button>
+          <button type="submit" class="btn btn-primary" id="password-link-submit" style="flex:1;">Email me a link</button>
           <button type="button" class="btn btn-ghost" id="cancel-password-btn">Cancel</button>
         </div>
       </form>

@@ -115,21 +115,24 @@ function historyBlock(history) {
 
 function ragPrompt(question, contextArticles, history) {
   const ctx = (contextArticles || []).slice(0, LIMITS.ragArticles).map((a, i) =>
-    `[${i + 1}] ${clean(a.title, LIMITS.title)} (${clean(a.source_name || 'unknown', LIMITS.source)}, ${clean(a.published_date || 'unknown', LIMITS.meta)}): ${clean(a.description || '', LIMITS.ragDescription)}`
+    `[${i + 1}] ${clean(a.title, LIMITS.title)} (${clean(a.source_name || 'unknown', LIMITS.source)}, ${clean(a.published_date || 'unknown', LIMITS.meta)}${a.severity ? ', severity ' + clean(a.severity, LIMITS.meta) : ''}${a.recent ? ', recent item' : ''}): ${clean(a.description || '', LIMITS.ragDescription)}`
   ).join('\n');
 
   return {
     system: `${INJECTION_GUARD}
-You are ThreatPulse's threat-intelligence assistant. Answer the question in the <question> block using ONLY the articles in the <articles> block.
-If the answer is not in the provided articles, say so honestly — do not invent details.
-If a <conversation_history> block is present, use it only to understand what the user is referring to (pronouns, follow-ups, topic continuity).
+You are ThreatPulse's threat-intelligence assistant. The <articles> block holds items from the user's own threat feed (keyword matches, or the most recent items when nothing matched).
+1. If the articles are relevant, answer from them first and cite each claim with [N].
+2. If they don't cover the question (or there are none), still give a helpful, accurate answer from your general cybersecurity knowledge, and start that part with "Not in your feed — general knowledge:". Never invent feed items, CVE IDs, dates, victims or numbers.
+3. For "what's new / latest / critical" questions, summarise the most important items from the articles.
+If a <conversation_history> block is present, use it only to understand follow-ups and pronouns.
+Write plain text (no markdown tables). Be concise and practical.
 
 Return JSON exactly in this shape:
-{"answer": "<clear answer, citing [N] for each claim>", "citations": [<article index numbers used, e.g. 1,3>], "insufficientData": <true|false>}
+{"answer": "<the answer, citing [N] for feed facts>", "citations": [<article index numbers used, e.g. 1,3>], "insufficientData": <true if the feed did not cover the question, else false>}
 `,
     user: historyBlock(history) +
       block('question', clean(question, LIMITS.question)) + '\n\n' +
-      block('articles', ctx || '(no articles matched)')
+      block('articles', ctx || '(no articles in the feed yet)')
   };
 }
 

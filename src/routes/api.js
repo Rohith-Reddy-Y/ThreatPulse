@@ -16,7 +16,7 @@ const analytics = require('../analytics');
 const sourceCatalog = require('../source-catalog');
 const {
   sendAlertEmail, sendVerificationEmail, isEmailConfigured, describeEmail,
-  sendPasswordResetEmail, sendPasswordChangedEmail, sendEmailChangedEmails, sendWelcomeEmail,
+  sendPasswordResetEmail, sendPasswordChangeLinkEmail, sendPasswordChangedEmail, sendEmailChangedEmails, sendWelcomeEmail,
 } = require('../notifications/email-notifier');
 const { sendTelegramAlert } = require('../notifications/telegram-notifier');
 const { sendTeamsAlert } = require('../notifications/teams-notifier');
@@ -446,68 +446,55 @@ router.post('/auth/refresh', (req, res) => {
   res.json({ success: true, user: result.user });
 });
 
-router.put('/auth/password', auth.requireAuth, denyGuest, async (req, res) => {
+// Password changes are confirmed by email: the signed-in user asks for a link,
+// we send a single-use 60-minute link to the address on the account, and the
+// link opens the "choose a new password" page (the same page as forgot-password).
+// A stolen session alone therefore can't change the password.
+const pwLinkThrottle = new Map(); // userId -> { count, resetAt }
+function maskEmail(e) {
+  const [u, d] = String(e || '').split('@');
+  if (!d) return '';
+  return (u.length <= 2 ? u[0] + '*' : u.slice(0, 2) + '***' + u.slice(-1)) + '@' + d;
+}
+async function requestPasswordChangeLink(req, res) {
   try {
-    const { currentPassword, newPassword } = req.body;
-    if (!currentPassword || !newPassword) {
-      return res.status(400).json({ success: false, error: 'Current and new password are required' });
-    }
     const user = db.getUserById(req.user.id);
-
-    // Timing-safe verification of the current password
-    if (!(await auth.verifyPassword(currentPassword, user.salt, user.password_hash))) {
-      return res.status(400).json({ success: false, error: 'Current password is incorrect' });
+    if (!user) return res.status(404).json({ success: false, error: 'Account not found' });
+    if (!user.email) {
+      return res.status(400).json({ success: false, needsEmail: true,
+        error: 'Add an email address to your account first (user menu → Change Email) — the password-change link is sent there.' });
     }
-
-    const pwCheck = auth.validatePasswordStrength(newPassword);
-    if (!pwCheck.valid) return res.status(400).json({ success: false, error: pwCheck.error });
-
-    // Prevent reusing the same password
-    if (await auth.verifyPassword(newPassword, user.salt, user.password_hash)) {
-      return res.status(400).json({ success: false, error: 'New password must be different from the current one' });
+    if (!isEmailConfigured()) {
+      return res.status(503).json({ success: false,
+        error: 'Email delivery is not set up on this server, so the password-change link cannot be sent. Ask the administrator.' });
     }
-
-    // Generate verification code (6 digits)
-    const code = String(crypto.randomInt(100000, 1000000));
-    const expiresAt = auth.sqliteDateTime(Date.now() + 15 * 60 * 1000); // 15 mins
-
-    // Hash the new password and store it as newHash:newSalt in target_value
-    const newSalt = auth.generateSalt();
-    const newHash = await auth.hashPassword(newPassword, newSalt);
-    const targetValue = `${newHash}:${newSalt}`;
-
-    const userEmail = user.email || req.user.email;
-    const emailReady = !!userEmail && isEmailConfigured();
-
-    // Apply directly (the current password was already verified) when:
-    //  - this is the forced first-login change, or
-    //  - no email/SMTP is available to deliver a code (otherwise the account
-    //    could never complete the change and would be locked out).
-    if (user.must_change_password || !emailReady) {
-      db.updateUserPassword(req.user.id, newHash, newSalt); // also clears must_change_password
-      auth.revokeUserSessions(req.user.id, req.cookies?.tp_refresh); // log out other sessions
-      db.logAudit(req.user.id, 'password_change',
-        user.must_change_password ? 'Forced first-login password change' : 'Password changed (email verification unavailable)', req.ip);
-      notifyPasswordChanged(req.user.id, user.must_change_password ? 'forced' : 'change', req);
-      return res.json({ success: true, verificationRequired: false, message: 'Password updated successfully' });
+    const now = Date.now();
+    const t = pwLinkThrottle.get(user.id);
+    if (t && now < t.resetAt && t.count >= 3) {
+      return res.status(429).json({ success: false, error: 'Too many requests. Check your inbox (and spam) for the last link, or try again in 15 minutes.' });
     }
+    if (!t || now >= t.resetAt) pwLinkThrottle.set(user.id, { count: 1, resetAt: now + 15 * 60 * 1000 });
+    else t.count++;
 
-    const codeId = db.createVerificationCode(req.user.id, 'password_change', targetValue, code, expiresAt);
-
-    // Send code to current email. If it can't be delivered, say so instead of
-    // telling the user to wait for a code that will never arrive.
-    const sent = await sendVerificationEmail(userEmail, req.user.displayName, 'password_change', code);
+    const token = crypto.randomBytes(32).toString('hex');
+    db.createPasswordResetToken(user.id, token, auth.sqliteDateTime(now + 60 * 60 * 1000));
+    const link = `${publicBaseUrl(req)}/?reset=${token}`;
+    const sent = await sendPasswordChangeLinkEmail(user.email, user.display_name || user.username, link, req.ip);
     if (!sent || !sent.success) {
-      if (codeId) db.deleteVerificationCode(codeId);
-      return res.status(502).json({ success: false, error: 'Could not send the verification email. Please try again later.' });
+      db.markResetTokenUsed(token);
+      return res.status(502).json({ success: false, error: 'Could not send the email. Please try again in a minute.' });
     }
-
-    res.json({ success: true, verificationRequired: true, type: 'password_change', email: userEmail });
+    db.logAudit(user.id, 'password_change_requested', 'Password-change link emailed', req.ip);
+    res.json({ success: true, emailSent: true, email: maskEmail(user.email),
+      message: 'We emailed you a link to choose a new password. It works once and expires in 60 minutes.' });
   } catch (error) {
-    console.error('[API] Change password error:', error.message);
-    res.status(500).json({ success: false, error: 'Failed to initiate password change' });
+    console.error('[API] Password-change link error:', error.message);
+    res.status(500).json({ success: false, error: 'Failed to send the password-change link' });
   }
-});
+}
+router.post('/auth/password/request-link', auth.requireAuth, denyGuest, requestPasswordChangeLink);
+// Legacy endpoint: direct in-app changes are no longer allowed — it now sends the link too.
+router.put('/auth/password', auth.requireAuth, denyGuest, requestPasswordChangeLink);
 
 router.put('/auth/email', auth.requireAuth, denyGuest, async (req, res) => {
   try {
@@ -570,7 +557,7 @@ router.post('/auth/verify-change', auth.requireAuth, denyGuest, (req, res) => {
       return res.status(400).json({ success: false, error: 'Verification type and code are required' });
     }
     // Arrays/objects used to reach the SQL bind and come back as a 500
-    if (!['email_change', 'password_change'].includes(type) ||
+    if (!['email_change'].includes(type) ||
         !((typeof code === 'string' && /^\d{6}$/.test(code.trim())) || (Number.isInteger(code) && code >= 100000 && code <= 999999))) {
       return res.status(400).json({ success: false, error: 'Invalid or expired verification code' });
     }

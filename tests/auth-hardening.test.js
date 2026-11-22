@@ -84,15 +84,11 @@ test('register / login / password change / reset all work with async hashing', a
   const ok = await loginReq('asyncer', PW, '10.9.0.1');
   assert.strictEqual(ok.body.success, true);
 
-  // Password change route (no SMTP → applied directly)
+  // In-app password changes are gone: the route only emails a link (no email set up here -> 503)
   const jar = h.absorb({}, ok.res);
   const ch = await request('PUT', '/api/auth/password', { cookies: jar, body: { currentPassword: PW, newPassword: PW2 } });
-  assert.strictEqual(ch.body.success, true, JSON.stringify(ch.body));
-  const wrongCur = await request('PUT', '/api/auth/password', { cookies: jar, body: { currentPassword: PW, newPassword: 'Passw0rdC' } });
-  assert.strictEqual(wrongCur.status, 400);
-  const same = await request('PUT', '/api/auth/password', { cookies: jar, body: { currentPassword: PW2, newPassword: PW2 } });
-  assert.strictEqual(same.status, 400);
-  assert.strictEqual((await loginReq('asyncer', PW2, '10.9.0.1')).body.success, true);
+  assert.strictEqual(ch.status, 503, JSON.stringify(ch.body));
+  assert.strictEqual((await loginReq('asyncer', PW, '10.9.0.1')).body.success, true, 'password unchanged');
 
   // Email-token reset
   const f = auth.forgotPassword('asyncer@example.test');
@@ -127,7 +123,7 @@ test('a failing hash makes the route return a clean 500', async () => {
   auth.verifyPassword = async () => { throw new Error('threadpool exploded'); };
   try {
     const jar = await h.login('boom', PW, '10.9.9.9');
-    const r = await request('PUT', '/api/auth/password', { cookies: jar, body: { currentPassword: PW, newPassword: PW2 } });
+    const r = await request('PUT', '/api/auth/email', { cookies: jar, body: { email: 'boom2@example.test', currentPassword: PW } });
     assert.strictEqual(r.status, 500);
     assert.doesNotMatch(JSON.stringify(r.body), /exploded/);
   } finally { auth.verifyPassword = realVerify; }

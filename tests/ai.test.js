@@ -159,7 +159,10 @@ test('RAG: model JSON cannot override response fields or inject HTML into citati
   assert.equal(r.body.success, true);
   assert.equal(r.body.mode, 'rag');
   assert.notEqual(r.body.threadId, 999999);
-  assert.equal(r.body.sources, undefined);
+  // sources come from the cited feed article, never from the model's JSON
+  assert.equal(r.body.sources.length, 1);
+  assert.match(r.body.sources[0].url, /^https:\/\/ex\.com\//);
+  assert.ok(!JSON.stringify(r.body.sources).includes('evil.example'));
   assert.deepEqual(r.body.citations, [1]);
 });
 
@@ -379,4 +382,32 @@ test('every model retired -> clean, actionable error', async () => {
   const r = await client.generate('sys', 'user');
   assert.equal(r.ok, false);
   assert.match(r.error, /GROQ_MODEL/);
+});
+
+// ───────────────────────── feed (RAG) mode usefulness ─────────────────────────
+
+test('RAG: "what is new?" questions with no keyword hits still get recent feed articles, most severe first', async () => {
+  const u = freshUser();
+  addArticle(u.id, { title: 'Alpha one', description: 'nothing special' });
+  const bodies = captureGroq(JSON.stringify({ answer: 'Top items: [1]', citations: [1], insufficientData: false }));
+  const r = await call('POST', '/ask', { user: u, ip: freshIp(), body: { question: 'what is new today?' } });
+  assert.equal(r.statusCode, 200);
+  assert.match(bodies[0].body.messages[1].content, /Alpha one/, 'recent article given to the model');
+  assert.equal(r.body.sources[0].title, 'Alpha one');
+});
+
+test('RAG: general questions are answered from general knowledge instead of refusing', async () => {
+  const u = freshUser();
+  const bodies = captureGroq(JSON.stringify({ answer: 'Not in your feed — general knowledge: ransomware encrypts files.', citations: [], insufficientData: true }));
+  const r = await call('POST', '/ask', { user: u, ip: freshIp(), body: { question: 'what is ransomware?' } });
+  assert.equal(r.statusCode, 200);
+  assert.match(bodies[0].body.messages[0].content, /general cybersecurity knowledge/);
+  assert.match(r.body.answer, /general knowledge/);
+  assert.deepEqual(r.body.sources, []);
+});
+
+test('gpt-oss style citations are normalised to [N]', async () => {
+  axiosStub.post = async () => groqReply('see 【2†source】 and 【3】');
+  const r = await client.generate('sys', 'user', { json: false });
+  assert.equal(r.text, 'see [2] and [3]');
 });

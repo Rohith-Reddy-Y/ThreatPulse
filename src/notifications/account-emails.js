@@ -83,6 +83,24 @@ function passwordReset({ name, link, expiresMinutes = 60, ip }) {
   return { subject, html, text };
 }
 
+function passwordChangeLink({ name, link, expiresMinutes = 60, ip }) {
+  const subject = 'Confirm your ThreatPulse password change';
+  const html = layout({
+    preheader: `Open this link within ${expiresMinutes} minutes to choose your new password.`,
+    heading: 'Change your password',
+    accent: C.violet,
+    bodyHtml:
+      p(`Hi ${esc(name)},`) +
+      p(`You asked to change your ThreatPulse password from your account settings. Click the button below to choose a new one. The link works <b style="color:${C.text};">once</b> and expires in <b style="color:${C.text};">${expiresMinutes} minutes</b>.`) +
+      button(link, 'Choose a new password') +
+      p(`If the button doesn't work, copy this link into your browser:<br><a href="${esc(link)}" style="color:${C.cyan};word-break:break-all;font-size:12.5px;">${esc(link)}</a>`) +
+      (ip ? detailsTable([['Requested from IP', ip], ['Time', formatWhen()]]) : '') +
+      p(`<b style="color:${C.text};">Didn't ask for this?</b> Ignore this email — your password stays the same. Someone may have access to your signed-in session, so consider signing out of other devices.`),
+  });
+  const text = `Hi ${plain(name)},\n\nYou asked to change your ThreatPulse password.\nOpen this link within ${expiresMinutes} minutes to choose a new one (it works once):\n\n${link}\n\nIf you didn't ask for this, ignore this email - your password stays the same.\n`;
+  return { subject, html, text };
+}
+
 function verificationCode({ name, type, code, expiresMinutes = 15 }) {
   const isEmail = type === 'email_change';
   const subject = isEmail ? `${code} is your ThreatPulse email verification code` : `${code} is your ThreatPulse password change code`;
@@ -158,4 +176,4 @@ function welcome({ name, username, link }) {
   return { subject, html, text };
 }
 
-module.exports = { passwordReset, verificationCode, passwordChanged, emailChanged, welcome, esc };
+module.exports = { passwordReset, passwordChangeLink, verificationCode, passwordChanged, emailChanged, welcome, esc };

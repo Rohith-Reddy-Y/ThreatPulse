@@ -136,7 +136,9 @@ async function generate(systemInstruction, userContent, opts = {}) {
         activeModel = candidates[modelIdx];
         console.log(`[AI] Using Groq model ${activeModel}`);
       }
-      return { ok: true, text: typeof content === 'string' ? content : '' };
+      // gpt-oss cites like 【3】 or 【3†source】; normalise to the app's [3] style
+      const out = typeof content === 'string' ? content.replace(/【(\d+)(?:†[^】]*)?】/g, '[$1]') : '';
+      return { ok: true, text: out };
     } catch (e) {
       clearTimeout(timer);
       if (controller) { try { controller.abort(); } catch (_) { /* ignore */ } }

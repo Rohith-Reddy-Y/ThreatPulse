@@ -154,6 +154,11 @@ async function sendPasswordResetEmail(recipientEmail, name, link, ip) {
   return mailer.sendMail({ to: recipientEmail, ...templates.passwordReset({ name, link, ip }) });
 }
 
+async function sendPasswordChangeLinkEmail(recipientEmail, name, link, ip) {
+  if (!mailer.isConfigured() || !recipientEmail) return notConfigured();
+  return mailer.sendMail({ to: recipientEmail, ...templates.passwordChangeLink({ name, link, ip }) });
+}
+
 async function sendPasswordChangedEmail(recipientEmail, name, method, ip, link) {
   if (!mailer.isConfigured() || !recipientEmail) return notConfigured();
   return mailer.sendMail({ to: recipientEmail, ...templates.passwordChanged({ name, method, ip, link }) });
@@ -176,5 +181,5 @@ async function sendWelcomeEmail(recipientEmail, name, username, link) {
 module.exports = {
   initTransporter, isEmailConfigured: mailer.isConfigured, describeEmail: mailer.describe,
   sendAlertEmail, sendTestEmail, sendVerificationEmail,
-  sendPasswordResetEmail, sendPasswordChangedEmail, sendEmailChangedEmails, sendWelcomeEmail,
+  sendPasswordResetEmail, sendPasswordChangeLinkEmail, sendPasswordChangedEmail, sendEmailChangedEmails, sendWelcomeEmail,
 };

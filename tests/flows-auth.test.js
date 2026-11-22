@@ -40,50 +40,22 @@ function withSmtp(fn, { failSend = false } = {}) {
 // ---------------------------------------------------------------------------
 // First run: admin creation → forced change → re-login → logout → login
 // ---------------------------------------------------------------------------
-test('first run: initial admin password, forced change with the sign-in password, re-login with the new one', async () => {
+test('first run: the initial admin password works straight away, with no forced change', async () => {
   process.env.ADMIN_INITIAL_PASSWORD = 'Init1alPassw0rd';
   await auth.ensureAdminExists();
   const admin = db.getUserByUsername('admin');
   assert.ok(admin, 'admin created');
-  assert.strictEqual(admin.must_change_password, 1);
+  assert.strictEqual(admin.must_change_password, 0);
 
-  // Sign in: the UI keeps this password (forcedChangeSecret) for the change
   const r = await loginRaw('admin', 'Init1alPassw0rd');
   assert.strictEqual(r.body.success, true, JSON.stringify(r.body));
-  assert.strictEqual(r.body.user.mustChangePassword, true);
+  assert.strictEqual(r.body.user.mustChangePassword, false);
   const jar = absorb({}, r.res);
-
-  // Everything except me/password/logout is blocked until the change
-  const blocked = await request('GET', '/api/articles/stats', { cookies: jar });
-  assert.strictEqual(blocked.status, 403);
-  assert.strictEqual(blocked.body.mustChangePassword, true);
-
-  // Token refresh mid-change keeps the flag (the UI re-shows the modal)
-  const ref = await request('POST', '/api/auth/refresh', { cookies: jar });
-  assert.strictEqual(ref.body.user.mustChangePassword, true);
-  absorb(jar, ref.res);
-
-  // Page reload mid-change: /auth/me still reports the flag
-  const me = await request('GET', '/api/auth/me', { cookies: jar });
-  assert.strictEqual(me.body.user.mustChangePassword, true);
-
-  // Same password as new → refused with a clear message
-  const same = await request('PUT', '/api/auth/password', { cookies: jar, headers: csrf(jar),
-    body: { currentPassword: 'Init1alPassw0rd', newPassword: 'Init1alPassw0rd' } });
-  assert.strictEqual(same.status, 400);
-  assert.match(same.body.error, /different/);
-
-  const change = await request('PUT', '/api/auth/password', { cookies: jar, headers: csrf(jar),
-    body: { currentPassword: 'Init1alPassw0rd', newPassword: PW } });
-  assert.strictEqual(change.body.success, true, JSON.stringify(change.body));
-  assert.strictEqual(change.body.verificationRequired, false);
   assert.strictEqual((await request('GET', '/api/articles/stats', { cookies: jar })).status, 200);
 
-  // Logout, then the old password fails and the new one works
-  const out = await request('POST', '/api/auth/logout', { cookies: jar });
-  assert.strictEqual(out.body.success, true);
-  assert.strictEqual((await loginRaw('admin', 'Init1alPassw0rd')).body.success, false);
-  const again = await loginRaw('admin', PW);
+  // Log out and back in: still no change prompt (this used to loop)
+  await request('POST', '/api/auth/logout', { cookies: jar });
+  const again = await loginRaw('admin', 'Init1alPassw0rd');
   assert.strictEqual(again.body.success, true);
   assert.strictEqual(again.body.user.mustChangePassword, false);
 });
@@ -260,33 +232,27 @@ test('email change with SMTP sends a code; a failed send is reported instead of 
   }, { failSend: true });
 });
 
-test('normal password change: direct without SMTP, code with SMTP, clear error when the code email fails', async () => {
+test('password change only via the emailed link: never direct, clear error when the email fails', async () => {
   createUser('ivy', PW, { email: 'ivy@example.test' });
-  let jar = await h.login('ivy', PW, ip());
-  const wrong = await request('PUT', '/api/auth/password', { cookies: jar, headers: csrf(jar), body: { currentPassword: 'Nope12345', newPassword: PW2 } });
-  assert.strictEqual(wrong.status, 400);
-  assert.strictEqual(wrong.body.error, 'Current password is incorrect');
-
-  const direct = await request('PUT', '/api/auth/password', { cookies: jar, headers: csrf(jar), body: { currentPassword: PW, newPassword: PW2 } });
-  assert.strictEqual(direct.body.success, true);
-  assert.strictEqual(direct.body.verificationRequired, false);
+  const jar = await h.login('ivy', PW, ip());
+  // No email delivery configured -> refused, password unchanged
+  const noMail = await request('POST', '/api/auth/password/request-link', { cookies: jar, headers: csrf(jar), body: {} });
+  assert.strictEqual(noMail.status, 503);
+  const legacy = await request('PUT', '/api/auth/password', { cookies: jar, headers: csrf(jar), body: { currentPassword: PW, newPassword: PW2 } });
+  assert.notStrictEqual(legacy.body.success, true);
+  assert.strictEqual((await loginRaw('ivy', PW)).body.success, true, 'never applied directly');
 
   await withSmtp(async (sent) => {
-    const r = await request('PUT', '/api/auth/password', { cookies: jar, headers: csrf(jar), body: { currentPassword: PW2, newPassword: PW } });
-    assert.strictEqual(r.body.verificationRequired, true);
+    const r = await request('POST', '/api/auth/password/request-link', { cookies: jar, headers: csrf(jar), body: {} });
+    assert.strictEqual(r.body.success, true, JSON.stringify(r.body));
     assert.strictEqual(sent.length, 1);
-    const code = db.getDb().prepare("SELECT code FROM verification_codes WHERE type = 'password_change' ORDER BY id DESC").get().code;
-    const v = await request('POST', '/api/auth/verify-change', { cookies: jar, headers: csrf(jar), body: { type: 'password_change', code } });
-    assert.strictEqual(v.body.success, true);
   });
-  assert.strictEqual((await loginRaw('ivy', PW)).body.success, true);
-
   await withSmtp(async () => {
-    const r = await request('PUT', '/api/auth/password', { cookies: jar, headers: csrf(jar), body: { currentPassword: PW, newPassword: PW2 } });
+    const r = await request('POST', '/api/auth/password/request-link', { cookies: jar, headers: csrf(jar), body: {} });
     assert.strictEqual(r.status, 502);
     assert.match(r.body.error, /Could not send/);
   }, { failSend: true });
-  assert.strictEqual((await loginRaw('ivy', PW)).body.success, true, 'password unchanged after the failed send');
+  assert.strictEqual((await loginRaw('ivy', PW)).body.success, true, 'password unchanged');
 });
 
 // ---------------------------------------------------------------------------

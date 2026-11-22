@@ -322,19 +322,31 @@ router.post('/ask', auth.requireAuth, async (req, res) => {
       return res.json({ success: true, mode: 'web', threadId: tid, answer: fallback, sources: results });
     }
 
-    // Primary: RAG over own article DB
+    // Primary: RAG over own article DB. Keyword matches first, topped up with
+    // the most recent (most severe) items so "what's new?" questions get context.
     const scopedUserId = scopeUserId(req.user);
-    const articles = db.searchArticlesRag(question, LIMITS.ragArticles, scopedUserId);
+    let articles = db.searchArticlesRag(question, LIMITS.ragArticles, scopedUserId);
+    if (articles.length < LIMITS.ragArticles) {
+      const have = new Set(articles.map(a => a.id));
+      const recent = db.getRecentArticlesRag(LIMITS.ragArticles, scopedUserId).filter(a => !have.has(a.id));
+      articles = articles.concat(recent).slice(0, LIMITS.ragArticles);
+    }
     const result = await ai.generate(prompts.ragPrompt(question, articles, history));
     if (!result.ok) return res.status(503).json({ success: false, error: result.error });
 
     const data = ai.parseJson(result.text);
     const parsed = data && typeof data === 'object' ? data : {};
-    const answer = text(parsed.answer, 8000).trim() || '(no answer)';
+    // A model that ignored JSON mode still gave a usable plain-text answer
+    const answer = text(parsed.answer, 8000).trim() ||
+      (data ? '' : text(result.text, 8000).trim()) || '(no answer)';
     const citations = cleanCitations(parsed.citations, articles.length);
     const insufficientData = parsed.insufficientData === true;
-    db.addMessage(tid, 'assistant', answer, 'rag', null);
-    res.json({ success: true, mode: 'rag', threadId: tid, answer, citations, insufficientData });
+    // Cited feed articles as clickable sources (same shape as web-mode sources)
+    const sources = citations.map(n => articles[n - 1]).filter(Boolean).map(a => ({
+      title: text(a.title, 300), url: /^https?:\/\//i.test(a.url || '') ? a.url : '', snippet: text(a.source_name || '', 120)
+    })).filter(s => s.url);
+    db.addMessage(tid, 'assistant', answer, 'rag', sources.length ? sources : null);
+    res.json({ success: true, mode: 'rag', threadId: tid, answer, citations, sources, insufficientData });
   } catch (e) {
     console.error('[AI] Ask error:', e.message);
     res.status(500).json({ error: 'AI ask failed' });

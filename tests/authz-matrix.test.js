@@ -295,7 +295,8 @@ const ROUTES = {
   'POST /api/auth/refresh': { policy: 'public', allow: [200, 401] }, // 401 = no/invalid refresh cookie
   // account
   'GET /api/auth/me': { policy: 'auth', mustChangeOk: true, allow: [200] },
-  'PUT /api/auth/password': { policy: 'member', mustChangeOk: true, allow: [400] }, // empty body -> validation
+  'PUT /api/auth/password': { policy: 'member', mustChangeOk: true, allow: [503] }, // now emails a link; no email in tests -> 503
+  'POST /api/auth/password/request-link': { policy: 'member', allow: [503] },
   'PUT /api/auth/email': { policy: 'member', allow: [400] },
   'POST /api/auth/verify-change': { policy: 'member', allow: [400] },
   // articles / search

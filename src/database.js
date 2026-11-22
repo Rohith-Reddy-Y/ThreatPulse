@@ -282,6 +282,8 @@ function initializeSchema() {
 
   // Add must_change_password flag to users if missing (forces password change on first login)
   try { d.prepare('ALTER TABLE users ADD COLUMN must_change_password INTEGER DEFAULT 0').run(); } catch(e) { /* already exists */ }
+  // Forced password changes were removed (they looped on ephemeral hosting); clear legacy flags.
+  try { d.prepare('UPDATE users SET must_change_password = 0 WHERE must_change_password != 0').run(); } catch(e) { /* ignore */ }
 
   // Step 5: Create indexes AFTER all columns are guaranteed to exist
   const indexes = [
@@ -1171,6 +1173,23 @@ function searchArticlesRag(question, limit = 8, userId = null) {
     .slice(0, limit);
 }
 
+// Fallback context for feed questions that match no keywords ("what's new?",
+// "latest critical threats"): the most recent articles in scope, most severe first.
+function getRecentArticlesRag(limit = 8, userId = null) {
+  const systemOnly = isSystemScope(userId);
+  const where = systemOnly ? `WHERE ${systemArticleClause('articles')}` : userId ? 'WHERE user_id = ?' : '';
+  const rows = getDb().prepare(
+    `SELECT * FROM articles ${where} ORDER BY published_date DESC LIMIT 40`
+  ).all(...((!systemOnly && userId) ? [userId] : []));
+  if (systemOnly) rows.forEach(redactForSystemScope);
+  const rank = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+  return rows
+    .map((a, i) => ({ a, i, r: rank[String(a.severity || '').toLowerCase()] ?? 5 }))
+    .sort((x, y) => (x.r - y.r) || (x.i - y.i))
+    .slice(0, limit)
+    .map(x => ({ ...x.a, recent: true }));
+}
+
 function getArticleById(id) {
   return getDb().prepare('SELECT * FROM articles WHERE id = ?').get(id);
 }
@@ -1438,6 +1457,7 @@ module.exports = {
   markAsNotified,
   searchArticles,
   searchArticlesRag,
+  getRecentArticlesRag,
   getArticleById,
   isSystemArticle,
   SYSTEM_SCOPE,

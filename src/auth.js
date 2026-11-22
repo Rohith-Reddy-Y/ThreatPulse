@@ -581,13 +581,10 @@ async function ensureAdminExists() {
     const result = db.createUser('admin', 'Administrator', passwordHash, salt, 'admin', null, adminEmail);
     if (result.success) {
       db.createUserNotificationSettings(result.id);
-      // The owner can pin a password they chose (Render: ADMIN_INITIAL_PASSWORD +
-      // ADMIN_FORCE_PASSWORD_CHANGE=false) so the login survives ephemeral-DB
-      // resets without a forced change after every redeploy. A generated
-      // password is always force-changed.
-      const keepChosenPassword = !!process.env.ADMIN_INITIAL_PASSWORD &&
-        String(process.env.ADMIN_FORCE_PASSWORD_CHANGE || '').toLowerCase() === 'false';
-      db.setMustChangePassword(result.id, keepChosenPassword ? 0 : 1);
+      // No forced first-login change: on ephemeral hosting the DB (and with it
+      // any changed password) is wiped on every restart, so forcing a change
+      // just looped. Password changes go through the emailed link instead.
+      db.setMustChangePassword(result.id, 0);
 
       console.log('[Auth] Default admin created');
       console.log('[Auth] FIRST-RUN ADMIN CREDENTIALS (shown once)');
@@ -597,7 +594,6 @@ async function ensureAdminExists() {
       console.log(process.env.ADMIN_INITIAL_PASSWORD
         ? '[Auth] Password: (set from ADMIN_INITIAL_PASSWORD)'
         : `[Auth] Password: ${initialPassword}`);
-      console.log('[Auth] You will be required to change this password on first login.');
 
       // Generate 10 invite codes for the team
       for (let i = 1; i <= 10; i++) {

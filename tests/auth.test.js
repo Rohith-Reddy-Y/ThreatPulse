@@ -22,25 +22,14 @@ function withClock(offsetMs, fn) {
 // ---------------------------------------------------------------------------
 // must_change_password is enforced server-side, not just by the UI modal
 // ---------------------------------------------------------------------------
-test('user with mustChangePassword cannot use other APIs until they change it', async () => {
+test('a legacy must_change_password flag still blocks other APIs server-side', async () => {
+  // Nothing sets the flag any more, but if one survives, the server still refuses data APIs.
   createUser('forced1', PW, { mustChange: true });
   const jar = await login('forced1', PW);
-
   const blocked = await request('GET', '/api/articles', { cookies: jar });
-  assert.strictEqual(blocked.status, 403, 'other APIs must be refused');
-  assert.strictEqual(blocked.body.mustChangePassword, true);
-
+  assert.strictEqual(blocked.status, 403);
   const me = await request('GET', '/api/auth/me', { cookies: jar });
   assert.strictEqual(me.status, 200);
-  assert.strictEqual(me.body.user.mustChangePassword, true);
-
-  const change = await request('PUT', '/api/auth/password', {
-    cookies: jar, body: { currentPassword: PW, newPassword: PW2 },
-  });
-  assert.strictEqual(change.body.success, true, JSON.stringify(change.body));
-
-  const after = await request('GET', '/api/articles', { cookies: jar });
-  assert.strictEqual(after.status, 200);
 });
 
 test('refresh response keeps the mustChangePassword flag', async () => {
@@ -103,19 +92,17 @@ test('logout also kills the grace-period predecessor of the refresh token', asyn
   assert.strictEqual(r.status, 401);
 });
 
-test('changing the password revokes the other sessions but keeps the current one', async () => {
-  createUser('multi', PW, { email: null });
-  // no SMTP configured → password is applied directly
+test('setting a new password via the emailed link revokes every session', async () => {
+  createUser('multi', PW, { email: 'multi@example.test' });
   const s1 = await login('multi', PW);
   const s2 = await login('multi', PW);
-  const ch = await request('PUT', '/api/auth/password', {
-    cookies: s1, body: { currentPassword: PW, newPassword: PW2 },
-  });
-  assert.strictEqual(ch.body.success, true, JSON.stringify(ch.body));
-  const other = await request('POST', '/api/auth/refresh', { cookies: { tp_refresh: s2.tp_refresh } });
-  assert.strictEqual(other.status, 401, 'other session must be revoked');
-  const mine = await request('POST', '/api/auth/refresh', { cookies: { tp_refresh: s1.tp_refresh } });
-  assert.strictEqual(mine.body.success, true, 'current session must survive');
+  const f = auth.forgotPassword('multi@example.test');
+  const r = await request('POST', '/api/auth/reset-password', { body: { token: f._token, newPassword: PW2 } });
+  assert.strictEqual(r.body.success, true, JSON.stringify(r.body));
+  for (const s of [s1, s2]) {
+    const other = await request('POST', '/api/auth/refresh', { cookies: { tp_refresh: s.tp_refresh } });
+    assert.strictEqual(other.status, 401, 'old sessions must be revoked');
+  }
 });
 
 // ---------------------------------------------------------------------------
