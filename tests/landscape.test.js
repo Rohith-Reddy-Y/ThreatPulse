@@ -64,3 +64,36 @@ test('actor aliases fold into one row and are listed; one report counts once', (
   assert.strictEqual(apt28.term, 'Fancy Bear', 'search by the spelling the reports use');
   assert.strictEqual(apt28.origin.code, 'RU');
 });
+
+const kb = require('../src/attack-kb');
+
+test('analyzeTtps: tactic / technique / procedure, cited vs inferred, MITRE links, kill-chain order', () => {
+  const ttps = kb.analyzeTtps({
+    title: 'APT28 password spraying hits ministries',
+    description: 'The group used password spraying against Outlook accounts. Later it deployed a web shell on Exchange. T1110.003 observed.',
+    mitre_ids: 'T1110.003',
+  });
+  assert.deepStrictEqual(ttps.map((t) => `${t.tacticName}|${t.id}|${t.how}`), ['Persistence|T1505|inferred', 'Credential Access|T1110|cited']);
+  const bf = ttps.find((t) => t.id === 'T1110');
+  assert.strictEqual(bf.subId, 'T1110.003');
+  assert.strictEqual(bf.url, 'https://attack.mitre.org/techniques/T1110/003/');
+  assert.strictEqual(bf.procedure, 'The group used password spraying against Outlook accounts.', 'behaviour sentence beats the bare ID sentence');
+  assert.strictEqual(ttps[0].procedure, 'Later it deployed a web shell on Exchange.');
+  assert.strictEqual(kb.attackUrl('TA0006'), 'https://attack.mitre.org/tactics/TA0006/');
+  assert.ok(Object.values(kb.TECHNIQUES).every((t) => t.name && t.tactic && t.desc), 'every catalogue entry has name, tactic and description');
+});
+
+test('landscape techniques carry MITRE link, description, procedures and actors; actors carry their techniques', () => {
+  const r = L.buildLandscape([
+    row({ id: 1, title: 'Fancy Bear password spraying', description: 'Fancy Bear ran password spraying against mail portals.', threat_actors: 'Fancy Bear', url: 'https://news.example/1' }),
+    row({ id: 2, title: 'More spraying', description: 'Attackers used password spraying again.', url: 'https://news.example/2' }),
+  ], 7);
+  const t = r.attack.tactics.flatMap((x) => x.techniques).find((x) => x.id === 'T1110');
+  assert.strictEqual(t.url, 'https://attack.mitre.org/techniques/T1110/');
+  assert.ok(t.desc.length > 10);
+  assert.strictEqual(t.procedures.length, 2);
+  assert.strictEqual(t.procedures[0].url, 'https://news.example/1');
+  assert.deepStrictEqual(t.actors, [{ name: 'APT28', count: 1 }]);
+  assert.strictEqual(r.attack.tactics.find((x) => x.id === 'TA0006').url, 'https://attack.mitre.org/tactics/TA0006/');
+  assert.deepStrictEqual(r.actors[0].techniques.map((x) => x.id), ['T1110']);
+});

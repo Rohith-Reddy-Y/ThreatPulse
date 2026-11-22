@@ -11,6 +11,7 @@ const security = require('../security');
 const crypto = require('crypto');
 const geo = require('../geo');
 const landscape = require('../landscape');
+const attackKb = require('../attack-kb');
 const sourceCatalog = require('../source-catalog');
 const {
   sendAlertEmail, sendVerificationEmail, isEmailConfigured, describeEmail,
@@ -651,6 +652,11 @@ router.get('/articles', auth.requireAuth, (req, res) => {
       has_mitre: qstr(q.has_mitre, 5),
       is_patched: qstr(q.is_patched, 5)
     });
+    // TTPs per report: tactic, technique (linked to MITRE), the procedure sentence,
+    // and whether the report cites the ID or only describes the behaviour
+    if (result && Array.isArray(result.articles)) {
+      result.articles = result.articles.map((a) => ({ ...a, ttps: attackKb.analyzeTtps(a) }));
+    }
     res.json(result);
   } catch (error) {
     console.error('[API] Error fetching articles:', error.message);
@@ -658,7 +664,7 @@ router.get('/articles', auth.requireAuth, (req, res) => {
   }
 });
 
-// Threat geography for the 3D globe: countries named in the caller's own
+// Threat geography: countries named in the caller's own
 // articles, attributed actor origins, origin -> target arcs. Cached briefly per
 // scope (a 0.1-CPU host shouldn't rescan thousands of rows on every poll).
 const geoCache = new Map();

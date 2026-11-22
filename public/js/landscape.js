@@ -15,7 +15,7 @@
   if (!root) return;
 
   const $ = (sel, el = root) => el.querySelector(sel);
-  const state = { days: 7, tab: 'attack', data: null, attackView: 'matrix', loading: false };
+  const state = { days: 7, tab: 'attack', data: null, attackView: 'matrix', loading: false, selected: null };
 
   // Severity is a status: colour + text label, never colour alone
   const SEV_LABEL = { critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low' };
@@ -37,6 +37,9 @@
   }
   const sevChip = (s) => el('span', { class: `lp-sev lp-sev-${s || 'low'}` }, el('i', { 'aria-hidden': 'true' }), SEV_LABEL[s] || 'Low');
   const fmt = (n) => Number(n || 0).toLocaleString();
+  const httpUrl = (u) => { try { const x = new URL(u, location.href); return /^https?:$/.test(x.protocol) ? x.href : null; } catch (_) { return null; } };
+  const ext = (href, text, cls, title) => el('a', { href, target: '_blank', rel: 'noopener noreferrer', class: cls || null, title: title || null, onclick: (e) => e.stopPropagation() }, text);
+  const MITRE_ARROW = '\u2197';
   function ago(iso) {
     const t = Date.parse(iso);
     if (!Number.isFinite(t)) return '—';
@@ -140,7 +143,10 @@
       el('div', { class: 'lp-legend', 'aria-hidden': 'true' },
         el('span', { class: 'lp-legend-ramp' }, 'Fewer', ...[1, 2, 3, 4, 5].map((i) => el('i', { class: `lp-heat-${i}` })), 'More reports'),
         el('span', null, el('b', { class: 'lp-id-mark' }, 'ID'), 'cited by technique ID'),
-        el('span', { class: 'lp-legend-note' }, 'Other counts are inferred from described behaviour, e.g. “password spraying” → T1110')));
+        el('span', { class: 'lp-legend-note' }, 'Other counts are inferred from described behaviour, e.g. “password spraying” → T1110')),
+      el('div', { class: 'lp-actions' },
+        el('button', { type: 'button', class: 'lp-btn', onclick: exportLayer, title: 'Download an ATT&CK Navigator layer (v4.5 JSON) of these techniques' }, 'Export Navigator layer'),
+        ext('https://mitre-attack.github.io/attack-navigator/', `Open ATT&CK Navigator ${MITRE_ARROW}`, 'lp-link')));
     panel.append(toolbar);
     if (!all.length) return empty(panel, 'No ATT&CK techniques in this period yet.');
 
@@ -150,9 +156,10 @@
       const rows = [...all].sort((x, y) => y.total - x.total);
       panel.append(table(['Technique', 'Tactic', 'Reports', 'Cited by ID', 'Inferred', 'Highest severity'], rows.map((t) => ({
         cells: [el('span', null, el('code', { class: 'lp-code' }, t.id), ' ', t.name), tacticName[t.tactic] || '—', bar(t.total, max), fmt(t.explicit), fmt(t.inferred), sevChip(t.worst)],
-        onclick: () => filterFeed(t.term, `${t.id} ${t.name}`),
-        label: `Filter the feed by ${t.id} ${t.name}`,
+        onclick: () => select(t.id),
+        label: `Inspect ${t.id} ${t.name}`,
       })), [2, 3, 4]));
+      renderInspector(panel);
       return;
     }
 
@@ -160,15 +167,16 @@
     for (const ta of a.tactics) {
       const col = el('div', { class: 'lp-col', role: 'row' },
         el('div', { class: 'lp-col-head', role: 'columnheader' },
-          el('span', { class: 'lp-col-name' }, ta.name),
+          ext(ta.url, ta.name, 'lp-col-name'),
           el('span', { class: 'lp-col-count' }, ta.count ? `${fmt(ta.count)} report${ta.count === 1 ? '' : 's'}` : '—')));
       if (!ta.techniques.length) col.append(el('div', { class: 'lp-cell lp-cell-empty', role: 'gridcell' }, 'No activity'));
       for (const t of ta.techniques) {
         const step = heatStep(t.total, max);
         const cell = el('button', {
-          type: 'button', role: 'gridcell', class: `lp-cell lp-heat-${step}`,
-          'aria-label': `${t.id} ${t.name}: ${t.total} reports (${t.explicit} cite the ID, ${t.inferred} inferred). Filter the feed.`,
-          onclick: () => filterFeed(t.term, `${t.id} ${t.name}`),
+          type: 'button', role: 'gridcell', class: `lp-cell lp-heat-${step}${state.selected === t.id ? ' selected' : ''}`,
+          'aria-pressed': String(state.selected === t.id),
+          'aria-label': `${t.id} ${t.name}: ${t.total} reports (${t.explicit} cite the ID, ${t.inferred} inferred). Open details.`,
+          onclick: () => select(t.id),
         },
         el('span', { class: 'lp-cell-name' }, t.name),
         el('span', { class: 'lp-cell-meta' },
@@ -180,17 +188,109 @@
           tp.append(el('div', { class: 'lp-tip-row' }, `${fmt(t.total)} report${t.total === 1 ? '' : 's'} · ${fmt(t.explicit)} cite the ID · ${fmt(t.inferred)} inferred`));
           tp.append(el('div', { class: 'lp-tip-row' }, 'Highest severity: ', sevChip(t.worst)));
           for (const s of t.samples.slice(0, 2)) tp.append(el('div', { class: 'lp-tip-item' }, s.title));
-          tp.append(el('div', { class: 'lp-tip-hint' }, 'Click to filter the feed'));
+          tp.append(el('div', { class: 'lp-tip-hint' }, 'Click for procedures, actors and the MITRE page'));
         });
         col.append(cell);
       }
       grid.append(col);
     }
     panel.append(el('div', { class: 'lp-scroll' }, grid));
+    renderInspector(panel);
     if (a.unmapped.length) {
       panel.append(el('div', { class: 'lp-unmapped' }, 'Also cited: ',
         ...a.unmapped.map((t) => el('button', { type: 'button', class: 'lp-chip', onclick: () => filterFeed(t.id, t.id) }, `${t.id} (${t.total})`))));
     }
+  }
+
+  // ── Technique inspector: TTP detail with procedures, actors and MITRE link ──
+  function allTechniques() {
+    const a = state.data && state.data.attack;
+    return a ? [...a.tactics.flatMap((t) => t.techniques), ...a.unmapped] : [];
+  }
+  function select(id) {
+    state.selected = state.selected === id ? null : id;
+    renderAttack();
+    const insp = $('.lp-inspector');
+    if (insp) insp.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+  function renderInspector(panel) {
+    const t = allTechniques().find((x) => x.id === state.selected);
+    if (!t) return;
+    const tactic = state.data.attack.tactics.find((x) => x.id === t.tactic);
+    const insp = el('section', { class: 'lp-inspector', 'aria-label': `${t.id} ${t.name} details` });
+    insp.append(el('div', { class: 'lp-insp-head' },
+      el('div', null,
+        el('div', { class: 'lp-insp-crumb' }, tactic ? ext(tactic.url, `${tactic.id} · ${tactic.name}`) : 'Technique', ' › ', el('code', null, t.id)),
+        el('h4', null, t.name)),
+      el('div', { class: 'lp-insp-actions' },
+        el('button', { type: 'button', class: 'lp-btn lp-btn-primary', onclick: () => filterFeed(t.term, `${t.id} ${t.name}`) }, 'Filter feed'),
+        ext(t.url || `https://attack.mitre.org/techniques/${t.id}/`, `View on MITRE ATT&CK ${MITRE_ARROW}`, 'lp-btn'),
+        el('button', { type: 'button', class: 'lp-close', 'aria-label': 'Close details', onclick: () => select(t.id) }, '\u00d7'))));
+    if (t.desc) insp.append(el('p', { class: 'lp-insp-desc' }, t.desc, el('span', { class: 'lp-muted' }, ' Summary — see MITRE for the full definition.')));
+    insp.append(el('div', { class: 'lp-insp-stats' },
+      el('div', null, el('b', null, fmt(t.total)), el('span', null, 'reports')),
+      el('div', null, el('b', null, fmt(t.explicit)), el('span', null, 'cite the ID')),
+      el('div', null, el('b', null, fmt(t.inferred)), el('span', null, 'inferred from behaviour')),
+      el('div', null, sevChip(t.worst), el('span', null, 'highest severity'))));
+
+    const procs = el('div', { class: 'lp-insp-col' }, el('h5', null, 'Procedures observed'));
+    if (t.procedures && t.procedures.length) {
+      const ul = el('ul', { class: 'lp-procs' });
+      for (const p of t.procedures) {
+        const link = httpUrl(p.url);
+        ul.append(el('li', null,
+          el('q', null, p.text),
+          el('div', { class: 'lp-proc-src' },
+            el('span', { class: `lp-how lp-how-${p.how}` }, p.how === 'cited' ? 'ID cited' : 'inferred'),
+            link ? ext(link, p.title) : el('span', null, p.title),
+            el('span', { class: 'lp-muted' }, ` · ${ago(p.published)}`))));
+      }
+      procs.append(ul);
+    } else procs.append(el('p', { class: 'lp-muted' }, 'No procedure text captured.'));
+
+    const who = el('div', { class: 'lp-insp-col lp-insp-side' }, el('h5', null, 'Threat actors in these reports'));
+    if (t.actors && t.actors.length) {
+      who.append(el('div', { class: 'lp-chips' }, ...t.actors.map((a) =>
+        el('button', { type: 'button', class: 'lp-chip', onclick: () => filterFeed(a.name, a.name), title: `Filter the feed by ${a.name}` }, `${a.name} (${a.count})`))));
+    } else who.append(el('p', { class: 'lp-muted' }, 'No named actor in these reports.'));
+    who.append(el('p', { class: 'lp-note', style: { marginTop: '12px' } },
+      'TTP = Tactic › Technique › Procedure. A procedure is the reported behaviour in the source’s own words.'));
+    insp.append(el('div', { class: 'lp-insp-body' }, procs, who));
+    panel.append(insp);
+  }
+
+  // ── ATT&CK Navigator layer (v4.5) export ──
+  function exportLayer() {
+    const d = state.data;
+    if (!d) return;
+    const techs = allTechniques();
+    const max = Math.max(1, ...techs.map((t) => t.total));
+    const range = state.days === 1 ? '24 hours' : `${state.days} days`;
+    const layer = {
+      name: `ThreatPulse — last ${range}`,
+      versions: { navigator: '5.1.0', layer: '4.5' },
+      domain: 'enterprise-attack',
+      description: `Techniques seen in ${d.totalArticles} ThreatPulse reports (last ${range}, generated ${d.generatedAt}). Score = number of reports. Comments show how many cite the technique ID vs. describe the behaviour (inferred).`,
+      sorting: 3,
+      layout: { layout: 'side', showID: true, showName: true, expandedSubtechniques: 'none' },
+      hideDisabled: false,
+      techniques: techs.map((t) => ({
+        techniqueID: t.id, score: t.total, enabled: true, showSubtechniques: false,
+        comment: `${t.total} report(s): ${t.explicit} cite the ID, ${t.inferred} inferred. Highest severity: ${t.worst}.` +
+          (t.actors && t.actors.length ? ` Actors: ${t.actors.map((a) => a.name).join(', ')}.` : ''),
+      })),
+      gradient: { colors: ['#cde2fb', '#2a78d6', '#0d366b'], minValue: 0, maxValue: max },
+      legendItems: [],
+      metadata: [{ name: 'source', value: 'ThreatPulse' }, { name: 'window', value: range }],
+      showTacticRowBackground: false,
+      selectTechniquesAcrossTactics: true,
+    };
+    const blob = new Blob([JSON.stringify(layer, null, 2)], { type: 'application/json' });
+    const a = el('a', { href: URL.createObjectURL(blob), download: `threatpulse-attack-layer-${state.days}d.json` });
+    document.body.append(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    announce('ATT&CK Navigator layer downloaded. Open it in the Navigator: Open Existing Layer → Upload from local.');
   }
 
   // ── Shared table + inline bar ──
@@ -220,11 +320,14 @@
     if (!d || !d.actors.length) return empty(panel, 'No named threat actors in this period.');
     const max = Math.max(...d.actors.map((x) => x.count));
     panel.append(el('p', { class: 'lp-note' }, 'Attribution follows public vendor naming and is shown only where it is consistently reported.'));
-    panel.append(table(['Actor', 'Attributed to', 'Reports', 'Highest severity', 'Sectors', 'CVEs', 'Last seen'], d.actors.map((x) => ({
+    panel.append(table(['Actor', 'Attributed to', 'Reports', 'Highest severity', 'Top techniques', 'Sectors', 'CVEs', 'Last seen'], d.actors.map((x) => ({
       cells: [
         el('span', null, el('b', null, x.name), x.aliases && x.aliases.length ? el('span', { class: 'lp-aka' }, `aka ${x.aliases.join(', ')}`) : null),
         x.origin ? x.origin.name : el('span', { class: 'lp-muted' }, 'Unattributed'),
         bar(x.count, max), sevChip(x.worst),
+        x.techniques && x.techniques.length
+          ? el('span', { class: 'lp-ttp-chips' }, ...x.techniques.slice(0, 4).map((t) => ext(t.url, t.id, 'lp-code-link', `${t.id} ${t.name} — ${t.count} report(s). Opens MITRE ATT&CK.`)))
+          : el('span', { class: 'lp-muted' }, '—'),
         x.sectors.length ? x.sectors.join(', ') : el('span', { class: 'lp-muted' }, '—'),
         x.cves.length ? el('span', null, ...x.cves.map((c) => el('code', { class: 'lp-code' }, c))) : el('span', { class: 'lp-muted' }, '—'),
         ago(x.lastSeen),

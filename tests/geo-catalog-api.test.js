@@ -92,3 +92,16 @@ test('landscape: per-user scope, and the feed search finds ATT&CK IDs and sector
   assert.ok(found.articles.some((x) => x.title === 'Generic advisory'), 'search by technique ID');
   assert.ok(db.getArticles({ userId: a, search: 'financial' }).articles.some((x) => x.title === 'Generic advisory'), 'search by sector');
 });
+
+test('articles API returns TTPs per report', async () => {
+  const u = createUser('ttp_user', PW);
+  const src = db.addSource({ name: 'T', url: 'https://feeds.example/ttp', user_id: u }).id;
+  article(u, src, 'Infostealer campaign uses fake CAPTCHA lures', { description: 'Victims are shown a fake CAPTCHA that runs PowerShell.' });
+  const jar = await h.login('ttp_user', PW, ip());
+  const r = await request('GET', '/api/articles', { cookies: jar });
+  assert.strictEqual(r.status, 200);
+  const a = r.body.articles.find((x) => /Infostealer/.test(x.title));
+  const ids = a.ttps.map((t) => t.id);
+  assert.ok(ids.includes('T1555') && ids.includes('T1204') && ids.includes('T1059'), ids.join(','));
+  assert.ok(a.ttps.every((t) => t.url.startsWith('https://attack.mitre.org/techniques/') && t.tacticName && t.how === 'inferred'));
+});

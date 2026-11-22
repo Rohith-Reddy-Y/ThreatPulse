@@ -909,7 +909,7 @@ function getGeoArticles(userId, sinceIso, limit = 4000) {
   else if (userId) { where.push('articles.user_id = ?'); params.push(userId); }
   params.push(Math.max(1, Math.min(10000, limit | 0)));
   return getDb().prepare(
-    `SELECT id, title, substr(description, 1, 1500) AS description, severity, threat_actors,
+    `SELECT id, title, url, substr(description, 1, 1500) AS description, severity, threat_actors,
             mitre_ids, sector, cve_id, has_poc, is_patched, tags, published_date
        FROM articles WHERE ${where.join(' AND ')}
       ORDER BY published_date DESC LIMIT ?`

@@ -1098,6 +1098,23 @@
     ).join('');
     const ttpBadge = mitreIds.length ? '<span class="badge badge-ttp">TTP</span>' : '';
 
+    // ATT&CK TTPs from the server: tactic › technique (MITRE link), procedure on hover,
+    // "cited" when the report names the ID, "inferred" when it describes the behaviour
+    const ttps = Array.isArray(article.ttps) ? article.ttps : null;
+    const ttpItem = (t) => {
+      const shown = t.subId || t.id;
+      const tip = `${t.tacticName ? t.tacticName + ' › ' : ''}${shown} ${t.name}` +
+        (t.procedure ? ` — “${t.procedure}”` : '') + (t.how === 'inferred' ? ' (inferred from the described behaviour)' : ' (technique ID cited in the report)');
+      return `<li class="ttp ttp-${t.how === 'cited' ? 'cited' : 'inferred'}"><a href="${escapeHtml(mitreLink(shown))}" target="_blank" rel="noopener" title="${escapeHtml(tip)}">` +
+        `${t.tacticName ? `<span class="ttp-tactic">${escapeHtml(t.tacticName)}</span>` : ''}<code>${escapeHtml(shown)}</code><span class="ttp-name">${escapeHtml(t.name)}</span>` +
+        `${t.how === 'inferred' ? '<span class="ttp-how">inferred</span>' : ''}</a></li>`;
+    };
+    const ttpHtml = ttps && ttps.length ? `<div class="ttp-block" aria-label="MITRE ATT&CK TTPs">` +
+      `<div class="ttp-head">ATT&amp;CK<span>${ttps.length} TTP${ttps.length === 1 ? '' : 's'}</span></div>` +
+      `<ul class="ttp-list">${ttps.slice(0, 3).map(ttpItem).join('')}</ul>` +
+      (ttps.length > 3 ? `<details class="ttp-more"><summary>+${ttps.length - 3} more</summary><ul class="ttp-list">${ttps.slice(3).map(ttpItem).join('')}</ul></details>` : '') +
+      `</div>` : '';
+
     // Patch status — 1 = patched, 0 = unpatched, -1 = unknown
     const patchBadge = article.is_patched === 1
       ? '<span class="badge badge-patched">Patched</span>'
@@ -1196,7 +1213,7 @@
     return `
       <article class="article-card ${article.severity === 'critical' ? 'critical' : ''} ${mitreIds.length ? 'has-ttp' : ''}${cardExtraCls}" data-article-id="${article.id}">
         <div class="article-header">
-          <div class="article-badges">${catBadge}${sevBadge}${ownerBadge}${ttpBadge}${pocBadge}${patchBadge}${sectorBadge}${actorBadge}${mitreBadges}${cveLink}</div>
+          <div class="article-badges">${catBadge}${sevBadge}${ownerBadge}${ttps ? '' : ttpBadge}${pocBadge}${patchBadge}${sectorBadge}${actorBadge}${ttps ? '' : mitreBadges}${cveLink}</div>
         </div>
         <h3 class="article-title"><a href="${escapeHtml(safeUrl(article.url))}" target="_blank" rel="noopener">${escapeHtml(article.title)}</a></h3>
         <div class="article-meta">
@@ -1206,6 +1223,7 @@
         </div>
         ${desc ? `<p class="article-desc">${desc}</p>` : ''}
         ${article.tags ? `<div class="article-tags">${String(article.tags).split(',').map(t => t.trim()).filter(Boolean).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join('')}</div>` : ''}
+        ${ttpHtml}
         ${iocHtml}
         ${reviewHtml}
         <div class="article-actions">
