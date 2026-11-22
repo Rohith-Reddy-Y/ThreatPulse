@@ -224,7 +224,7 @@ function analyzeTtps(article) {
     const meta = TECHNIQUES[id];
     out.push({
       id, subId: sub !== id ? sub : null, name: meta ? meta.name : id, tactic: meta ? meta.tactic : null,
-      tacticName: meta ? TACTIC_NAME[meta.tactic] : null, how: 'cited', term: sub,
+      tacticName: meta ? TACTIC_NAME[meta.tactic] : null, desc: meta ? meta.desc : null, how: 'cited', term: sub,
       procedure: (INFER_BY_ID[id] && procedureFor(title, body, INFER_BY_ID[id])) || procedureFor(title, body, sub), url: attackUrl(sub),
     });
   }
@@ -232,17 +232,19 @@ function analyzeTtps(article) {
     if (seen.has(id)) continue;
     const m = re.exec(text);
     if (!m) continue;
+    // "with no phishing", "not ransomware", "without malware" describe what did NOT happen
+    if (/\b(no|not|without|never|non)[\s-]+(\w+\s+){0,1}$/i.test(text.slice(Math.max(0, m.index - 24), m.index))) continue;
     seen.add(id);
     const meta = TECHNIQUES[id];
     const term = String(m[1] || m[0]).trim().slice(0, 40);
     out.push({
-      id, subId: null, name: meta.name, tactic: meta.tactic, tacticName: TACTIC_NAME[meta.tactic], how: 'inferred', term,
+      id, subId: null, name: meta.name, tactic: meta.tactic, tacticName: TACTIC_NAME[meta.tactic], desc: meta.desc, how: 'inferred', term,
       procedure: procedureFor(title, body, re) || procedureFor(title, body, term), url: attackUrl(id),
     });
   }
   if (/Ransomware Leak/i.test(title) && !seen.has('T1657')) {
     const meta = TECHNIQUES.T1657;
-    out.push({ id: 'T1657', subId: null, name: meta.name, tactic: meta.tactic, tacticName: TACTIC_NAME[meta.tactic], how: 'inferred',
+    out.push({ id: 'T1657', subId: null, name: meta.name, tactic: meta.tactic, tacticName: TACTIC_NAME[meta.tactic], desc: meta.desc, how: 'inferred',
       term: 'Ransomware Leak', procedure: 'Victim listed on a ransomware leak site (extortion).', url: attackUrl('T1657') });
   }
   // kill-chain order

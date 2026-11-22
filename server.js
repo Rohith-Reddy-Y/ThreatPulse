@@ -180,10 +180,6 @@ app.get('/admin', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
 
-// Analytics page (charts over the caller's own reports; data comes from /api/analytics)
-app.get('/analytics', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'analytics.html'));
-});
 
 // ============================================
 // ERROR HANDLING — never expose internals

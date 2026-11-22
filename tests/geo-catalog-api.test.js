@@ -69,20 +69,9 @@ test('admin source catalog: one row per feed, built-in matches folded, contribut
   assert.strictEqual((await request('GET', '/api/admin/source-catalog', { cookies: plain })).status, 403);
 });
 
-test('landscape: per-user scope, and the feed search finds ATT&CK IDs and sectors', async () => {
-  const a = createUser('ls_alice', PW), b = createUser('ls_bob', PW);
+test('the feed search finds ATT&CK IDs and sectors', async () => {
+  const a = createUser('ls_alice', PW);
   const sa = db.addSource({ name: 'A2', url: 'https://feeds.example/a2', user_id: a }).id;
-  const sb = db.addSource({ name: 'B2', url: 'https://feeds.example/b2', user_id: b }).id;
-  article(a, sa, 'Volt Typhoon password spraying against utilities', { actors: 'Volt Typhoon' });
-  article(b, sb, 'Ransomware attack encrypts hospital systems', { actors: 'LockBit' });
-
-  const ja = await h.login('ls_alice', PW, ip());
-  const ra = await request('GET', '/api/landscape?days=7', { cookies: ja });
-  assert.strictEqual(ra.status, 200, JSON.stringify(ra.body));
-  assert.deepStrictEqual(ra.body.actors.map((x) => x.name), ['Volt Typhoon']);
-  const techA = ra.body.attack.tactics.flatMap((t) => t.techniques).map((t) => t.id);
-  assert.ok(techA.includes('T1110') && !techA.includes('T1486'), techA.join(','));
-  assert.ok(!JSON.stringify(ra.body).includes('hospital'), "another user's report leaked");
 
   // search now covers mitre_ids
   const id = db.insertArticle({ url: 'https://news.example/ttp', title: 'Generic advisory', description: 'nothing', user_id: a, source_id: sa,
@@ -104,19 +93,4 @@ test('articles API returns TTPs per report', async () => {
   const ids = a.ttps.map((t) => t.id);
   assert.ok(ids.includes('T1555') && ids.includes('T1204') && ids.includes('T1059'), ids.join(','));
   assert.ok(a.ttps.every((t) => t.url.startsWith('https://attack.mitre.org/techniques/') && t.tacticName && t.how === 'inferred'));
-});
-
-test('analytics API is per user', async () => {
-  const a = createUser('an_alice', PW), b = createUser('an_bob', PW);
-  const sa = db.addSource({ name: 'AA', url: 'https://feeds.example/aa', user_id: a }).id;
-  const sb = db.addSource({ name: 'BB', url: 'https://feeds.example/bb', user_id: b }).id;
-  article(a, sa, 'Alice report one');
-  article(b, sb, 'Bob report one');
-  article(b, sb, 'Bob report two');
-  const ja = await h.login('an_alice', PW, ip());
-  const r = await request('GET', '/api/analytics?days=7&tz=330', { cookies: ja });
-  assert.strictEqual(r.status, 200, JSON.stringify(r.body));
-  assert.strictEqual(r.body.kpis.reports.value, 1);
-  assert.ok(!JSON.stringify(r.body).includes('Bob'), "another user's data leaked");
-  assert.strictEqual(r.body.kpis.sources.total, 1);
 });

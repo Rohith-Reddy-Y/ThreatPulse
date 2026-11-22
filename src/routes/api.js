@@ -10,9 +10,7 @@ const auth = require('../auth');
 const security = require('../security');
 const crypto = require('crypto');
 const geo = require('../geo');
-const landscape = require('../landscape');
 const attackKb = require('../attack-kb');
-const analytics = require('../analytics');
 const sourceCatalog = require('../source-catalog');
 const {
   sendAlertEmail, sendVerificationEmail, isEmailConfigured, describeEmail,
@@ -675,61 +673,6 @@ router.get('/geo', auth.requireAuth, (req, res) => {
   }
 });
 
-// Threat Landscape: ATT&CK techniques (explicit vs inferred), threat actors,
-// vulnerabilities, sectors and countries — from the caller's own articles.
-const landscapeCache = new Map();
-router.get('/landscape', auth.requireAuth, (req, res) => {
-  try {
-    const days = [1, 7, 30].includes(parseInt(req.query.days, 10)) ? parseInt(req.query.days, 10) : 7;
-    const scope = readScope(req.user);
-    const key = `${scope === null ? 'all' : scope}:${days}`;
-    const hit = landscapeCache.get(key);
-    if (hit && Date.now() - hit.at < GEO_TTL_MS) return res.json(hit.data);
-    const since = new Date(Date.now() - days * 86400000).toISOString();
-    const data = landscape.buildLandscape(db.getGeoArticles(scope, since, 10000), days);
-    if (landscapeCache.size > 500) landscapeCache.delete(landscapeCache.keys().next().value);
-    landscapeCache.set(key, { at: Date.now(), data });
-    res.json(data);
-  } catch (error) {
-    console.error('[API] Landscape error:', error.message);
-    res.status(500).json({ error: 'Failed to build threat landscape' });
-  }
-});
-
-// Analytics page: severity over time, KPIs vs previous period, categories,
-// top sources, top sources / techniques over time — caller's own reports.
-const analyticsCache = new Map();
-const analyticsInflight = new Map();
-router.get('/analytics', auth.requireAuth, async (req, res) => {
-  try {
-    const days = [1, 7, 14, 30].includes(parseInt(req.query.days, 10)) ? parseInt(req.query.days, 10) : 7;
-    // Real offsets are multiples of 15 min; round to 30 so the cache can't be
-    // busted with hundreds of distinct tz values (each miss is a full rebuild).
-    const tz = Math.round(Math.max(-840, Math.min(840, parseInt(req.query.tz, 10) || 0)) / 30) * 30;
-    const scope = readScope(req.user);
-    const key = `${scope === null ? 'all' : scope}:${days}:${tz}`;
-    const hit = analyticsCache.get(key);
-    if (hit && Date.now() - hit.at < GEO_TTL_MS) return res.json(hit.data);
-    // One build per key at a time; concurrent requests share it.
-    let p = analyticsInflight.get(key);
-    if (!p) {
-      p = (async () => {
-        const since = new Date(Date.now() - 2 * days * 86400000).toISOString();
-        const rows = db.getGeoArticles(scope, since, 10000);
-        const sources = scope === null ? db.getAllSources() : scope === db.SYSTEM_SCOPE ? db.getSystemSources() : db.getSourcesForUser(scope);
-        const data = await analytics.buildAnalytics(rows, sources, { days, tz });
-        if (analyticsCache.size > 500) analyticsCache.delete(analyticsCache.keys().next().value);
-        analyticsCache.set(key, { at: Date.now(), data });
-        return data;
-      })().finally(() => analyticsInflight.delete(key));
-      analyticsInflight.set(key, p);
-    }
-    res.json(await p);
-  } catch (error) {
-    console.error('[API] Analytics error:', error.message);
-    res.status(500).json({ error: 'Failed to build analytics' });
-  }
-});
 
 router.get('/articles/stats', auth.requireAuth, (req, res) => {
   try {

@@ -1109,21 +1109,37 @@
     ).join('');
     const ttpBadge = mitreIds.length ? '<span class="badge badge-ttp">TTP</span>' : '';
 
-    // ATT&CK TTPs from the server: tactic › technique (MITRE link), procedure on hover,
-    // "cited" when the report names the ID, "inferred" when it describes the behaviour
+    // Threat-intel panel: who (threat actor) → how (each MITRE technique ID tied
+    // to its tactic and to the sentence in the report that shows it = the TTP).
+    // "cited" = the report names the ID; "inferred" = it describes the behaviour.
     const ttps = Array.isArray(article.ttps) ? article.ttps : null;
+    const actorNames = article.threat_actors ? article.threat_actors.split(',').map(a => a.trim()).filter(Boolean) : [];
+    const actorChips = actorNames.map(name => {
+      const cls = actorClass(name);
+      const clsTag = cls ? `<span class="ta-class ta-class-${cls.toLowerCase()}">${cls}</span>` : '';
+      return `<button type="button" class="ti-actor" data-filter-actor="${escapeHtml(name)}" title="${cls ? 'Class ' + cls + ' threat actor' : 'Threat actor'} — show all reports about ${escapeHtml(name)}">${clsTag}${escapeHtml(name)}</button>`;
+    }).join('');
     const ttpItem = (t) => {
       const shown = t.subId || t.id;
-      const tip = `${t.tacticName ? t.tacticName + ' › ' : ''}${shown} ${t.name}` +
-        (t.procedure ? ` — “${t.procedure}”` : '') + (t.how === 'inferred' ? ' (inferred from the described behaviour)' : ' (technique ID cited in the report)');
-      return `<li class="ttp ttp-${t.how === 'cited' ? 'cited' : 'inferred'}"><a href="${escapeHtml(mitreLink(shown))}" target="_blank" rel="noopener" title="${escapeHtml(tip)}">` +
-        `${t.tacticName ? `<span class="ttp-tactic">${escapeHtml(t.tacticName)}</span>` : ''}<code>${escapeHtml(shown)}</code><span class="ttp-name">${escapeHtml(t.name)}</span>` +
-        `${t.how === 'inferred' ? '<span class="ttp-how">inferred</span>' : ''}</a></li>`;
+      const cited = t.how === 'cited';
+      return `<li class="ti-step ${cited ? 'ti-cited' : 'ti-inferred'}">` +
+        `<span class="ti-tactic">${escapeHtml(t.tacticName || 'Unmapped')}</span>` +
+        `<a class="ti-id" href="${escapeHtml(mitreLink(shown))}" target="_blank" rel="noopener" title="Open ${escapeHtml(shown)} on attack.mitre.org">${escapeHtml(shown)}</a>` +
+        `<span class="ti-tech">${escapeHtml(t.name)}</span>` +
+        `<span class="ti-how" title="${cited ? 'Technique ID cited in the report' : 'Inferred from the behaviour the report describes'}">${cited ? 'cited' : 'inferred'}</span>` +
+        (t.procedure ? `<q class="ti-proc">${escapeHtml(t.procedure)}</q>` : '') +
+        `</li>`;
     };
-    const ttpHtml = ttps && ttps.length ? `<div class="ttp-block" aria-label="MITRE ATT&CK TTPs">` +
-      `<div class="ttp-head">ATT&amp;CK<span>${ttps.length} TTP${ttps.length === 1 ? '' : 's'}</span></div>` +
-      `<ul class="ttp-list">${ttps.slice(0, 3).map(ttpItem).join('')}</ul>` +
-      (ttps.length > 3 ? `<details class="ttp-more"><summary>+${ttps.length - 3} more</summary><ul class="ttp-list">${ttps.slice(3).map(ttpItem).join('')}</ul></details>` : '') +
+    const tacticCount = ttps ? new Set(ttps.map(t => t.tactic).filter(Boolean)).size : 0;
+    const ttpHtml = ttps && (ttps.length || actorNames.length) ? `<div class="ti-panel" aria-label="Threat actor and MITRE ATT&CK TTPs">` +
+      `<div class="ti-head"><span class="ti-title">MITRE ATT&amp;CK</span>` +
+      `<span class="ti-count">${ttps.length ? `${ttps.length} TTP${ttps.length === 1 ? '' : 's'} · ${tacticCount}/14 tactics` : 'no techniques identified'}</span>` +
+      (ttps.length ? `<button type="button" class="ti-3d-btn" data-attack-path="${article.id}" title="See this attack step by step in 3D">3D attack path</button>` : '') +
+      `</div>` +
+      `<div class="ti-actor-row"><span class="ti-label">Threat actor</span>${actorChips || '<span class="ti-none">Not attributed in this report</span>'}</div>` +
+      (ttps.length ? `<ol class="ti-steps">${ttps.slice(0, 3).map(ttpItem).join('')}</ol>` +
+        (ttps.length > 3 ? `<details class="ti-more"><summary>+${ttps.length - 3} more TTP${ttps.length - 3 === 1 ? '' : 's'}</summary><ol class="ti-steps" start="4">${ttps.slice(3).map(ttpItem).join('')}</ol></details>` : '')
+        : '') +
       `</div>` : '';
 
     // Patch status — 1 = patched, 0 = unpatched, -1 = unknown
@@ -1222,9 +1238,9 @@
     else if (escalatedByAnyone) cardExtraCls = ' escalated-by-me';
 
     return `
-      <article class="article-card ${article.severity === 'critical' ? 'critical' : ''} ${mitreIds.length ? 'has-ttp' : ''}${cardExtraCls}" data-article-id="${article.id}">
+      <article class="article-card ${article.severity === 'critical' ? 'critical' : ''} ${(ttps && ttps.length) || mitreIds.length ? 'has-ttp' : ''}${cardExtraCls}" data-article-id="${article.id}">
         <div class="article-header">
-          <div class="article-badges">${catBadge}${sevBadge}${ownerBadge}${ttps ? '' : ttpBadge}${pocBadge}${patchBadge}${sectorBadge}${actorBadge}${ttps ? '' : mitreBadges}${cveLink}</div>
+          <div class="article-badges">${catBadge}${sevBadge}${ownerBadge}${ttps ? '' : ttpBadge}${pocBadge}${patchBadge}${sectorBadge}${ttpHtml ? '' : actorBadge}${ttps ? '' : mitreBadges}${cveLink}</div>
         </div>
         <h3 class="article-title"><a href="${escapeHtml(safeUrl(article.url))}" target="_blank" rel="noopener">${escapeHtml(article.title)}</a></h3>
         <div class="article-meta">
@@ -2211,6 +2227,27 @@
           escalateBtn.textContent = 'Escalate';
           escalateBtn.disabled = false;
         });
+      }
+
+      // Threat actor chip → show every report about that actor
+      const actorBtn = e.target.closest('[data-filter-actor]');
+      if (actorBtn) {
+        const name = actorBtn.dataset.filterActor;
+        const sel = $('#threat-actor-filter');
+        const opt = sel && [...sel.options].find(o => o.value.toLowerCase() === name.toLowerCase());
+        if (opt) { sel.value = opt.value; sel.dispatchEvent(new Event('change', { bubbles: true })); }
+        else { const si = $('#search-input'); si.value = name; si.dispatchEvent(new Event('input', { bubbles: true })); }
+        document.querySelector('.filter-bar')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        return;
+      }
+
+      // 3D attack path for one article
+      const pathBtn = e.target.closest('[data-attack-path]');
+      if (pathBtn) {
+        const id = parseInt(pathBtn.dataset.attackPath, 10);
+        const art = state.articles.find(a => a.id === id);
+        if (art && window.ThreatPulseAttackPath) window.ThreatPulseAttackPath.open(art, pathBtn);
+        return;
       }
 
       // AI summary + triage button (per-article)

@@ -296,3 +296,31 @@ test('admin panel lists pending password resets with a copyable link', async () 
   assert.match(html, /erin@example\.test/);
   assert.match(html, /data-copy="https:\/\/tp\.test\/\?reset=abc123"/);
 });
+
+// ---------------------------------------------------------------------------
+// Article cards: threat actor + each MITRE ID tied to its tactic and procedure
+// ---------------------------------------------------------------------------
+test('cards show the threat actor and every MITRE ID linked to its TTP, with a 3D attack path button', async () => {
+  const art = {
+    id: 42, title: 'APT28 phishing <b>x</b>', url: 'https://news.example/a', source_name: 'Src', severity: 'high', category: 'threat_intel',
+    published_date: new Date().toISOString(), threat_actors: 'APT28',
+    ttps: [
+      { id: 'T1566', subId: null, name: 'Phishing', tactic: 'TA0001', tacticName: 'Initial Access', how: 'cited', procedure: 'Emails with <script>alert(1)</script> lures.', url: 'https://attack.mitre.org/techniques/T1566/' },
+      { id: 'T1059', subId: null, name: 'Command and Scripting Interpreter', tactic: 'TA0002', tacticName: 'Execution', how: 'inferred', procedure: 'PowerShell ran.' },
+    ],
+  };
+  const b = createBrowser({ routes: baseRoutes({
+    'GET /api/auth/me': { success: true, user: ALICE },
+    'GET /api/articles': { articles: [art], total: 1, page: 1, totalPages: 1 },
+  }) });
+  await b.settle();
+  const html = b.el('articles-container').innerHTML;
+  assert.match(html, /class="ti-panel"/);
+  assert.match(html, /data-filter-actor="APT28"/);
+  assert.match(html, /<span class="ti-tactic">Initial Access<\/span><a class="ti-id" href="https:\/\/attack\.mitre\.org\/techniques\/T1566\/?"/);
+  assert.match(html, /ti-cited/);
+  assert.match(html, /ti-inferred/);
+  assert.match(html, /data-attack-path="42"/);
+  assert.match(html, /2 TTPs · 2\/14 tactics/);
+  assert.ok(!html.includes('<script>alert(1)'), 'procedure text is escaped');
+});
