@@ -270,9 +270,10 @@ const ownArticle = (actor) => {
 async function newGuestThread() {
   const title = `guest quokka ${uniq()}`;
   const r = await dispatch('POST', '/api/ai/ask', {
-    cookies: { tp_access: tokenFor(guestId), tp_ai_gsid: GUEST_SID }, body: { question: title },
+    cookies: { tp_access: tokenFor(guestId), tp_ai_gsid: GUEST_SID }, body: { question: title, mode: 'web' },
   });
-  assert.strictEqual(r.status, 503);
+  // web mode creates the thread even without API keys (RAG now refuses up front)
+  assert.ok([200, 503].includes(r.status), `ask -> ${r.status}`);
   return db.getThreads(guestId).find(t => t.title === title).id;
 }
 const ownThread = (actor) => (actor.who === 'guest' ? newGuestThread() : userIdOf(actor) ? db.createThread(userIdOf(actor), 't') : data.a.thread);
@@ -283,6 +284,7 @@ const ROUTES = {
   'GET /healthz': { policy: 'public', allow: [200] },
   'GET /admin': { policy: 'public', allow: [200] }, // static HTML shell; all data is behind /api/admin/*
   // auth (pre-auth)
+  'GET /api/auth/config': { policy: 'public', allow: [200] },
   'POST /api/auth/login': { policy: 'public', allow: [200] },
   'POST /api/auth/register': { policy: 'public', allow: [200] },
   'POST /api/auth/forgot-password': { policy: 'public', allow: [200] },
@@ -621,7 +623,9 @@ test('email change needs the current password (a session alone must not be able 
   assert.strictEqual(db.getDb().prepare('SELECT COUNT(*) c FROM verification_codes WHERE user_id = ?').get(u).c, 0);
   const ok = await dispatch('PUT', '/api/auth/email', { ...creds, body: { email: 'mine@example.test', currentPassword: PW } });
   assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
-  assert.strictEqual(ok.body.verificationRequired, true);
+  // No SMTP in tests: with the right password the change is applied directly
+  // (a code could never arrive); with SMTP a code would be sent instead.
+  assert.strictEqual(db.getUserById(u).email, 'mine@example.test');
 });
 
 test('invite codes, reset tokens, audit log and user list are admin-only', async () => {
@@ -836,4 +840,17 @@ test('server.js: middleware order — cookies, CSRF and rate limits run before a
   assert.ok(cookieIdx === 0, 'cookie parser first');
   assert.ok(csrfIdx > cookieIdx && csrfIdx < apiRouterIdx && csrfIdx < aiRouterIdx, 'CSRF before routers');
   assert.ok(authLimitIdx > 0 && authLimitIdx < apiRouterIdx, 'auth limiter before routers');
+});
+
+test('reset links: an admin never sees another admin account\'s live reset token', async () => {
+  const future = new Date(Date.now() + 3600e3).toISOString().replace('T', ' ').slice(0, 19);
+  const victim = createUser(`plain_${uniq()}`, PW);
+  db.createPasswordResetToken(ids.admin2, 'tok-admin2-' + uniq(), future);
+  db.createPasswordResetToken(victim, 'tok-user-' + uniq(), future);
+  const r = await call('admin', 'GET', '/api/admin/reset-tokens');
+  assert.strictEqual(r.status, 200);
+  const byUser = Object.fromEntries(r.body.tokens.map(t => [t.user_id, t]));
+  assert.strictEqual(byUser[ids.admin2].token, null);
+  assert.strictEqual(byUser[ids.admin2].withheld, 'admin_account');
+  assert.match(byUser[victim].token, /^tok-user-/);   // no SMTP: manual recovery for normal users still works
 });

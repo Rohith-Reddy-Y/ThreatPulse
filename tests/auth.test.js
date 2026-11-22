@@ -135,10 +135,14 @@ test('email verification codes actually expire after 15 minutes', async () => {
   const jar = await login('mover', PW);
   const real = Date.now;
   Date.now = () => real() - 16 * 60 * 1000;
+  // Codes are only issued when SMTP can deliver them (stub transport here);
+  // without SMTP the change is applied directly (see flows-account tests).
+  Object.assign(process.env, { SMTP_HOST: 'smtp.example.test', SMTP_USER: 'u', SMTP_PASS: 'p' });
   try {
     const r = await request('PUT', '/api/auth/email', { cookies: jar, body: { email: 'moved@example.test', currentPassword: PW } });
     assert.strictEqual(r.body.success, true, JSON.stringify(r.body));
-  } finally { Date.now = real; }
+    assert.strictEqual(r.body.verificationRequired, true);
+  } finally { Date.now = real; delete process.env.SMTP_HOST; delete process.env.SMTP_USER; delete process.env.SMTP_PASS; }
   const row = db.getDb().prepare("SELECT code FROM verification_codes WHERE type = 'email_change'").get();
   const v = await request('POST', '/api/auth/verify-change', { cookies: jar, body: { type: 'email_change', code: row.code } });
   assert.strictEqual(v.body.success, false, 'expired code must be rejected');

@@ -16,7 +16,7 @@
 
 const fs = require('fs');
 const RSSParser = require('rss-parser');
-const { detectCategory, detectSeverity, extractCVE, detectPOC, detectPatchStatus } = require('./rss-fetcher');
+const { articleCategory, detectCategory, detectSeverity, extractCVE, detectPOC, detectPatchStatus } = require('./rss-fetcher');
 const { isSafeUrl } = require('../net-guard');
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
@@ -80,7 +80,7 @@ function normalize(item, source) {
     user_id: source.user_id || null,
     author: item.creator || item.author || item['dc:creator'] || null,
     published_date: item.isoDate || item.pubDate || new Date().toISOString(),
-    category: source.category && source.category !== 'news' ? source.category : category,
+    category: articleCategory(source, category),
     severity: detectSeverity(title, description, category),
     cve_id: extractCVE(`${title} ${description}`),
     is_patched: detectPatchStatus(title, description),

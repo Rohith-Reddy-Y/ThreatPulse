@@ -12,9 +12,13 @@ const defaultDbPath = fs.existsSync('/data')
 const DB_PATH = process.env.DB_PATH || defaultDbPath;
 
 let db;
+// Set when this process had to create the database file (fresh deploy / wiped
+// ephemeral disk): the UI uses it to explain why an old login no longer works.
+let dbCreatedAt = null;
 
 function getDb() {
   if (!db) {
+    if (DB_PATH !== ':memory:' && !fs.existsSync(DB_PATH)) dbCreatedAt = new Date().toISOString();
     db = new Database(DB_PATH);
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
@@ -488,12 +492,35 @@ function getUserByUsername(username) {
   return getDb().prepare('SELECT * FROM users WHERE username = ?').get(username);
 }
 
+// Case-insensitive lookup for sign-in and uniqueness checks: "Alice" registering
+// and later typing "alice" used to get "Invalid username/email or password" with
+// the right password. An exact match wins; otherwise a single case-insensitive
+// match (legacy DBs may hold names differing only by case: then nothing matches).
+function getUserByUsernameCI(username) {
+  if (typeof username !== 'string' || !username) return undefined;
+  const exact = getUserByUsername(username);
+  if (exact) return exact;
+  const rows = getDb().prepare('SELECT * FROM users WHERE username = ? COLLATE NOCASE LIMIT 2').all(username);
+  return rows.length === 1 ? rows[0] : undefined;
+}
+
 function getUserById(id) {
   return getDb().prepare('SELECT * FROM users WHERE id = ?').get(id);
 }
 
+// Email addresses are matched case-insensitively (exact match preferred): mail
+// providers treat "Bob@Example.com" and "bob@example.com" as the same mailbox, so
+// login-by-email, forgot-password and the duplicate check must too.
 function getUserByEmail(email) {
-  return getDb().prepare('SELECT * FROM users WHERE email = ?').get(email);
+  if (typeof email !== 'string' || !email) return undefined;
+  const exact = getDb().prepare('SELECT * FROM users WHERE email = ?').get(email);
+  if (exact) return exact;
+  const rows = getDb().prepare('SELECT * FROM users WHERE email = ? COLLATE NOCASE LIMIT 2').all(email);
+  return rows.length === 1 ? rows[0] : undefined;
+}
+
+function getDbInfo() {
+  return { createdAt: dbCreatedAt };
 }
 
 function updateUserEmail(userId, email) {
@@ -955,21 +982,35 @@ function getArticles({ page = 1, limit = 50, category, severity, search, source_
   return { articles, total, page, totalPages };
 }
 
-function getArticleStats(userId = null) {
+// tzOffsetMinutes: the viewer's offset from UTC (minutes EAST of UTC, i.e.
+// -Date#getTimezoneOffset()). "Today", "yesterday" and the timeline's days are the
+// viewer's local calendar days, so the stat card, the chart and the feed's
+// "Today" group all count the same articles. The 7-day windows are exactly
+// "now - 7 days", the same as the feed's "Last 7 Days" filter.
+function tzModifier(tzOffsetMinutes) {
+  let tz = parseInt(tzOffsetMinutes, 10);
+  if (!Number.isFinite(tz)) tz = 0;
+  tz = Math.max(-14 * 60, Math.min(14 * 60, tz));
+  return `${tz >= 0 ? '+' : '-'}${Math.abs(tz)} minutes`;
+}
+
+function getArticleStats(userId = null, { tzOffsetMinutes = 0 } = {}) {
   const d = getDb();
   // Fully isolated per user; admin passes no userId to see totals across everyone;
   // SYSTEM_SCOPE (guest) counts built-in sources and their articles only.
   const systemOnly = isSystemScope(userId);
   const userFilter = systemOnly ? `AND ${systemArticleClause('articles')}` : userId ? 'AND user_id = ?' : '';
   const userFilterParam = (!systemOnly && userId) ? [parseInt(userId)] : [];
+  const tz = tzModifier(tzOffsetMinutes);
+  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
   const threatsToday = d.prepare(
-    `SELECT COUNT(*) as count FROM articles WHERE date(published_date) = date('now') ${userFilter}`
-  ).get(...userFilterParam).count;
+    `SELECT COUNT(*) as count FROM articles WHERE date(published_date, ?) = date('now', ?) ${userFilter}`
+  ).get(tz, tz, ...userFilterParam).count;
 
   const threatsYesterday = d.prepare(
-    `SELECT COUNT(*) as count FROM articles WHERE date(published_date) = date('now', '-1 day') ${userFilter}`
-  ).get(...userFilterParam).count;
+    `SELECT COUNT(*) as count FROM articles WHERE date(published_date, ?) = date('now', ?, '-1 day') ${userFilter}`
+  ).get(tz, tz, ...userFilterParam).count;
 
   // Unique critical *vulnerabilities*: one per CVE (many articles cover the same
   // CVE), plus critical vulnerability/advisory items without a CVE ID. Critical
@@ -978,12 +1019,12 @@ function getArticleStats(userId = null) {
     `SELECT COUNT(DISTINCT COALESCE(cve_id, 'article-' || id)) as count FROM articles
      WHERE severity = 'critical'
        AND (cve_id IS NOT NULL OR category IN ('vulnerability', 'advisory'))
-       AND date(published_date) >= date('now', '-7 days') ${userFilter}`
-  ).get(...userFilterParam).count;
+       AND published_date >= ? ${userFilter}`
+  ).get(weekAgo, ...userFilterParam).count;
 
   const pocsDetected = d.prepare(
-    `SELECT COUNT(*) as count FROM articles WHERE has_poc = 1 AND date(published_date) >= date('now', '-7 days') ${userFilter}`
-  ).get(...userFilterParam).count;
+    `SELECT COUNT(*) as count FROM articles WHERE has_poc = 1 AND published_date >= ? ${userFilter}`
+  ).get(weekAgo, ...userFilterParam).count;
 
   const sourceFilter = systemOnly ? `AND ${systemSourceClause('sources')}` : userId ? 'AND user_id = ?' : '';
   const sourceFilterParam = (!systemOnly && userId) ? [parseInt(userId)] : [];
@@ -1005,16 +1046,16 @@ function getArticleStats(userId = null) {
 
   // Timeline data: all article counts grouped by day (frontend handles range)
   const timeline = d.prepare(
-    `SELECT date(published_date) as day, COUNT(*) as count,
+    `SELECT date(published_date, ?) as day, COUNT(*) as count,
             SUM(CASE WHEN severity = 'critical' THEN 1 ELSE 0 END) as critical,
             SUM(CASE WHEN severity = 'high' THEN 1 ELSE 0 END) as high,
             SUM(CASE WHEN severity = 'medium' THEN 1 ELSE 0 END) as medium,
             SUM(CASE WHEN severity = 'low' THEN 1 ELSE 0 END) as low
      FROM articles
      WHERE 1=1 ${userFilter}
-     GROUP BY date(published_date)
+     GROUP BY day
      ORDER BY day ASC`
-  ).all(...userFilterParam);
+  ).all(tz, ...userFilterParam);
 
   return {
     threatsToday,
@@ -1241,9 +1282,10 @@ function getAuditLog(limit = 100) {
 // Verification codes for email/password updates
 function createVerificationCode(userId, type, targetValue, code, expiresAt) {
   getDb().prepare('DELETE FROM verification_codes WHERE user_id = ? AND type = ?').run(userId, type);
-  getDb().prepare(
+  const r = getDb().prepare(
     'INSERT INTO verification_codes (user_id, type, target_value, code, expires_at) VALUES (?, ?, ?, ?, ?)'
   ).run(userId, type, targetValue, code, expiresAt);
+  return r.lastInsertRowid;
 }
 
 function validateVerificationCode(userId, type, code) {
@@ -1332,6 +1374,8 @@ module.exports = {
   // Users
   createUser,
   getUserByUsername,
+  getUserByUsernameCI,
+  getDbInfo,
   getUserById,
   getUserByEmail,
   getAllUsers,

@@ -50,6 +50,28 @@ async function fetchAllSources() {
   }
 
   isRunning = true;
+  let result;
+  try {
+    result = await fetchSourceList(db.getEnabledSources());
+  } finally {
+    isRunning = false;
+  }
+  lastFetchTime = new Date().toISOString();
+  const { newArticles, ...stats } = result;
+  fetchStats = stats;
+  return result;
+}
+
+/**
+ * Fetch just the given sources (e.g. one user's own feeds, or a source that was
+ * just added) without waiting for — or blocking — the platform-wide run.
+ * Returns { total, new, errors, duration, newArticles }.
+ */
+async function fetchSources(sources) {
+  return fetchSourceList((sources || []).filter(s => s && s.enabled !== 0 && s.enabled !== false));
+}
+
+async function fetchSourceList(sources) {
   const startTime = Date.now();
   let totalNew = 0;
   let totalErrors = 0;
@@ -61,15 +83,20 @@ async function fetchAllSources() {
   console.log('='.repeat(60));
 
   try {
-    const sources = db.getEnabledSources();
     console.log(`[Aggregator] Fetching from ${sources.length} enabled sources`);
 
-    // Group sources by type for efficient processing
-    const rssSources = sources.filter(s => s.type === 'rss');
-    const apiSources = sources.filter(s => s.type === 'api');
+    // Group sources by type for efficient processing. Every type must land in
+    // exactly one group: the dashboard used to offer "Blog/Website" (blog) and
+    // "Other" (other), which matched no group, so those sources were never
+    // fetched and sat at "Not yet fetched" forever. Generic "API" URLs other than
+    // NVD / CISA KEV are read as feeds (most such endpoints serve RSS/Atom).
+    const isKnownApi = s => s.url.includes('nvd.nist.gov') || s.url.includes('known_exploited_vulnerabilities');
+    const rssSources = sources.filter(s => s.type === 'rss' || (s.type === 'api' && !isKnownApi(s)));
+    const apiSources = sources.filter(s => s.type === 'api' && isKnownApi(s));
     const darkwebSources = sources.filter(s => s.type === 'darkweb');
-    const customSources = sources.filter(s => s.type === 'custom' || s.type === 'website');
     const browserSources = sources.filter(s => s.type === 'browser');
+    const customSources = sources.filter(s =>
+      !['rss', 'api', 'darkweb', 'browser'].includes(s.type));   // custom, website, blog, other, ...
 
     // --- 1. Fetch RSS Feeds (parallel, batched) ---
     console.log(`\n[RSS] Fetching ${rssSources.length} RSS feeds...`);
@@ -286,17 +313,13 @@ async function fetchAllSources() {
   }
 
   const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-  lastFetchTime = new Date().toISOString();
-  fetchStats = { total: totalFetched, new: totalNew, errors: totalErrors, duration };
 
   console.log('\n' + '='.repeat(60));
   console.log(`[Aggregator] Fetch complete in ${duration}s`);
   console.log(`[Aggregator] Total fetched: ${totalFetched} | New: ${totalNew} | Errors: ${totalErrors}`);
   console.log('='.repeat(60) + '\n');
 
-  isRunning = false;
-
-  return { ...fetchStats, newArticles };
+  return { total: totalFetched, new: totalNew, errors: totalErrors, duration, newArticles };
 }
 
 /**
@@ -335,4 +358,4 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-module.exports = { fetchAllSources, startScheduler, getStatus, setOnFetchComplete };
+module.exports = { fetchAllSources, fetchSources, startScheduler, getStatus, setOnFetchComplete, getOnFetchComplete: () => onFetchComplete };

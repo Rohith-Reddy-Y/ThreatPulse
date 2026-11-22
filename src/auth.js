@@ -331,6 +331,9 @@ async function registerUser(username, displayName, password, inviteCode, email =
   // Verify invite code — but only when open registration is disabled.
   // Open registration (default) lets anyone sign up with no invite code.
   const requireInvite = process.env.REQUIRE_INVITE_CODE === 'true';
+  // Codes are generated as upper-case hex; the form only *displays* upper case
+  // (CSS text-transform), so a correctly typed lower-case code used to be refused.
+  inviteCode = typeof inviteCode === 'string' ? inviteCode.trim().toUpperCase() : '';
   if (requireInvite) {
     const codeResult = db.validateInviteCode(inviteCode);
     if (!codeResult.valid) {
@@ -338,8 +341,8 @@ async function registerUser(username, displayName, password, inviteCode, email =
     }
   }
 
-  // Check if username exists
-  const existing = db.getUserByUsername(username);
+  // Check if username exists (case-insensitively: sign-in is case-insensitive)
+  const existing = db.getUserByUsernameCI(username);
   if (existing) {
     return { success: false, error: 'Username already taken' };
   }
@@ -361,7 +364,7 @@ async function registerUser(username, displayName, password, inviteCode, email =
     const again = db.validateInviteCode(inviteCode);
     if (!again.valid) return { success: false, error: again.error };
   }
-  if (db.getUserByUsername(username)) return { success: false, error: 'Username already taken' };
+  if (db.getUserByUsernameCI(username)) return { success: false, error: 'Username already taken' };
   if (db.getUserByEmail(email)) return { success: false, error: 'Email already registered' };
 
   const cleanInvite = requireInvite ? inviteCode : null;
@@ -409,8 +412,9 @@ async function loginUser(identifier, password, ip = null) {
     return { success: false, error: 'Username/email and password are required' };
   }
 
-  // Allow logging in with either a username or an email address
-  let user = db.getUserByUsername(identifier);
+  // Allow logging in with either a username or an email address (both matched
+  // case-insensitively, exact match preferred)
+  let user = db.getUserByUsernameCI(identifier);
   if (!user && identifier.includes('@')) {
     user = db.getUserByEmail(identifier);
   }

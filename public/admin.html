@@ -48,6 +48,7 @@
       <button class="pill" data-admin-tab="invites">Invite Codes</button>
       <button class="pill" data-admin-tab="sources">All Sources</button>
       <button class="pill" data-admin-tab="audit">Audit Log</button>
+      <button class="pill" data-admin-tab="resets">Password Resets</button>
       <button class="pill" data-admin-tab="ai">AI Settings</button>
     </div>
 
@@ -98,6 +99,21 @@
           <table class="admin-table" id="audit-table">
             <thead><tr><th>Time</th><th>User</th><th>Action</th><th>Details</th><th>IP</th></tr></thead>
             <tbody id="audit-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Password Resets Tab (manual recovery when the server cannot send email) -->
+    <div class="admin-tab hidden" id="tab-resets">
+      <div class="sidebar-card" style="max-width:100%;">
+        <h3 class="sidebar-title">Pending Password Resets</h3>
+        <p id="resets-note" style="color:var(--text-muted);font-size:12px;margin:0 0 12px;">Reset links requested via "Forgot Password" that have not been used yet (valid for 1 hour). If this server cannot send email, verify the requester and give them their link.</p>
+        <button class="btn btn-ghost" id="refresh-resets-btn" style="margin-bottom:12px;font-size:12px;padding:4px 10px;">Refresh</button>
+        <div style="overflow-x:auto;">
+          <table class="admin-table" id="resets-table">
+            <thead><tr><th>User</th><th>Email</th><th>Requested</th><th>Expires</th><th>Reset link</th></tr></thead>
+            <tbody id="resets-tbody"></tbody>
           </table>
         </div>
       </div>
