@@ -203,7 +203,7 @@
       vC = mix(aCol, vec3(1.0), pow(trail, 10.0) * 0.75);
       gl_Position = uMVP * vec4(aPos, 1.0);
       gl_Position.xy += uOffset * gl_Position.w;
-      gl_PointSize = a > 0.003 ? min(uPx * (1.25 + 3.6 * pow(trail, 5.0)) * (3.4 / gl_Position.w), uMaxPt) : 0.0;
+      gl_PointSize = a > 0.003 ? min(uPx * (1.7 + 3.8 * pow(trail, 5.0)) * (3.4 / gl_Position.w), uMaxPt) : 0.0;
     }`;
 
   const RING_VS = COMMON_VS + `
@@ -454,6 +454,26 @@
       return dpr;
     }
 
+    // Where the globe sits. On the sign-in screen it fills the free space to the
+    // right of the card (so it never sits behind the form); elsewhere it is centred.
+    function distFor(ndcR) { return 1 / Math.sin(Math.atan(ndcR * Math.tan(FOV / 2))); }
+    function layout() {
+      if (!cfg.offset) return { dist: cfg.dist, x: 0, y: 0 };
+      const cr = canvas.getBoundingClientRect();
+      const card = canvas.parentElement && canvas.parentElement.querySelector('.auth-card');
+      const rr = card && card.getBoundingClientRect();
+      if (rr && rr.width && cr.width && cr.height) {
+        const gap = cr.right - rr.right;                       // free width right of the card
+        const radius = Math.min(gap * 0.40, cr.height * 0.36);  // px, leaves room for arcs
+        if (radius > 120) {
+          const cx = rr.right + gap * 0.5;
+          return { dist: distFor(radius / (cr.height / 2)), x: ((cx - cr.left) / cr.width) * 2 - 1, y: 0 };
+        }
+      }
+      // Narrow screens: a large globe peeking from behind the card's top
+      return { dist: distFor(0.62), x: 0, y: 0.32 };
+    }
+
     function frame() {
       raf = 0;
       if (dead || !gl) return;
@@ -472,13 +492,13 @@
 
       const aspect = W / H;
       const P = perspective(FOV, aspect, 0.1, 100);
-      const offX = cfg.offset && aspect > 1.25 ? Math.min(0.5, 0.18 + (aspect - 1.25) * 0.25) : 0;
-      const offY = cfg.offset && aspect <= 1.25 ? -0.05 : 0;
+      const L = layout();
+      const dist = L.dist, offX = L.x, offY = L.y;
       const M = mul(rotX(tilt + parallaxY * 0.12), rotY(yaw + parallaxX * 0.25));
-      const V = translate(0, 0, -cfg.dist);
+      const V = translate(0, 0, -dist);
       const MVP = mul(P, mul(V, M));
-      const cam = [0, 0, cfg.dist];
-      const ndcR = Math.tan(Math.asin(1 / cfg.dist)) / Math.tan(FOV / 2);
+      const cam = [0, 0, dist];
+      const ndcR = Math.tan(Math.asin(1 / dist)) / Math.tan(FOV / 2);
       const spacing = ndcR * (H / 2) * Math.sqrt((4 * Math.PI) / cfg.samples);
       const dotSize = Math.max(1.4 * dpr, spacing * 0.62);
 
