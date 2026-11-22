@@ -531,14 +531,24 @@
           <span class="globe-badge">3D</span>
         </h3>
         <div class="globe-stage">
-          <canvas class="globe3d" data-globe="card" role="img" aria-label="Rotating 3D globe with animated, illustrative attack paths between major cities"></canvas>
-          <div class="globe-hud" aria-hidden="true"><span class="globe-hud-dot"></span>Illustrative attack paths · drag to spin</div>
+          <canvas class="globe3d" data-globe="card" role="img" aria-label="3D globe of countries named in your threat feed, with attributed origin-to-target paths"></canvas>
+          <div class="globe-hud" aria-hidden="true"><span class="globe-hud-dot"></span><span class="globe-hud-text">Loading threat geography…</span></div>
         </div>
+        <div class="globe-meta">
+          <div class="globe-range" role="group" aria-label="Time range">
+            <button type="button" data-globe-days="1">24h</button>
+            <button type="button" data-globe-days="7" class="active">7d</button>
+            <button type="button" data-globe-days="30">30d</button>
+          </div>
+          <span class="globe-summary">Loading…</span>
+        </div>
+        <ol class="globe-top" aria-label="Most-named countries in your feed"></ol>
         <div class="globe-legend" aria-hidden="true">
           <span><i class="sev-critical"></i>Critical</span>
           <span><i class="sev-high"></i>High</span>
           <span><i class="sev-medium"></i>Medium</span>
           <span><i class="sev-low"></i>Low</span>
+          <span class="globe-legend-note">Beacon = country named in your reports · arc = attributed actor origin → named target</span>
         </div>
       </div>
       <div class="sidebar-card guest-hidden">

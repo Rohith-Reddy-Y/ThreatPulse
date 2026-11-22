@@ -70,6 +70,51 @@
     [3.4,6.5],[36.8,-1.3],[-43.2,-22.9],[-87.6,41.9],[-118.2,34],[174.8,-36.8],
   ];
 
+  const SEV_COLOR = { critical: [1.0, 0.30, 0.43], high: [1.0, 0.69, 0.13], medium: [0.13, 0.83, 0.93], low: [0.55, 0.42, 1.0] };
+  const SEV_CSS = { critical: '#ff4d6d', high: '#ffb020', medium: '#22d3ee', low: '#8c6bff' };
+  const MAX_MARKERS = 170;
+
+  // ───────────────── Threat geography feed (one request for all globes) ─────────────────
+  // GET /api/geo returns countries named in the signed-in user's OWN articles
+  // (guests: built-in feeds), attributed actor origins and origin -> target arcs.
+  const GeoFeed = (() => {
+    const subs = new Set();
+    let days = 7, data, inflight = null, timer = 0, retries = 0;
+    function load() {
+      if (inflight) return inflight;
+      inflight = fetch(`/api/geo?days=${days}`, { credentials: 'same-origin', headers: { Accept: 'application/json' } })
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null)
+        .then((d) => {
+          data = d && Array.isArray(d.countries) ? d : null;
+          subs.forEach((fn) => { try { fn(data); } catch (_) { /* keep others alive */ } });
+          // The guest/session cookie may not exist yet on first paint: retry a few times
+          if (!data && retries < 3) { retries++; setTimeout(load, 2500 * retries); }
+          if (data) retries = 0;
+          return data;
+        })
+        .finally(() => { inflight = null; });
+      return inflight;
+    }
+    function start() {
+      if (timer) return;
+      load();
+      timer = setInterval(() => { if (!document.hidden) load(); }, 120000);
+      // Sign-in / sign-out / guest switch changes whose data we may show
+      let pending = 0;
+      const again = () => { clearTimeout(pending); pending = setTimeout(load, 900); };
+      const mo = new MutationObserver(again);
+      mo.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+      const overlay = document.getElementById('auth-overlay');
+      if (overlay) mo.observe(overlay, { attributes: true, attributeFilter: ['class'] });
+    }
+    return {
+      subscribe(fn) { subs.add(fn); if (data !== undefined) fn(data); start(); },
+      setDays(d) { days = d; load(); },
+      get days() { return days; },
+    };
+  })();
+
   const SEVERITY = [
     { w: 0.17, c: [1.0, 0.30, 0.43] },  // critical
     { w: 0.30, c: [1.0, 0.69, 0.13] },  // high
@@ -291,8 +336,8 @@
 
   // ───────────────────────── Globe instance ─────────────────────────
   const PRESETS = {
-    auth: { samples: 30000, arcs: 18, arcPts: 240, dist: 3.55, stars: 1400, halo: 1.0, ringMax: 46, autoSpin: 0.07, offset: true, parallax: true },
-    card: { samples: 16000, arcs: 11, arcPts: 150, dist: 3.25, stars: 0, halo: 0.9, ringMax: 30, autoSpin: 0.11, offset: false, parallax: false },
+    auth: { samples: 30000, arcs: 18, arcPts: 240, dist: 3.55, stars: 1400, halo: 1.0, ringMax: 46, autoSpin: 0.07, offset: true, parallax: true, panel: false },
+    card: { samples: 16000, arcs: 11, arcPts: 150, dist: 3.25, stars: 0, halo: 0.9, ringMax: 30, autoSpin: 0.11, offset: false, parallax: false, panel: true },
   };
   const ARC_STRIDE = 9;   // x y z t start dur r g b
   const RING_STRIDE = 10; // x y z start life r g b max rep
@@ -307,6 +352,8 @@
     const t0 = performance.now();
     const now = () => (performance.now() - t0) / 1000;
     let slots = [], arcData, ringData;
+    let geo = null, geoArcs = [], geoCountries = [], geoByCode = new Map();
+    let fly = null, holdSpinUntil = 0, pick = null, hover = null, downAt = null, tip = null;
 
     function pickSeverity() {
       let r = Math.random();
@@ -314,20 +361,48 @@
       return SEVERITY[2].c;
     }
 
+    // Park a slot: nothing drawn until it is respawned
+    function idle(i, until) {
+      const n = cfg.arcPts;
+      for (let k = 0; k < n; k++) arcData[(i * n + k) * ARC_STRIDE + 4] = 1e9;
+      for (let j = 0; j < 2; j++) ringData[(i * 2 + j) * RING_STRIDE + 8] = 0;
+      slots[i] = { end: until };
+      upload(i);
+    }
+    function upload(i) {
+      if (!gl) return;
+      const n = cfg.arcPts;
+      gl.bindBuffer(gl.ARRAY_BUFFER, bufs.arcs);
+      gl.bufferSubData(gl.ARRAY_BUFFER, i * n * ARC_STRIDE * 4, arcData.subarray(i * n * ARC_STRIDE, (i + 1) * n * ARC_STRIDE));
+      gl.bindBuffer(gl.ARRAY_BUFFER, bufs.rings);
+      gl.bufferSubData(gl.ARRAY_BUFFER, i * 2 * RING_STRIDE * 4, ringData.subarray(i * 2 * RING_STRIDE, (i + 1) * 2 * RING_STRIDE));
+    }
+
     function spawn(i, start) {
-      let a, b, dot;
-      do {
-        a = CITIES[(Math.random() * CITIES.length) | 0];
-        b = CITIES[(Math.random() * CITIES.length) | 0];
-        const va = toVec(a[0], a[1], 1), vb = toVec(b[0], b[1], 1);
-        dot = va[0] * vb[0] + va[1] * vb[1] + va[2] * vb[2];
-      } while (a === b || dot > 0.9);
-      const A = toVec(a[0], a[1], 1), B = toVec(b[0], b[1], 1);
+      let A, B, col, dot;
+      if (geo) {
+        // Real data: attributed actor origin -> country named in the same report
+        if (!geoArcs.length) return idle(i, start + 4);
+        let r = Math.random() * geoArcs.reduce((s2, x) => s2 + x.w, 0);
+        let arc = geoArcs[0];
+        for (const x of geoArcs) { if ((r -= x.w) <= 0) { arc = x; break; } }
+        A = arc.A; B = arc.B; col = arc.col;
+        dot = A[0] * B[0] + A[1] * B[1] + A[2] * B[2];
+      } else {
+        // No data (signed out): illustrative traffic between major cities
+        let a, b;
+        do {
+          a = CITIES[(Math.random() * CITIES.length) | 0];
+          b = CITIES[(Math.random() * CITIES.length) | 0];
+          A = toVec(a[0], a[1], 1); B = toVec(b[0], b[1], 1);
+          dot = A[0] * B[0] + A[1] * B[1] + A[2] * B[2];
+        } while (a === b || dot > 0.9);
+        col = pickSeverity();
+      }
       const omega = Math.acos(Math.max(-1, Math.min(1, dot)));
       const so = Math.sin(omega) || 1e-6;
       const lift = 0.08 + 0.3 * (omega / Math.PI);
       const dur = 2.2 + omega * 1.1 + Math.random() * 0.8;
-      const col = pickSeverity();
       const n = cfg.arcPts;
       let o = i * n * ARC_STRIDE;
       for (let k = 0; k < n; k++) {
@@ -353,12 +428,57 @@
         ringData[q++] = mx; ringData[q++] = 0;
       });
       slots[i] = { end: Math.max(start + dur, impact + 1.7) + 0.1 };
-      if (gl) {
-        gl.bindBuffer(gl.ARRAY_BUFFER, bufs.arcs);
-        gl.bufferSubData(gl.ARRAY_BUFFER, i * n * ARC_STRIDE * 4, arcData.subarray(i * n * ARC_STRIDE, (i + 1) * n * ARC_STRIDE));
-        gl.bindBuffer(gl.ARRAY_BUFFER, bufs.rings);
-        gl.bufferSubData(gl.ARRAY_BUFFER, i * 2 * RING_STRIDE * 4, ringData.subarray(i * 2 * RING_STRIDE, (i + 1) * 2 * RING_STRIDE));
+      upload(i);
+    }
+
+    // Beacons: one pulsing ring + a steady core per location
+    function writeMarkers(list) {
+      const base = cfg.arcs * 2;
+      for (let k = 0; k < MAX_MARKERS; k++) {
+        const q = (base + k) * RING_STRIDE;
+        const m = list[k];
+        if (!m) { ringData[q + 8] = 0; continue; }
+        const P = toVec(m.lon, m.lat, 1.006);
+        ringData.set([P[0], P[1], P[2], m.start, m.life, m.col[0], m.col[1], m.col[2], m.max, m.rep], q);
       }
+      if (gl) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, bufs.rings);
+        gl.bufferSubData(gl.ARRAY_BUFFER, base * RING_STRIDE * 4, ringData.subarray(base * RING_STRIDE));
+      }
+    }
+    function cityMarkers() {
+      return CITIES.map(([lon, lat]) => ({ lon, lat, start: Math.random() * 3, life: 2.4 + Math.random() * 1.6, col: [0.35, 0.9, 1.0], max: cfg.ringMax * 0.32, rep: 1 }));
+    }
+    function countryMarkers(list) {
+      const top = Math.max(1, ...list.map((c) => c.count));
+      const out = [];
+      for (const c of list.slice(0, MAX_MARKERS / 2)) {
+        const k = Math.log(c.count + 1) / Math.log(top + 1);
+        const col = SEV_COLOR[c.worst] || SEV_COLOR.medium;
+        out.push({ lon: c.lon, lat: c.lat, start: Math.random() * 2, life: 3.2 - 1.6 * k, col, max: cfg.ringMax * (0.45 + 0.85 * k), rep: 1 });
+        out.push({ lon: c.lon, lat: c.lat, start: -1e6, life: 1e9, col, max: cfg.ringMax * (0.5 + 0.6 * k), rep: 0 });
+      }
+      return out;
+    }
+
+    function setGeo(d) {
+      geo = d || null;
+      geoCountries = geo ? geo.countries : [];
+      geoByCode = new Map(geoCountries.map((c) => [c.code, c]));
+      geoArcs = [];
+      if (geo) {
+        for (const a of geo.arcs || []) {
+          const f = geoByCode.get(a.from), t = geoByCode.get(a.to);
+          if (!f || !t) continue;
+          geoArcs.push({ A: toVec(f.lon, f.lat, 1), B: toVec(t.lon, t.lat, 1), col: SEV_COLOR[a.worst] || SEV_COLOR.medium, w: Math.sqrt(a.count) });
+        }
+      }
+      if (!ringData) return;
+      writeMarkers(geo ? countryMarkers(geoCountries) : cityMarkers());
+      const t = now();
+      slots.forEach((sl, i) => { if (sl) sl.end = Math.min(sl.end, t + Math.random() * 1.2); });
+      if (cfg.panel) renderPanel();
+      schedule();
     }
 
     function init() {
@@ -406,13 +526,8 @@
 
       // Arcs + rings (dynamic), city markers appended after the arc rings
       arcData = new Float32Array(cfg.arcs * cfg.arcPts * ARC_STRIDE);
-      const markers = CITIES.length;
+      const markers = MAX_MARKERS;
       ringData = new Float32Array((cfg.arcs * 2 + markers) * RING_STRIDE);
-      CITIES.forEach(([lon, lat], m) => {
-        const P = toVec(lon, lat, 1.006);
-        let q = (cfg.arcs * 2 + m) * RING_STRIDE;
-        ringData.set([P[0], P[1], P[2], Math.random() * 3, 2.4 + Math.random() * 1.6, 0.35, 0.9, 1.0, cfg.ringMax * 0.32, 1], q);
-      });
       bufs.arcs = gl.createBuffer();
       gl.bindBuffer(gl.ARRAY_BUFFER, bufs.arcs);
       gl.bufferData(gl.ARRAY_BUFFER, arcData.byteLength, gl.DYNAMIC_DRAW);
@@ -424,6 +539,7 @@
       const t = now();
       slots = [];
       // First arcs start part-way through so the globe is busy from frame one
+      writeMarkers(geo ? countryMarkers(geoCountries) : cityMarkers());
       for (let i = 0; i < cfg.arcs; i++) spawn(i, t - Math.random() * 2.5 + (i % 3) * 0.6);
 
       // Halo quad
@@ -443,6 +559,7 @@
         gl.bufferData(gl.ARRAY_BUFFER, s, gl.STATIC_DRAW);
         counts.stars = cfg.stars;
       }
+      if (cfg.panel) renderPanel();
       return true;
     }
 
@@ -485,7 +602,18 @@
       frame.last = t;
 
       // Motion: auto-spin with drag inertia, gentle pointer parallax on sign-in
-      if (!dragging) { spin += (cfg.autoSpin - spin) * Math.min(1, dt * 1.5); yaw += spin * dt; }
+      if (fly) {
+        const k = Math.min(1, (t - fly.t0) / fly.dur);
+        const e = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+        yaw = fly.y0 + (fly.y1 - fly.y0) * e;
+        tilt = fly.p0 + (fly.p1 - fly.p0) * e;
+        if (k >= 1) fly = null;
+        spin = 0;
+      } else if (!dragging) {
+        const target = t < holdSpinUntil ? 0 : cfg.autoSpin;
+        spin += (target - spin) * Math.min(1, dt * 1.5);
+        yaw += spin * dt;
+      }
       if (cfg.parallax) { parallaxX += (tgtPX - parallaxX) * Math.min(1, dt * 2.5); parallaxY += (tgtPY - parallaxY) * Math.min(1, dt * 2.5); }
 
       for (let i = 0; i < slots.length; i++) if (t > slots[i].end) spawn(i, t + Math.random() * 1.2);
@@ -501,6 +629,7 @@
       const ndcR = Math.tan(Math.asin(1 / dist)) / Math.tan(FOV / 2);
       const spacing = ndcR * (H / 2) * Math.sqrt((4 * Math.PI) / cfg.samples);
       const dotSize = Math.max(1.4 * dpr, spacing * 0.62);
+      pick = { MVP, M, offX, offY, cam };
 
       gl.viewport(0, 0, W, H);
       gl.clearColor(0, 0, 0, 0);
@@ -584,7 +713,7 @@
 
       gl.depthMask(true);
       if (!canvas.classList.contains('ready')) canvas.classList.add('ready');
-      if (!reduceMotion) schedule();
+      if (!reduceMotion || fly) schedule();
     }
 
     function schedule() {
@@ -592,8 +721,158 @@
     }
 
     // Pointer: drag to spin (with inertia); parallax follows the mouse on sign-in
+    // ── Picking: which country beacon is under the pointer ──
+    function project(c) {
+      const v = toVec(c.lon, c.lat, 1.006);
+      const m = pick.M, P = pick.MVP;
+      const wx = m[0] * v[0] + m[4] * v[1] + m[8] * v[2];
+      const wy = m[1] * v[0] + m[5] * v[1] + m[9] * v[2];
+      const wz = m[2] * v[0] + m[6] * v[1] + m[10] * v[2];
+      const vx = pick.cam[0] - wx, vy = pick.cam[1] - wy, vz = pick.cam[2] - wz;
+      const facing = (wx * vx + wy * vy + wz * vz) / (Math.hypot(wx, wy, wz) * Math.hypot(vx, vy, vz));
+      const cx = P[0] * v[0] + P[4] * v[1] + P[8] * v[2] + P[12];
+      const cy = P[1] * v[0] + P[5] * v[1] + P[9] * v[2] + P[13];
+      const cw = P[3] * v[0] + P[7] * v[1] + P[11] * v[2] + P[15];
+      return { x: (cx / cw + pick.offX) * 0.5 + 0.5, y: 0.5 - (cy / cw + pick.offY) * 0.5, facing };
+    }
+    function pickAt(clientX, clientY) {
+      if (!pick || !geoCountries.length) return null;
+      const r = canvas.getBoundingClientRect();
+      const px = clientX - r.left, py = clientY - r.top;
+      const top = Math.max(1, geoCountries[0].count);
+      let best = null, bestD = Infinity;
+      for (const c of geoCountries) {
+        const p = project(c);
+        if (p.facing < 0.12) continue;
+        const d = Math.hypot(p.x * r.width - px, p.y * r.height - py);
+        const reach = 9 + 9 * (Math.log(c.count + 1) / Math.log(top + 1));
+        if (d < reach && d < bestD) { best = { c, sx: p.x * r.width, sy: p.y * r.height }; bestD = d; }
+      }
+      return best;
+    }
+
+    // ── Tooltip (DOM text only: headlines come from external feeds) ──
+    function showTip(hit) {
+      const host = canvas.parentElement;
+      if (!host) return;
+      if (!tip) { tip = document.createElement('div'); tip.className = 'globe-tip'; tip.setAttribute('role', 'tooltip'); host.appendChild(tip); }
+      const c = hit.c;
+      tip.textContent = '';
+      const head = document.createElement('div'); head.className = 'globe-tip-head';
+      const dot = document.createElement('i'); dot.style.background = SEV_CSS[c.worst] || SEV_CSS.medium;
+      const name = document.createElement('b'); name.textContent = c.name;
+      head.append(dot, name);
+      const stats = document.createElement('div'); stats.className = 'globe-tip-stats';
+      stats.textContent = `${c.count} report${c.count === 1 ? '' : 's'}` +
+        (c.critical ? ` · ${c.critical} critical` : '') + (c.high ? ` · ${c.high} high` : '') +
+        (c.ransomware ? ` · ${c.ransomware} ransomware leak${c.ransomware === 1 ? '' : 's'}` : '');
+      tip.append(head, stats);
+      if (c.origin) {
+        const o = document.createElement('div'); o.className = 'globe-tip-origin';
+        o.textContent = `Attributed origin in ${c.origin} report${c.origin === 1 ? '' : 's'}`;
+        tip.append(o);
+      }
+      for (const a of (c.top || []).slice(0, 2)) {
+        const h = document.createElement('div'); h.className = 'globe-tip-item';
+        h.textContent = a.title;
+        tip.append(h);
+      }
+      if (cfg.panel) { const hint = document.createElement('div'); hint.className = 'globe-tip-hint'; hint.textContent = 'Click to filter your feed'; tip.append(hint); }
+      const left = canvas.offsetLeft + hit.sx, topPx = canvas.offsetTop + hit.sy;
+      const w = host.clientWidth;
+      tip.style.left = `${Math.max(6, Math.min(w - 236, left + 14))}px`;
+      const maxTop = Math.max(6, host.clientHeight - tip.offsetHeight - 6);
+      tip.style.top = `${Math.max(6, Math.min(maxTop, topPx - 18))}px`;
+      tip.classList.add('show');
+    }
+    function hideTip() { if (tip) tip.classList.remove('show'); }
+
+    function flyTo(lat, lon) {
+      let y1 = -Math.PI / 2 - lon * DEG;
+      while (y1 - yaw > Math.PI) y1 -= 2 * Math.PI;
+      while (y1 - yaw < -Math.PI) y1 += 2 * Math.PI;
+      const p1 = Math.max(-0.35, Math.min(1.0, lat * DEG));
+      fly = { t0: now(), dur: 1.3, y0: yaw, y1, p0: tilt, p1 };
+      holdSpinUntil = now() + 12;
+      schedule();
+    }
+    function filterFeed(c) {
+      const input = document.getElementById('search-input');
+      if (!input) return;
+      input.value = c.term || c.name;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      const feed = document.getElementById('feed');
+      if (feed && feed.scrollIntoView) feed.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+    }
+    function focusCountry(code, alsoFilter) {
+      const c = geoByCode.get(code);
+      if (!c) return;
+      flyTo(c.lat, c.lon);
+      if (alsoFilter) filterFeed(c);
+    }
+
+    // ── Card panel: summary, time range, top countries ──
+    function renderPanel() {
+      const card = canvas.closest('.globe-card');
+      if (!card) return;
+      const sum = card.querySelector('.globe-summary');
+      const list = card.querySelector('.globe-top');
+      const hud = card.querySelector('.globe-hud-text');
+      if (!geo) {
+        if (sum) sum.textContent = 'Sign in to map your own feeds';
+        if (list) list.textContent = '';
+        if (hud) hud.textContent = 'Illustrative traffic · drag to spin';
+        return;
+      }
+      const range = geo.days === 1 ? '24 h' : `${geo.days} days`;
+      if (sum) sum.textContent = geo.countries.length
+        ? `${geo.geolocated} of ${geo.totalArticles} reports geolocated · ${geo.countries.length} countries · ${range}`
+        : `No country named in your ${geo.totalArticles} reports (${range})`;
+      if (hud) hud.textContent = geo.arcs.length
+        ? `${geo.arcs.length} attributed origin → target path${geo.arcs.length === 1 ? '' : 's'} · hover a beacon`
+        : 'Hover a beacon · click to filter';
+      if (!list) return;
+      list.textContent = '';
+      const top = geo.countries.slice(0, 5);
+      const max = Math.max(1, ...top.map((c) => c.count));
+      for (const c of top) {
+        const li = document.createElement('li');
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.title = `Rotate to ${c.name} and filter the feed`;
+        const dot = document.createElement('i'); dot.style.background = SEV_CSS[c.worst] || SEV_CSS.medium;
+        const name = document.createElement('span'); name.className = 'gt-name'; name.textContent = c.name;
+        const bar = document.createElement('span'); bar.className = 'gt-bar';
+        const fill = document.createElement('span'); fill.style.width = `${Math.max(6, (c.count / max) * 100)}%`; fill.style.background = SEV_CSS[c.worst] || SEV_CSS.medium;
+        bar.append(fill);
+        const n = document.createElement('span'); n.className = 'gt-count'; n.textContent = String(c.count);
+        btn.append(dot, name, bar, n);
+        btn.addEventListener('click', () => focusCountry(c.code, true));
+        li.append(btn);
+        list.append(li);
+      }
+    }
+    if (cfg.panel) {
+      const card = canvas.closest('.globe-card');
+      card && card.querySelectorAll('[data-globe-days]').forEach((b) => b.addEventListener('click', () => {
+        card.querySelectorAll('[data-globe-days]').forEach((x) => x.classList.toggle('active', x === b));
+        GeoFeed.setDays(parseInt(b.dataset.globeDays, 10) || 7);
+      }));
+    }
+
+    canvas.addEventListener('pointermove', (e) => {
+      if (dragging) return;
+      const hit = pickAt(e.clientX, e.clientY);
+      hover = hit;
+      canvas.classList.toggle('over-beacon', !!hit);
+      if (hit) showTip(hit); else hideTip();
+    });
+    canvas.addEventListener('pointerleave', () => { hover = null; hideTip(); canvas.classList.remove('over-beacon'); });
+
     canvas.addEventListener('pointerdown', (e) => {
       if (e.button !== undefined && e.button !== 0) return;
+      downAt = { x: e.clientX, y: e.clientY };
+      hideTip();
       dragging = true; lastX = e.clientX; lastY = e.clientY;
       canvas.classList.add('dragging');
       try { canvas.setPointerCapture(e.pointerId); } catch (_) { /* ignore */ }
@@ -608,7 +887,14 @@
       if (reduceMotion) schedule();
     });
     const endDrag = () => { dragging = false; canvas.classList.remove('dragging'); };
-    canvas.addEventListener('pointerup', endDrag);
+    canvas.addEventListener('pointerup', (e) => {
+      endDrag();
+      const moved = downAt ? Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) : 99;
+      downAt = null;
+      if (moved > 6) return;
+      const hit = pickAt(e.clientX, e.clientY);
+      if (hit) focusCountry(hit.c.code, !!cfg.panel);
+    });
     canvas.addEventListener('pointercancel', endDrag);
     if (cfg.parallax) {
       window.addEventListener('pointermove', (e) => {
@@ -628,6 +914,7 @@
     document.addEventListener('visibilitychange', schedule);
     if ('ResizeObserver' in window) new ResizeObserver(() => { if (reduceMotion || !raf) { frame.last = 0; schedule(); } }).observe(canvas);
 
+    GeoFeed.subscribe(setGeo);
     try { if (init()) schedule(); } catch (err) {
       dead = true;
       canvas.classList.add('globe3d-off');

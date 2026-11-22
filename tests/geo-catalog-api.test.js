@@ -1,0 +1,70 @@
+/**
+ * /api/geo is scoped like the feed (each user sees only countries from their
+ * own articles), and /api/admin/source-catalog shows each feed once with every
+ * contributor.  Run with: sh tests/run-all.sh
+ */
+'use strict';
+const test = require('node:test');
+const assert = require('node:assert');
+const h = require('./helpers');
+const { db, request, createUser } = h;
+
+const PW = 'Passw0rdA';
+let n = 0;
+const ip = () => `192.0.2.${++n}`;
+
+function article(userId, sourceId, title, extra = {}) {
+  const r = db.insertArticle({ url: `https://news.example/${userId}/${++n}`, title, description: extra.description || '', user_id: userId,
+    source_id: sourceId, published_date: new Date().toISOString(), severity: extra.severity || 'high', threat_actors: extra.actors || '' });
+  assert.ok(r.success && r.isNew, JSON.stringify(r));
+}
+
+test('geo: every user maps only their own articles', async () => {
+  const a = createUser('geo_alice', PW), b = createUser('geo_bob', PW);
+  const sa = db.addSource({ name: 'A feed', url: 'https://feeds.example/a', user_id: a }).id;
+  const sb = db.addSource({ name: 'B feed', url: 'https://feeds.example/b', user_id: b }).id;
+  article(a, sa, 'Russian APT28 phishing wave hits German ministries', { actors: 'APT28', severity: 'critical' });
+  article(a, sa, 'German utility breached');
+  article(b, sb, 'Japanese automaker hit by ransomware');
+
+  const ja = await h.login('geo_alice', PW, ip());
+  const ra = await request('GET', '/api/geo?days=7', { cookies: ja });
+  assert.strictEqual(ra.status, 200, JSON.stringify(ra.body));
+  const codesA = ra.body.countries.map((c) => c.code).sort();
+  assert.deepStrictEqual(codesA, ['DE', 'RU']);
+  assert.strictEqual(ra.body.countries.find((c) => c.code === 'DE').count, 2);
+  assert.deepStrictEqual(ra.body.arcs.map((x) => `${x.from}>${x.to}`), ['RU>DE']);
+  assert.ok(!JSON.stringify(ra.body).includes('Japanese'), "another user's headline leaked");
+
+  const jb = await h.login('geo_bob', PW, ip());
+  const rb = await request('GET', '/api/geo', { cookies: jb });
+  assert.deepStrictEqual(rb.body.countries.map((c) => c.code), ['JP']);
+  assert.ok(!JSON.stringify(rb.body).includes('German'));
+
+  assert.strictEqual((await request('GET', '/api/geo')).status, 401, 'signed-out callers get nothing');
+});
+
+test('admin source catalog: one row per feed, built-in matches folded, contributor labels', async () => {
+  const admin = createUser('cat_admin', PW, { role: 'admin' });
+  const u1 = createUser('cat_user1', PW), u2 = createUser('cat_user2', PW);
+  db.addSource({ name: 'Built-in Krebs', url: 'https://krebsonsecurity.com/feed/', added_by: 'system', user_id: admin });
+  db.addSource({ name: 'krebs', url: 'http://www.krebsonsecurity.com/feed', user_id: u1 });
+  db.addSource({ name: 'Brand new blog', url: 'https://brand-new.example/rss', user_id: u1 });
+  db.addSource({ name: 'same new blog', url: 'https://www.brand-new.example/rss/?utm_source=x', user_id: u2 });
+
+  const jar = await h.login('cat_admin', PW, ip());
+  const r = await request('GET', '/api/admin/source-catalog', { cookies: jar });
+  assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+  const krebs = r.body.entries.filter((e) => e.key === 'krebsonsecurity.com/feed');
+  assert.strictEqual(krebs.length, 1, 'built-in + user copy shown once');
+  assert.strictEqual(krebs[0].builtIn, true);
+  assert.deepStrictEqual(krebs[0].contributors.map((c) => c.username), ['cat_user1']);
+  const fresh = r.body.entries.filter((e) => e.key === 'brand-new.example/rss');
+  assert.strictEqual(fresh.length, 1, 'two users, one feed');
+  assert.strictEqual(fresh[0].userSubmitted, true);
+  assert.strictEqual(fresh[0].isNew, true);
+  assert.deepStrictEqual(fresh[0].contributors.map((c) => c.username).sort(), ['cat_user1', 'cat_user2']);
+
+  const plain = await h.login('cat_user1', PW, ip());
+  assert.strictEqual((await request('GET', '/api/admin/source-catalog', { cookies: plain })).status, 403);
+});

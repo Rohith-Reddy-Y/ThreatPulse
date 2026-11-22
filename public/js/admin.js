@@ -73,6 +73,7 @@
       loadUsers();
       loadInvites();
       loadSources();
+      loadCatalog();
       loadAudit();
       loadResets();
       loadEmailStatus();
@@ -272,6 +273,66 @@
     container.innerHTML = html;
   }
 
+  // Source catalog — one row per unique feed, contributors as name labels
+  let catalog = { entries: [], totals: {} };
+  let catalogFilter = 'all';
+  async function loadCatalog() {
+    const data = await api('GET', d('L2FwaS9hZG1pbi9zb3VyY2UtY2F0YWxvZw=='));
+    if (!data || !Array.isArray(data.entries)) return;
+    catalog = data;
+    const t = data.totals || {};
+    $('#catalog-stats').innerHTML = [
+      ['Unique feeds', t.feeds], ['Built-in', t.builtIn], ['User-submitted', t.userSubmitted],
+      ['New (48h)', t.newUserSubmitted], ['Duplicate rows folded', t.duplicatesFolded],
+    ].map(([k, v]) => `<div class="catalog-stat"><b>${Number(v) || 0}</b><span>${escapeHtml(k)}</span></div>`).join('');
+    const n = Number(t.newUserSubmitted) || 0;
+    for (const id of ['#catalog-new-badge', '#sources-tab-new']) {
+      const el = $(id);
+      if (!el) continue;
+      el.textContent = id === '#catalog-new-badge' ? `${n} new` : String(n);
+      el.classList.toggle('hidden', n === 0);
+    }
+    renderCatalog();
+  }
+
+  function renderCatalog() {
+    const q = ($('#catalog-search')?.value || '').trim().toLowerCase();
+    const rows = catalog.entries.filter((e) => {
+      if (catalogFilter === 'user' && !e.userSubmitted) return false;
+      if (catalogFilter === 'builtin' && !e.builtIn) return false;
+      if (catalogFilter === 'shared' && !(e.builtIn && e.contributorCount)) return false;
+      if (!q) return true;
+      return [e.name, e.url, e.host, ...e.contributors.map((c) => `${c.displayName} ${c.username} ${c.nameGiven}`)]
+        .some((v) => String(v || '').toLowerCase().includes(q));
+    });
+    const tbody = $('#catalog-tbody');
+    if (!rows.length) {
+      tbody.innerHTML = `<tr><td colspan="6" style="color:var(--text-muted);">${catalog.entries.length ? 'No feeds match.' : 'No sources yet.'}</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = rows.slice(0, 600).map((e) => {
+      const origin = e.builtIn
+        ? '<span class="catalog-origin builtin">Built-in</span>'
+        : `<span class="catalog-origin user">User-submitted</span>${e.isNew ? ' <span class="catalog-new">NEW</span>' : ''}`;
+      const chips = e.contributors.slice(0, 6).map((c) => {
+        const when = utcDate(c.addedAt);
+        const tip = `${c.displayName} (@${c.username}) added this${when ? ' ' + relativeTime(when.toISOString()) : ''} as “${c.nameGiven}”${c.enabled ? '' : ' — disabled'}`;
+        return `<span class="catalog-chip${c.enabled ? '' : ' off'}" title="${escapeHtml(tip)}">${escapeHtml(c.displayName)}</span>`;
+      }).join('') + (e.contributors.length > 6 ? `<span class="catalog-chip more">+${e.contributors.length - 6}</span>` : '');
+      const who = chips || '<span style="color:var(--text-muted);font-size:11px;">Platform only</span>';
+      const st = e.status === 'ok' ? ['active', 'OK'] : e.status === 'error' ? ['error', 'Error'] : ['idle', 'Pending'];
+      const first = utcDate(e.firstAddedAt);
+      return `<tr>
+        <td><strong>${escapeHtml(e.name)}</strong><div class="catalog-url" title="${escapeHtml(e.url)}">${escapeHtml(e.url)}</div></td>
+        <td style="white-space:nowrap;">${origin}</td>
+        <td><div class="catalog-chips">${who}</div></td>
+        <td>${escapeHtml(e.type || '')}</td>
+        <td style="white-space:nowrap;"><span class="source-status-dot ${st[0]}" title="${escapeHtml(e.lastError || st[1])}"></span> ${st[1]}</td>
+        <td style="white-space:nowrap;font-size:12px;">${first ? relativeTime(first.toISOString()) : (e.builtIn ? '—' : '')}</td>
+      </tr>`;
+    }).join('');
+  }
+
   // Audit log
   async function loadAudit() {
     const data = await api('GET', d('L2FwaS9hZG1pbi9hdWRpdC1sb2c='));
@@ -463,6 +524,13 @@
   });
 
   $('#ai-save-btn').addEventListener('click', saveAiSettings);
+  $$('[data-catalog-filter]').forEach((btn) => btn.addEventListener('click', () => {
+    $$('[data-catalog-filter]').forEach((b) => b.classList.remove('active'));
+    btn.classList.add('active');
+    catalogFilter = btn.dataset.catalogFilter;
+    renderCatalog();
+  }));
+  $('#catalog-search')?.addEventListener('input', renderCatalog);
   $('#email-test-btn').addEventListener('click', sendTestEmail);
   $('#email-refresh-btn').addEventListener('click', loadEmailStatus);
   $('#refresh-resets-btn').addEventListener('click', loadResets);
@@ -500,7 +568,7 @@
         const result = await api('PUT', `${d('L2FwaS9zb3VyY2Vz')}/${cb.dataset.sourceId}`, { url: newUrl.trim() });
         if (result && result.success) showToast('Source updated.', 'success');
         else showToast(result?.error || 'Failed to update source', 'error');
-        loadSources();
+        loadSources(); loadCatalog();
       }
     } else {
       showToast('Select only one source to edit URL.', 'error');
@@ -519,7 +587,7 @@
       if (ok) showToast(`${ok} source(s) deleted.`, 'success');
       if (ok < checked.length) showToast(`${checked.length - ok} source(s) not deleted: ${lastErr}`, 'error');
       $('#sources-bulk-actions').classList.add('hidden');
-      loadSources(); loadStats();
+      loadSources(); loadCatalog(); loadStats();
     }
   });
 

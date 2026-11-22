@@ -46,7 +46,7 @@
     <div style="display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap;">
       <button class="pill active" data-admin-tab="users">Users</button>
       <button class="pill" data-admin-tab="invites">Invite Codes</button>
-      <button class="pill" data-admin-tab="sources">All Sources</button>
+      <button class="pill" data-admin-tab="sources">All Sources <span id="sources-tab-new" class="catalog-new hidden"></span></button>
       <button class="pill" data-admin-tab="audit">Audit Log</button>
       <button class="pill" data-admin-tab="resets">Password Resets</button>
       <button class="pill" data-admin-tab="email">Email</button>
@@ -80,8 +80,28 @@
 
     <!-- Sources Tab -->
     <div class="admin-tab hidden" id="tab-sources">
+      <!-- Source catalog: one row per unique feed across every user -->
+      <div class="sidebar-card catalog-card" style="max-width:100%;margin-bottom:18px;">
+        <h3 class="sidebar-title">Source Catalog <span id="catalog-new-badge" class="catalog-new hidden">0 new</span></h3>
+        <p style="color:var(--text-muted);font-size:12px;margin:0 0 12px;">Every feed on the platform, listed once. When someone adds a feed that isn't in the built-in list it appears here automatically as <b>User-submitted</b>; if several people add the same feed (or it matches a built-in one) it is not duplicated — their names are added to it instead.</p>
+        <div id="catalog-stats" class="catalog-stats"></div>
+        <div class="catalog-toolbar">
+          <button class="pill active" data-catalog-filter="all">All</button>
+          <button class="pill" data-catalog-filter="user">User-submitted</button>
+          <button class="pill" data-catalog-filter="shared">Built-in, also added by users</button>
+          <button class="pill" data-catalog-filter="builtin">Built-in</button>
+          <input type="search" id="catalog-search" class="filter-select" placeholder="Search feed, URL or person…" autocomplete="off">
+        </div>
+        <div style="overflow-x:auto;">
+          <table class="admin-table catalog-table">
+            <thead><tr><th>Feed</th><th>Origin</th><th>Added by</th><th>Type</th><th>Status</th><th>First added</th></tr></thead>
+            <tbody id="catalog-tbody"><tr><td colspan="6" style="color:var(--text-muted);">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
       <div class="sidebar-card" style="max-width:100%;">
-        <h3 class="sidebar-title">All Sources (God View)</h3>
+        <h3 class="sidebar-title">Per-user Sources (edit / delete)</h3>
         <div class="bulk-actions hidden" id="sources-bulk-actions">
           <span id="selected-count">0 selected</span>
           <button class="btn btn-ghost" id="bulk-edit-btn" style="font-size:12px;padding:4px 10px;">Edit URL</button>

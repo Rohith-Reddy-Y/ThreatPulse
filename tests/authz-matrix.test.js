@@ -300,6 +300,7 @@ const ROUTES = {
   // articles / search
   'GET /api/articles': { policy: 'auth', allow: [200] },
   'GET /api/articles/stats': { policy: 'auth', allow: [200] },
+  'GET /api/geo': { policy: 'auth', allow: [200] },
   'GET /api/search': { policy: 'auth', allow: [200], query: '?q=quokka' },
   'POST /api/articles/:id/review': { policy: 'member', allow: [200], params: ownArticle },
   'PUT /api/articles/:id/review': { policy: 'member', allow: [200], params: ownArticle, body: () => ({ notes: 'n' }) },
@@ -328,6 +329,7 @@ const ROUTES = {
   'GET /api/admin/audit-log': { policy: 'admin', allow: [200] },
   'GET /api/admin/reset-tokens': { policy: 'admin', allow: [200] },
   'GET /api/admin/email-status': { policy: 'admin', allow: [200] },
+  'GET /api/admin/source-catalog': { policy: 'admin', allow: [200] },
   'POST /api/admin/email-test': { policy: 'admin', allow: [200, 400, 429, 502] },
   'GET /api/admin/ai-settings': { policy: 'admin', allow: [200] },
   'PUT /api/admin/ai-settings': { policy: 'admin', allow: [200] },

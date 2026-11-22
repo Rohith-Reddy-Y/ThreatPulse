@@ -900,6 +900,21 @@ function insertArticles(articles) {
   return insertMany(articles);
 }
 
+// Recent articles for the threat-geography globe, in the caller's read scope
+// (admin: null = all, guest: SYSTEM_SCOPE, user: own id). Text fields only.
+function getGeoArticles(userId, sinceIso, limit = 4000) {
+  const where = ['articles.published_date >= ?'];
+  const params = [sinceIso];
+  if (isSystemScope(userId)) where.push(systemArticleClause('articles'));
+  else if (userId) { where.push('articles.user_id = ?'); params.push(userId); }
+  params.push(Math.max(1, Math.min(10000, limit | 0)));
+  return getDb().prepare(
+    `SELECT id, title, substr(description, 1, 1500) AS description, severity, threat_actors
+       FROM articles WHERE ${where.join(' AND ')}
+      ORDER BY published_date DESC LIMIT ?`
+  ).all(...params);
+}
+
 function getArticles({ page = 1, limit = 50, category, severity, search, source_type, startDate, endDate, userId, sector, threat_actor, has_poc, has_mitre, is_patched } = {}) {
   let where = [];
   let params = [];
@@ -1369,6 +1384,7 @@ function deleteThread(threadId, userId) {
 }
 
 module.exports = {
+  getGeoArticles,
   getDb,
   initializeSchema,
   // Users

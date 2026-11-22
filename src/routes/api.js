@@ -9,6 +9,8 @@ const db = require('../database');
 const auth = require('../auth');
 const security = require('../security');
 const crypto = require('crypto');
+const geo = require('../geo');
+const sourceCatalog = require('../source-catalog');
 const {
   sendAlertEmail, sendVerificationEmail, isEmailConfigured, describeEmail,
   sendPasswordResetEmail, sendPasswordChangedEmail, sendEmailChangedEmails, sendWelcomeEmail,
@@ -655,6 +657,29 @@ router.get('/articles', auth.requireAuth, (req, res) => {
   }
 });
 
+// Threat geography for the 3D globe: countries named in the caller's own
+// articles, attributed actor origins, origin -> target arcs. Cached briefly per
+// scope (a 0.1-CPU host shouldn't rescan thousands of rows on every poll).
+const geoCache = new Map();
+const GEO_TTL_MS = 3 * 60 * 1000;
+router.get('/geo', auth.requireAuth, (req, res) => {
+  try {
+    const days = [1, 7, 30].includes(parseInt(req.query.days, 10)) ? parseInt(req.query.days, 10) : 7;
+    const scope = readScope(req.user);
+    const key = `${scope === null ? 'all' : scope}:${days}`;
+    const hit = geoCache.get(key);
+    if (hit && Date.now() - hit.at < GEO_TTL_MS) return res.json(hit.data);
+    const since = new Date(Date.now() - days * 86400000).toISOString();
+    const data = geo.buildGeo(db.getGeoArticles(scope, since), days);
+    if (geoCache.size > 500) geoCache.delete(geoCache.keys().next().value);
+    geoCache.set(key, { at: Date.now(), data });
+    res.json(data);
+  } catch (error) {
+    console.error('[API] Geo error:', error.message);
+    res.status(500).json({ error: 'Failed to build threat geography' });
+  }
+});
+
 router.get('/articles/stats', auth.requireAuth, (req, res) => {
   try {
     // Admin sees platform-wide totals; guests system content only; users their own.
@@ -1149,6 +1174,17 @@ router.get('/admin/articles', auth.requireAuth, auth.requireAdmin, (req, res) =>
     res.json(result);
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch articles' });
+  }
+});
+
+// Admin: one entry per unique feed across all users (duplicates folded,
+// built-in vs user-submitted, with every contributor's name)
+router.get('/admin/source-catalog', auth.requireAuth, auth.requireAdmin, (req, res) => {
+  try {
+    res.json(sourceCatalog.buildCatalog(db.getAllSources(), db.getAllUsers()));
+  } catch (error) {
+    console.error('[API] Source catalog error:', error.message);
+    res.status(500).json({ error: 'Failed to build source catalog' });
   }
 });
 
