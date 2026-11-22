@@ -222,14 +222,14 @@
     panel.append(el('p', { class: 'lp-note' }, 'Attribution follows public vendor naming and is shown only where it is consistently reported.'));
     panel.append(table(['Actor', 'Attributed to', 'Reports', 'Highest severity', 'Sectors', 'CVEs', 'Last seen'], d.actors.map((x) => ({
       cells: [
-        el('b', null, x.name),
+        el('span', null, el('b', null, x.name), x.aliases && x.aliases.length ? el('span', { class: 'lp-aka' }, `aka ${x.aliases.join(', ')}`) : null),
         x.origin ? x.origin.name : el('span', { class: 'lp-muted' }, 'Unattributed'),
         bar(x.count, max), sevChip(x.worst),
         x.sectors.length ? x.sectors.join(', ') : el('span', { class: 'lp-muted' }, '—'),
         x.cves.length ? el('span', null, ...x.cves.map((c) => el('code', { class: 'lp-code' }, c))) : el('span', { class: 'lp-muted' }, '—'),
         ago(x.lastSeen),
       ],
-      onclick: () => filterFeed(x.name, x.name),
+      onclick: () => filterFeed(x.term || x.name, x.name),
       label: `Filter the feed by ${x.name}`,
     })), [2]));
   }

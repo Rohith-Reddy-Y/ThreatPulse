@@ -48,3 +48,19 @@ test('actors, CVEs and sectors', () => {
   assert.deepStrictEqual([c.count, c.kev, c.exploited, c.poc, c.patch, c.worst], [2, true, true, true, 'unpatched', 'critical']);
   assert.deepStrictEqual(r.sectors.map((s) => s.name).sort(), ['government', 'healthcare', 'technology']);
 });
+
+test('actor aliases fold into one row and are listed; one report counts once', () => {
+  const r = L.buildLandscape([
+    row({ id: 1, title: 'Lazarus hits exchange', threat_actors: 'Lazarus, Lazarus Group' }),
+    row({ id: 2, title: 'Lazarus Group phishing', threat_actors: 'Lazarus Group' }),
+    row({ id: 3, title: 'Fancy Bear campaign', threat_actors: 'Fancy Bear' }),
+  ], 7);
+  const laz = r.actors.find((a) => a.name === 'Lazarus');
+  assert.strictEqual(laz.count, 2);
+  assert.deepStrictEqual(laz.aliases, ['Lazarus Group']);
+  assert.strictEqual(laz.origin.code, 'KP');
+  assert.strictEqual(r.actors.filter((a) => /lazarus/i.test(a.name)).length, 1);
+  const apt28 = r.actors.find((a) => a.name === 'APT28');
+  assert.strictEqual(apt28.term, 'Fancy Bear', 'search by the spelling the reports use');
+  assert.strictEqual(apt28.origin.code, 'RU');
+});

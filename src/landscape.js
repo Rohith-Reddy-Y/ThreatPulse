@@ -132,6 +132,19 @@ const INFER = [
   ['T1657', /\b(extortion|double extortion|ransom demand|data leak site|leak site)\b/i],
 ];
 
+// Common aliases folded into one actor (display name = canonical; aliases listed)
+const ACTOR_ALIASES = {
+  'lazarus group': 'Lazarus', 'apt38': 'Lazarus',
+  'fancy bear': 'APT28', 'forest blizzard': 'APT28',
+  'cozy bear': 'APT29', 'midnight blizzard': 'APT29', 'unc2452': 'APT29', 'nobelium': 'APT29',
+  'voodoo bear': 'Sandworm', 'seashell blizzard': 'Sandworm',
+  'charming kitten': 'APT35', 'helix kitten': 'APT34', 'oilrig': 'APT34',
+  'wicked panda': 'APT41', 'emissary panda': 'APT27', 'hafnium': 'Silk Typhoon',
+  'alphv': 'BlackCat', 'clop': 'Cl0p', 'star blizzard': 'Star Blizzard', 'cold river': 'Star Blizzard', 'coldriver': 'Star Blizzard',
+  'scattered spider': 'Scattered Spider', 'octo tempest': 'Scattered Spider', 'unc3944': 'Scattered Spider',
+};
+const canonicalActor = (name) => ACTOR_ALIASES[name.toLowerCase()] || name;
+
 const SEV_RANK = { critical: 4, high: 3, medium: 2, low: 1 };
 const worse = (a, b) => ((SEV_RANK[a] || 0) >= (SEV_RANK[b] || 0) ? a : b);
 const CVE_RE = /\bCVE-\d{4}-\d{4,7}\b/gi;
@@ -193,14 +206,19 @@ function buildLandscape(articles, days) {
     const names = String(a.threat_actors || '').split(',').map((s) => s.trim()).filter(Boolean);
     const origins = geo.originsOf(names);
     const articleCves = new Set([...(text.match(CVE_RE) || []), ...(a.cve_id ? [a.cve_id] : [])].map((c) => c.toUpperCase()));
-    for (const name of names) {
+    const seen = new Set();
+    for (const raw of names) {
+      const name = canonicalActor(raw);
       const key = name.toLowerCase();
+      if (seen.has(key)) continue;   // "Lazarus" + "Lazarus Group" in one report count once
+      seen.add(key);
       let r = actors.get(key);
-      if (!r) { r = { name, count: 0, worst: 'low', lastSeen: null, origin: null, sectors: new Map(), cves: new Set(), samples: [] }; actors.set(key, r); }
+      if (!r) { r = { name, count: 0, worst: 'low', lastSeen: null, origin: null, sectors: new Map(), cves: new Set(), samples: [], aliases: new Map() }; actors.set(key, r); }
       r.count++;
+      for (const n of names) if (canonicalActor(n).toLowerCase() === key) r.aliases.set(n, (r.aliases.get(n) || 0) + 1);
       r.worst = worse(sev, r.worst);
       if (!r.lastSeen || String(a.published_date) > r.lastSeen) r.lastSeen = a.published_date;
-      for (const [code, actor] of origins) if (actor === name) r.origin = code;
+      for (const [code, actor] of origins) if (canonicalActor(actor).toLowerCase() === key) r.origin = code;
       if (a.sector) r.sectors.set(a.sector, (r.sectors.get(a.sector) || 0) + 1);
       articleCves.forEach((c) => r.cves.add(c));
       sample(r.samples, a);
@@ -250,6 +268,9 @@ function buildLandscape(articles, days) {
     .slice(0, 15)
     .map((r) => ({
       name: r.name, count: r.count, worst: r.worst, lastSeen: r.lastSeen,
+      aliases: [...r.aliases.keys()].filter((a) => a.toLowerCase() !== r.name.toLowerCase()),
+      // most frequent spelling in the reports = the feed search term
+      term: [...r.aliases.entries()].sort((x, y) => y[1] - x[1])[0]?.[0] || r.name,
       origin: r.origin ? { code: r.origin, name: (geo.COUNTRIES.find((c) => c[0] === r.origin) || [])[1] || r.origin } : null,
       sectors: [...r.sectors.entries()].sort((x, y) => y[1] - x[1]).map(([s]) => s).slice(0, 3),
       cves: [...r.cves].slice(0, 3),
