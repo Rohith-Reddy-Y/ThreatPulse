@@ -1710,6 +1710,8 @@ body::after {
 }
 
 .form-group input::placeholder { color: var(--text-muted); }
+/* Text boxes are not dropdowns: only real <select>s (.form-select) get the arrow */
+.form-group input { background-image: none; }
 
 .form-group input:focus,
 .form-select:focus {
