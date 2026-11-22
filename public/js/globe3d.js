@@ -456,7 +456,8 @@
         const k = Math.log(c.count + 1) / Math.log(top + 1);
         const col = SEV_COLOR[c.worst] || SEV_COLOR.medium;
         out.push({ lon: c.lon, lat: c.lat, start: Math.random() * 2, life: 3.2 - 1.6 * k, col, max: cfg.ringMax * (0.45 + 0.85 * k), rep: 1 });
-        out.push({ lon: c.lon, lat: c.lat, start: -1e6, life: 1e9, col, max: cfg.ringMax * (0.5 + 0.6 * k), rep: 0 });
+        // steady "target" marker: drawn at the ring shader's first frame (ring + core)
+        out.push({ lon: c.lon, lat: c.lat, start: -1e-3, life: 1e9, col, max: cfg.ringMax * (1.15 + 1.5 * k), rep: 0 });
       }
       return out;
     }
@@ -829,7 +830,7 @@
         ? `${geo.geolocated} of ${geo.totalArticles} reports geolocated · ${geo.countries.length} countries · ${range}`
         : `No country named in your ${geo.totalArticles} reports (${range})`;
       if (hud) hud.textContent = geo.arcs.length
-        ? `${geo.arcs.length} attributed origin → target path${geo.arcs.length === 1 ? '' : 's'} · hover a beacon`
+        ? `${geo.arcs.length} origin→target path${geo.arcs.length === 1 ? '' : 's'} · hover a beacon`
         : 'Hover a beacon · click to filter';
       if (!list) return;
       list.textContent = '';
