@@ -93,7 +93,8 @@
     root.setAttribute('aria-busy', 'true');
     try {
       const r = await fetch(`/api/landscape?days=${state.days}`, { credentials: 'same-origin', headers: { Accept: 'application/json' } });
-      state.data = r.ok ? await r.json() : null;
+      const body = r.ok ? await r.json() : null;
+      state.data = body && body.attack && Array.isArray(body.attack.tactics) ? body : null;   // ignore malformed responses
     } catch (_) { state.data = null; }
     state.loading = false;
     root.removeAttribute('aria-busy');
