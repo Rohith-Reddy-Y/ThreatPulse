@@ -575,3 +575,53 @@ a.lp-col-name:hover { color: var(--text-accent); text-decoration: underline; }
 /* ── Detection links (Sigma / Elastic / Atomic Red Team) ── */
 .lp-det, .ap-det { display: flex; flex-wrap: wrap; gap: 6px; }
 .ap-det { margin-bottom: 4px; }
+
+/* ── Watchlist ── */
+.watch-form { display: flex; gap: 6px; margin-bottom: 8px; }
+.watch-form input { flex: 1; min-width: 0; padding: 6px 9px; border-radius: 6px; border: 1px solid var(--border-light); background: var(--bg-input); color: var(--text-primary); font-size: 12.5px; }
+.watch-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.watch-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600;
+  color: var(--text-primary); background: rgba(250, 204, 21, 0.1); border: 1px solid rgba(250, 204, 21, 0.45); }
+.watch-chip button { border: 0; background: none; color: var(--text-muted); cursor: pointer; font-size: 14px; line-height: 1; padding: 0 4px; border-radius: 50%; }
+.watch-chip button:hover { color: var(--text-primary); }
+.watch-empty { font-size: 12px; color: var(--text-muted); }
+.watch-note { margin: 8px 0 0; font-size: 11px; line-height: 1.4; color: var(--text-muted); }
+.badge-watch { color: #fde68a; background: rgba(250, 204, 21, 0.12); border: 1px solid rgba(250, 204, 21, 0.5); }
+.article-card.on-watchlist { box-shadow: inset 3px 0 0 rgba(250, 204, 21, 0.85); }
+[data-theme="light"] .badge-watch { color: #854d0e; }
+
+/* ── Threat actor profile ── */
+.ac-dialog { width: min(1080px, 100%); }
+.ac-dialog .ap-head > .ap-btn { align-self: center; }
+.ac-body { padding: 16px 20px 22px; display: grid; gap: 14px; }
+.ac-empty { margin: 0; font-size: 13.5px; color: var(--text-secondary); }
+.ac-muted { color: var(--text-muted); font-size: 12px; }
+.ac-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.ac-stats div { padding: 10px 12px; border-radius: var(--radius-md); border: 1px solid var(--border-subtle); background: var(--bg-input); display: grid; }
+.ac-stats b { font-size: 18px; color: var(--text-primary); }
+.ac-stats span { font-size: 11px; color: var(--text-muted); }
+.ac-sec h5 { margin: 0 0 6px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); }
+.ac-weeks { width: 100%; max-width: 420px; height: auto; display: block; }
+.ac-bar { fill: #3987e5; }
+.ac-bar-zero { fill: var(--border-light); }
+.ac-axis { fill: var(--text-muted); font-size: 8px; }
+.ac-grid { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 18px; }
+.ac-grid > div { display: grid; gap: 14px; align-content: start; }
+.ac-techs { list-style: none; margin: 0 0 10px; padding: 0; display: grid; gap: 3px; }
+.ac-techs li { display: grid; grid-template-columns: 130px auto minmax(0, 1fr) auto; gap: 8px; align-items: baseline; padding: 4px 6px; border-radius: 4px; font-size: 12.5px; }
+.ac-techs li:hover { background: var(--bg-card-hover); }
+.ac-tac { font-size: 11px; color: var(--text-muted); }
+.ac-tid { font: 700 11.5px var(--font-mono); color: var(--text-accent); text-decoration: none; }
+.ac-tname { color: var(--text-primary); }
+.ac-n { font: 600 11px var(--font-mono); color: var(--text-muted); }
+.ac-cves { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; }
+.ac-cves li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; }
+.ac-cve { font: 700 11.5px var(--font-mono); color: var(--text-primary); text-decoration: none; }
+.ac-cve:hover { color: var(--text-accent); }
+.ac-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.ac-chip { font-size: 11.5px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border-light); color: var(--text-secondary); }
+.ac-recent { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.ac-recent li { display: grid; gap: 1px; font-size: 12.5px; }
+.ac-recent a { color: var(--text-primary); text-decoration: none; font-weight: 600; }
+.ac-recent a:hover { color: var(--text-accent); }
+@media (max-width: 820px) { .ac-grid { grid-template-columns: 1fr; } .ac-stats { grid-template-columns: repeat(2, 1fr); } .ac-techs li { grid-template-columns: auto minmax(0, 1fr) auto; } .ac-tac { display: none; } }

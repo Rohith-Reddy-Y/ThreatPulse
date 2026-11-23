@@ -516,6 +516,7 @@
       <div class="detect-toggles">
         <button class="pill toggle-pill" id="filter-poc" data-filter="has_poc" title="Show only items with a public proof-of-concept">PoC Available</button>
         <button class="pill toggle-pill" id="filter-mitre" data-filter="has_mitre" title="Show only items mapped to MITRE ATT&CK techniques">MITRE Mapped</button>
+        <button class="pill toggle-pill guest-hidden" id="filter-watch" data-filter="watchlist" title="Show only items that mention your watchlist">Watchlist</button>
         <button class="clear-all-filters-btn" id="clear-all-filters-btn" title="Clear all active filters">Clear All</button>
       </div>
       <button class="btn btn-primary fetch-now-btn guest-hidden" id="fetch-now-btn">
@@ -554,6 +555,20 @@
 
     <!-- ─────── SIDEBAR ─────── -->
     <aside class="sidebar" id="sidebar">
+      <!-- Watchlist: products / vendors / CVEs / actors this user cares about -->
+      <section class="sidebar-card guest-hidden" id="watchlist-card" aria-labelledby="watchlist-title">
+        <h3 class="sidebar-title" id="watchlist-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          Watchlist
+        </h3>
+        <form id="watchlist-form" class="watch-form" autocomplete="off">
+          <input type="text" id="watchlist-input" maxlength="60" placeholder="e.g. FortiOS, Exchange, CVE-2026-1111" aria-label="Add a product, vendor, CVE or actor">
+          <button type="submit" class="poc-check-btn">Add</button>
+        </form>
+        <div id="watchlist-chips" class="watch-chips" aria-live="polite"></div>
+        <p class="watch-note">Matching articles are highlighted, can be filtered with the <b>Watchlist</b> chip above the feed, and always trigger your alerts.</p>
+      </section>
+
       <!-- Admin only: articles with a proof of concept, the PoC links and whether they're real -->
       <section class="sidebar-card poc-tracker hidden" id="poc-tracker-card" aria-labelledby="poc-tracker-title">
         <h3 class="sidebar-title" id="poc-tracker-title">
@@ -878,5 +893,6 @@
   <script src="/js/app.js"></script>
   <script src="/js/landscape.js" defer></script>
   <script src="/js/attack-path.js" defer></script>
+  <script src="/js/actor-profile.js" defer></script>
 </body>
 </html>

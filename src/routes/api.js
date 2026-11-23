@@ -609,6 +609,7 @@ router.post('/auth/verify-change', auth.requireAuth, denyGuest, (req, res) => {
 router.get('/articles', auth.requireAuth, (req, res) => {
   try {
     const q = req.query || {};
+    const watchTerms = req.user.username === 'guest' ? [] : db.getWatchlist(req.user.id).map((w) => w.term);
     const time_range = qstr(q.time_range, 10);
 
     // Translate time_range shorthand to start/end dates
@@ -640,7 +641,8 @@ router.get('/articles', auth.requireAuth, (req, res) => {
       threat_actor: qstr(q.threat_actor, 100),
       has_poc: qstr(q.has_poc, 5),
       has_mitre: qstr(q.has_mitre, 5),
-      is_patched: qstr(q.is_patched, 5)
+      is_patched: qstr(q.is_patched, 5),
+      watchTerms: q.watchlist === '1' && req.user.username !== 'guest' ? watchTerms : undefined,
     });
     // TTPs per report: tactic, technique (linked to MITRE), the procedure sentence,
     // and whether the report cites the ID or only describes the behaviour
@@ -664,6 +666,8 @@ router.get('/articles', auth.requireAuth, (req, res) => {
       });
       // Patch priority per CVE: EPSS + CISA KEV + CVSS
       result.articles = vulnIntel.attach(result.articles);
+      // Which of the user's watchlist terms each article mentions
+      if (watchTerms.length) result.articles = result.articles.map((a) => { const w = watchMatches(a, watchTerms); return w.length ? { ...a, watch: w } : a; });
     }
     res.json(result);
   } catch (error) {
@@ -1260,6 +1264,81 @@ router.get('/admin/articles', auth.requireAuth, auth.requireAdmin, (req, res) =>
 
 // Admin: one entry per unique feed across all users (duplicates folded,
 // built-in vs user-submitted, with every contributor's name)
+// ── Threat actor profile (from the caller's own reports, last 90 days) ──
+router.get('/actors/profile', auth.requireAuth, (req, res) => {
+  try {
+    const name = qstr((req.query || {}).name, 80);
+    if (!name || !name.trim()) return res.status(400).json({ error: 'name required' });
+    const canon = attackKb.canonicalActor(name.trim());
+    const days = 90;
+    const since = new Date(Date.now() - days * 86400000).toISOString();
+    const rows = db.getGeoArticles(readScope(req.user), since, 10000)
+      .filter((a) => String(a.threat_actors || '').split(',').some((x) => x.trim() && attackKb.canonicalActor(x.trim()) === canon))
+      .map((a) => {
+        const raw = aiCache.get('ttps', String(a.id));
+        if (!raw) return a;
+        try { const m = JSON.parse(raw); return Array.isArray(m.ttps) ? { ...a, _aiTtps: m.ttps } : a; } catch { return a; }
+      });
+    if (!rows.length) return res.json({ name: canon, found: false, days });
+    const L = landscape.buildLandscape(rows, days);
+    const me = (L.actors || []).find((x) => x.name === canon) || {};
+    // activity per week, oldest first (13 weeks)
+    const weeks = Array.from({ length: 13 }, (_, i) => ({ start: new Date(Date.now() - (13 - i) * 7 * 86400000).toISOString(), count: 0 }));
+    for (const a of rows) {
+      const t = Date.parse(a.published_date || '');
+      if (Number.isNaN(t)) continue;
+      const i = 12 - Math.floor((Date.now() - t) / (7 * 86400000));
+      if (i >= 0 && i < 13) weeks[i].count++;
+    }
+    const techniques = L.attack.tactics.flatMap((ta) => ta.techniques.map((t) => ({
+      id: t.id, name: t.name, tactic: ta.id, tacticName: ta.name, count: t.total, url: t.url,
+      how: t.explicit ? 'cited' : 'inferred', procedure: t.procedures && t.procedures[0] ? t.procedures[0].text : null,
+    })));
+    const intel = vulnIntel.lookup((L.cves || []).map((c) => c.id));
+    res.json({
+      found: true, name: canon, days,
+      aliases: me.aliases || [], origin: me.origin || null,
+      reports: rows.length, firstSeen: rows[rows.length - 1].published_date, lastSeen: rows[0].published_date,
+      weeks, techniques,
+      cves: (L.cves || []).slice(0, 15).map((c) => { const i = intel.get(c.id); return { id: c.id, count: c.count, poc: !!c.poc, kev: !!(c.kev || (i && i.kev)), epss: i ? i.epss : null, cvss: i ? i.cvss : null, priority: i ? i.priority : null }; }),
+      sectors: (L.sectors || []).slice(0, 8).map((x) => ({ name: x.name, count: x.count })),
+      countries: (L.countries || []).slice(0, 8).map((x) => ({ name: x.name, count: x.count })),
+      recent: rows.slice(0, 10).map((a) => ({ id: a.id, title: a.title, url: a.url, source_name: a.source_name, published_date: a.published_date, severity: a.severity })),
+    });
+  } catch (error) {
+    console.error('[API] Actor profile error:', error.message);
+    res.status(500).json({ error: 'Failed to build the actor profile' });
+  }
+});
+
+// ── Watchlist: products / vendors / CVEs / actors a user cares about ──
+function cleanWatchTerm(t) {
+  const v = String(t || '').replace(/[\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim();
+  if (v.length < 2 || v.length > 60 || !/[\p{L}\p{N}]/u.test(v)) return null;
+  return v;
+}
+function watchMatches(article, terms) {
+  if (!terms || !terms.length) return [];
+  const text = `${article.title || ''} ${article.description || ''} ${article.cve_id || ''} ${article.threat_actors || ''}`.toLowerCase();
+  return terms.filter((t) => text.includes(t.toLowerCase()));
+}
+router.get('/watchlist', auth.requireAuth, denyGuest, (req, res) => {
+  res.json({ success: true, terms: db.getWatchlist(req.user.id) });
+});
+router.post('/watchlist', auth.requireAuth, denyGuest, (req, res) => {
+  const term = cleanWatchTerm((req.body || {}).term);
+  if (!term) return res.status(400).json({ success: false, error: 'Enter 2–60 characters, e.g. a product, vendor, CVE or actor' });
+  const r = db.addWatchTerm(req.user.id, term);
+  if (!r.success) return res.status(400).json(r);
+  res.status(201).json({ success: true, id: r.id, term, terms: db.getWatchlist(req.user.id) });
+});
+router.delete('/watchlist/:id', auth.requireAuth, denyGuest, (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ success: false, error: 'Invalid id' });
+  if (!db.removeWatchTerm(req.user.id, id)) return res.status(404).json({ success: false, error: 'Not found' });
+  res.json({ success: true, terms: db.getWatchlist(req.user.id) });
+});
+
 // ── PoC tracker (admin): articles with a PoC, the PoC links, and whether they're real ──
 const pocCheck = require('../poc-check');
 const pocInflight = new Set();
@@ -1509,7 +1588,9 @@ async function handleNotifications(newArticles) {
       // Severity threshold filter
       const sevOrder = { critical: 4, high: 3, medium: 2, low: 1 };
       const threshold = sevOrder[settings.severity_threshold] || 2;
-      userArticles = userArticles.filter(a => (sevOrder[a.severity] || 1) >= threshold);
+      // Watchlist matches always alert, whatever their severity
+      const watchTermsForUser = db.getWatchlist(user.id).map((w) => w.term);
+      userArticles = userArticles.filter(a => (sevOrder[a.severity] || 1) >= threshold || watchMatches(a, watchTermsForUser).length > 0);
 
       // Keyword filter
       if (settings.keywords_filter && settings.keywords_filter.trim()) {

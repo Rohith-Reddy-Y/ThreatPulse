@@ -201,7 +201,7 @@
           ? 'Threat actor named in this report. Every technique on the path is attributed to this actor for this report.'
           : 'The report does not name a threat actor. The techniques on the path describe the activity itself.' }),
         model.actors.length ? el('div', { class: 'ap-actions' }, model.actors.map((a) =>
-          el('button', { type: 'button', class: 'ap-btn', onclick: () => findInFeed(a, 'actor') }, `Show all reports about ${a}`))) : null,
+          el('button', { type: 'button', class: 'ap-btn', onclick: () => { close(); if (window.ThreatPulseActor) window.ThreatPulseActor.open(a); else findInFeed(a, 'actor'); } }, `Open ${a} profile`))) : null,
       );
       return wrap;
     }

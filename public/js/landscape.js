@@ -256,7 +256,7 @@
     const who = el('div', { class: 'lp-insp-col lp-insp-side' }, el('h5', null, 'Threat actors in these reports'));
     if (t.actors && t.actors.length) {
       who.append(el('div', { class: 'lp-chips' }, ...t.actors.map((a) =>
-        el('button', { type: 'button', class: 'lp-chip', onclick: () => filterFeed(actorTerm(a.name), a.name), title: `Filter the feed by ${a.name}` }, `${a.name} (${a.count})`))));
+        el('button', { type: 'button', class: 'lp-chip', onclick: () => (window.ThreatPulseActor ? window.ThreatPulseActor.open(a.name) : filterFeed(actorTerm(a.name), a.name)), title: `Open the ${a.name} profile` }, `${a.name} (${a.count})`))));
     } else who.append(el('p', { class: 'lp-muted' }, 'No named actor in these reports.'));
     const det = window.ThreatPulseAttackPath && window.ThreatPulseAttackPath.detectionLinks ? window.ThreatPulseAttackPath.detectionLinks(t.id) : [];
     if (det.length) {
@@ -360,8 +360,8 @@
         x.cves.length ? el('span', null, ...x.cves.map((c) => el('code', { class: 'lp-code' }, c))) : el('span', { class: 'lp-muted' }, '—'),
         ago(x.lastSeen),
       ],
-      onclick: () => filterFeed(x.term || x.name, x.name),
-      label: `Filter the feed by ${x.name}`,
+      onclick: () => (window.ThreatPulseActor ? window.ThreatPulseActor.open(x.name) : filterFeed(x.term || x.name, x.name)),
+      label: `Open the ${x.name} profile`,
     })), [2, 3]));
   }
 

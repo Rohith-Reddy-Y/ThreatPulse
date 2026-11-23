@@ -32,7 +32,7 @@
     currentPage: 1,
     totalPages: 1,
     totalArticles: 0,
-    filters: { category: '', severity: '', source_type: '', search: '', sector: '', threat_actor: '', has_poc: '', has_mitre: '', is_patched: '', time_range: '', start_date: '', end_date: '' },
+    filters: { category: '', severity: '', source_type: '', search: '', sector: '', threat_actor: '', has_poc: '', has_mitre: '', watchlist: '', is_patched: '', time_range: '', start_date: '', end_date: '' },
     refreshCountdown: 60,
     refreshTimer: null,
     countdownTimer: null,
@@ -177,6 +177,7 @@
     scheduleAutoRefresh();
     hideAuth();
     loadPocTracker();
+    loadWatchlist();
   }
 
   // Wipe everything the previous user could leave behind in the DOM
@@ -201,6 +202,7 @@
     resetAiPanel();
     aiAnalysis.clear();
     pocState.items = []; pocState.seq++;
+    watchTerms = []; renderWatchlist();
     $('#poc-tracker-card')?.classList.add('hidden');
   }
 
@@ -1104,6 +1106,8 @@
     }).join('') : '';
     const cveLink = article.cve_id ? `<a href="https://nvd.nist.gov/vuln/detail/${escapeHtml(encodeURIComponent(article.cve_id))}" target="_blank" rel="noopener" class="cve-link">${escapeHtml(article.cve_id)}</a>` : '';
     const pocBadge = article.has_poc ? '<span class="badge badge-poc">PoC Available</span>' : '';
+    const watchBadge = Array.isArray(article.watch) && article.watch.length
+      ? `<span class="badge badge-watch" title="On your watchlist: ${escapeHtml(article.watch.join(', '))}">Watchlist: ${escapeHtml(article.watch.slice(0, 2).join(', '))}${article.watch.length > 2 ? '…' : ''}</span>` : '';
 
     // MITRE ATT&CK technique/tactic IDs — key signal for detection engineering
     const mitreIds = article.mitre_ids ? article.mitre_ids.split(',').map(s => s.trim()).filter(Boolean) : [];
@@ -1123,7 +1127,7 @@
     const actorChips = actorNames.map(name => {
       const cls = actorClass(name);
       const clsTag = cls ? `<span class="ta-class ta-class-${cls.toLowerCase()}">${cls}</span>` : '';
-      return `<button type="button" class="ti-actor" data-filter-actor="${escapeHtml(name)}" title="${cls ? 'Class ' + cls + ' threat actor' : 'Threat actor'} — show all reports about ${escapeHtml(name)}">${clsTag}${escapeHtml(name)}</button>`;
+      return `<button type="button" class="ti-actor" data-filter-actor="${escapeHtml(name)}" title="${cls ? 'Class ' + cls + ' threat actor' : 'Threat actor'}: open the ${escapeHtml(name)} profile">${clsTag}${escapeHtml(name)}</button>`;
     }).join('');
     // Don't repeat text the card already shows: skip a quote that is just the
     // title, and show each distinct sentence only once across the steps.
@@ -1256,9 +1260,9 @@
     else if (escalatedByAnyone) cardExtraCls = ' escalated-by-me';
 
     return `
-      <article class="article-card ${article.severity === 'critical' ? 'critical' : ''} ${(ttps && ttps.length) || mitreIds.length ? 'has-ttp' : ''}${cardExtraCls}" data-article-id="${article.id}">
+      <article class="article-card ${article.severity === 'critical' ? 'critical' : ''} ${(ttps && ttps.length) || mitreIds.length ? 'has-ttp' : ''}${watchBadge ? ' on-watchlist' : ''}${cardExtraCls}" data-article-id="${article.id}">
         <div class="article-header">
-          <div class="article-badges">${catBadge}${sevBadge}${ownerBadge}${ttps ? '' : ttpBadge}${pocBadge}${patchBadge}${sectorBadge}${ttpHtml ? '' : actorBadge}${ttps ? '' : mitreBadges}${cveLink}</div>
+          <div class="article-badges">${watchBadge}${catBadge}${sevBadge}${ownerBadge}${ttps ? '' : ttpBadge}${pocBadge}${patchBadge}${sectorBadge}${ttpHtml ? '' : actorBadge}${ttps ? '' : mitreBadges}${cveLink}</div>
         </div>
         <h3 class="article-title"><a href="${escapeHtml(safeUrl(article.url))}" target="_blank" rel="noopener">${escapeHtml(article.title)}</a></h3>
         <div class="article-meta">
@@ -1297,6 +1301,32 @@
       const pri = VULN_PRI[v.priority] ? v.priority : 'monitor';
       return `<div class="vuln-row"><span class="vuln-pri vuln-pri-${pri}">${VULN_PRI[pri]}</span><code>${escapeHtml(v.cve)}</code>${bits.join('<i aria-hidden="true">·</i>')}</div>`;
     }).join('')}</div>`;
+  }
+
+  // ── Watchlist ──
+  let watchTerms = [];
+  function renderWatchlist() {
+    const box = $('#watchlist-chips');
+    if (!box) return;
+    box.innerHTML = watchTerms.length
+      ? watchTerms.map(w => `<span class="watch-chip">${escapeHtml(w.term)}<button type="button" data-watch-remove="${w.id}" aria-label="Remove ${escapeHtml(w.term)} from the watchlist">×</button></span>`).join('')
+      : '<span class="watch-empty">Nothing yet. Add the products and vendors you run.</span>';
+  }
+  async function loadWatchlist() {
+    if (!currentUser || currentUser.username === 'guest') { watchTerms = []; renderWatchlist(); return; }
+    try { const r = await api('GET', '/api/watchlist'); watchTerms = r.terms || []; } catch { watchTerms = []; }
+    renderWatchlist();
+  }
+  async function addWatchTerm(term) {
+    const r = await api('POST', '/api/watchlist', { term });
+    if (!r.success) throw new Error(r.error || 'Could not add');
+    watchTerms = r.terms || watchTerms;
+    renderWatchlist();
+    fetchArticles();
+  }
+  async function removeWatchTerm(id) {
+    const r = await api('DELETE', `/api/watchlist/${id}`);
+    if (r.success) { watchTerms = r.terms || watchTerms.filter(w => w.id !== id); renderWatchlist(); fetchArticles(); }
   }
 
   // ── IOCs (stored as "ip:a,b|domain:c|hash:d|email:e") ──
@@ -1697,7 +1727,7 @@
   }
 
   function clearFilters() {
-    state.filters = { category: '', severity: '', source_type: '', search: '', sector: '', threat_actor: '', has_poc: '', has_mitre: '', is_patched: '', time_range: '', start_date: '', end_date: '' };
+    state.filters = { category: '', severity: '', source_type: '', search: '', sector: '', threat_actor: '', has_poc: '', has_mitre: '', watchlist: '', is_patched: '', time_range: '', start_date: '', end_date: '' };
     state.currentPage = 1;
     const si = $('#search-input'); if (si) si.value = '';
     ['#severity-filter', '#source-type-filter', '#sector-filter', '#threat-actor-filter', '#patch-filter', '#time-range-filter'].forEach(sel => {
@@ -1735,7 +1765,7 @@
   function filterParams(page, limit) {
     const params = new URLSearchParams({ page, limit });
     const f = state.filters;
-    ['category', 'severity', 'source_type', 'search', 'sector', 'threat_actor', 'has_poc', 'has_mitre',
+    ['category', 'severity', 'source_type', 'search', 'sector', 'threat_actor', 'has_poc', 'has_mitre', 'watchlist',
       'time_range', 'start_date', 'end_date'].forEach(k => { if (f[k]) params.set(k, f[k]); });
     if (f.is_patched !== '') params.set('is_patched', f.is_patched);
     return params;
@@ -2510,8 +2540,9 @@
         });
       }
 
-      // Threat actor chip → show every report about that actor
+      // Threat actor chip → actor profile (which has "Show all reports in feed")
       const actorBtn = e.target.closest('[data-filter-actor]');
+      if (actorBtn && window.ThreatPulseActor) { window.ThreatPulseActor.open(actorBtn.dataset.filterActor, actorBtn); return; }
       if (actorBtn) {
         const name = actorBtn.dataset.filterActor;
         const sel = $('#threat-actor-filter');
@@ -2530,6 +2561,10 @@
         if (art && window.ThreatPulseAttackPath) window.ThreatPulseAttackPath.open(art, pathBtn);
         return;
       }
+
+      // Watchlist chip remove
+      const wRm = e.target.closest('[data-watch-remove]');
+      if (wRm) { removeWatchTerm(parseInt(wRm.dataset.watchRemove, 10)); return; }
 
       // IOC export (copy / CSV / STIX 2.1)
       const iocBtn = e.target.closest('[data-ioc-export]');
@@ -2590,6 +2625,16 @@
 
     // Export
     $('#export-btn').addEventListener('click', exportArticles);
+
+    // Watchlist add / remove
+    $('#watchlist-form')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const inp = $('#watchlist-input');
+      const term = inp.value.trim();
+      if (!term) return;
+      try { await addWatchTerm(term); inp.value = ''; }
+      catch (err) { showToast('Watchlist', err.message, 'error'); }
+    });
 
     // Admin PoC tracker: time range + periodic refresh (picks up background checks)
     $('#poc-days')?.addEventListener('change', (e) => { pocState.days = parseInt(e.target.value, 10) || 30; loadPocTracker(); });

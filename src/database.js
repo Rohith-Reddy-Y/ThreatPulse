@@ -156,6 +156,14 @@ function initializeSchema() {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS watchlist (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      term TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_watchlist_user_term ON watchlist(user_id, term COLLATE NOCASE);
+
     CREATE TABLE IF NOT EXISTS poc_checks (
       article_id INTEGER PRIMARY KEY,
       verdict TEXT,
@@ -940,6 +948,25 @@ function getGeoArticles(userId, sinceIso, limit = 4000) {
   ).all(...params);
 }
 
+// ── Watchlist (per user) ──
+function getWatchlist(userId) {
+  return getDb().prepare('SELECT id, term, created_at FROM watchlist WHERE user_id = ? ORDER BY term COLLATE NOCASE').all(userId);
+}
+function addWatchTerm(userId, term) {
+  const count = getDb().prepare('SELECT COUNT(*) AS c FROM watchlist WHERE user_id = ?').get(userId).c;
+  if (count >= 50) return { success: false, error: 'Watchlist is full (50 terms)' };
+  try {
+    const r = getDb().prepare('INSERT INTO watchlist (user_id, term) VALUES (?, ?)').run(userId, term);
+    return { success: true, id: Number(r.lastInsertRowid) };
+  } catch (e) {
+    if (/UNIQUE/i.test(e.message)) return { success: false, error: 'Already on your watchlist' };
+    throw e;
+  }
+}
+function removeWatchTerm(userId, id) {
+  return getDb().prepare('DELETE FROM watchlist WHERE id = ? AND user_id = ?').run(id, userId).changes > 0;
+}
+
 // ── PoC tracker (admin) ──
 function savePocCheck(articleId, result) {
   getDb().prepare(
@@ -976,7 +1003,7 @@ function getUncheckedPocArticles(limit = 5) {
   ).all(Math.max(1, Math.min(50, limit | 0)));
 }
 
-function getArticles({ page = 1, limit = 50, category, severity, search, source_type, startDate, endDate, userId, sector, threat_actor, has_poc, has_mitre, is_patched } = {}) {
+function getArticles({ page = 1, limit = 50, category, severity, search, source_type, startDate, endDate, userId, sector, threat_actor, has_poc, has_mitre, is_patched, watchTerms } = {}) {
   let where = [];
   let params = [];
 
@@ -1021,6 +1048,14 @@ function getArticles({ page = 1, limit = 50, category, severity, search, source_
   if (is_patched === '1' || is_patched === '0') {
     where.push('articles.is_patched = ?');
     params.push(parseInt(is_patched, 10));
+  }
+  // Watchlist: any of the user's terms in the title, description, CVE or actor fields
+  if (Array.isArray(watchTerms)) {
+    if (!watchTerms.length) where.push('0');
+    else {
+      where.push('(' + watchTerms.map(() => "(articles.title LIKE ? ESCAPE '\\' OR articles.description LIKE ? ESCAPE '\\' OR articles.cve_id LIKE ? ESCAPE '\\' OR articles.threat_actors LIKE ? ESCAPE '\\')").join(' OR ') + ')');
+      for (const t of watchTerms) { const l = likeContains(t); params.push(l, l, l, l); }
+    }
   }
   if (search) {
     where.push("(articles.title LIKE ? ESCAPE '\\' OR articles.description LIKE ? ESCAPE '\\' OR articles.cve_id LIKE ? ESCAPE '\\' OR articles.author LIKE ? ESCAPE '\\' OR articles.tags LIKE ? ESCAPE '\\' OR articles.threat_actors LIKE ? ESCAPE '\\' OR articles.mitre_ids LIKE ? ESCAPE '\\' OR articles.sector LIKE ? ESCAPE '\\')");
@@ -1478,6 +1513,9 @@ function deleteThread(threadId, userId) {
 }
 
 module.exports = {
+  getWatchlist,
+  addWatchTerm,
+  removeWatchTerm,
   savePocCheck,
   getPocCheck,
   getPocTrackerArticles,

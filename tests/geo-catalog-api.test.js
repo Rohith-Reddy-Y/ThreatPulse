@@ -142,3 +142,45 @@ test('landscape trends: each technique and actor carries its count from the prev
   assert.strictEqual(t.prev, 1);
   assert.strictEqual(r.body.actors.find(a => a.name === 'APT28').prev, 1);
 });
+
+test('watchlist: per user, validated, highlights + filters the feed, guests cannot use it', async () => {
+  const u = createUser('wl_user', PW), other = createUser('wl_other', PW);
+  const s = db.addSource({ name: 'WL feed', url: 'https://feeds.example/wl', user_id: u }).id;
+  const mk = (title) => db.insertArticle({ url: `https://news.example/wl/${++n}`, title, description: '', user_id: u, source_id: s,
+    source_name: 'WL', published_date: new Date().toISOString(), severity: 'low' });
+  mk('FortiOS SSL-VPN bug patched'); mk('Unrelated gardening story');
+  const jar = await h.login('wl_user', PW, ip());
+  const csrf = { 'X-CSRF-Token': jar.tp_csrf };
+  assert.strictEqual((await request('POST', '/api/watchlist', { cookies: jar, headers: csrf, body: { term: ' ' } })).status, 400);
+  const add = await request('POST', '/api/watchlist', { cookies: jar, headers: csrf, body: { term: 'fortios' } });
+  assert.strictEqual(add.status, 201, JSON.stringify(add.body));
+  assert.strictEqual((await request('POST', '/api/watchlist', { cookies: jar, headers: csrf, body: { term: 'FortiOS' } })).status, 400, 'duplicate (case-insensitive)');
+  const feed = await request('GET', '/api/articles?limit=50', { cookies: jar });
+  assert.deepStrictEqual(feed.body.articles.find((a) => a.title.startsWith('FortiOS')).watch, ['fortios']);
+  const only = await request('GET', '/api/articles?limit=50&watchlist=1', { cookies: jar });
+  assert.deepStrictEqual(only.body.articles.map((a) => a.title), ['FortiOS SSL-VPN bug patched']);
+  // another user can't see or delete it
+  const jo = await h.login('wl_other', PW, ip());
+  assert.deepStrictEqual((await request('GET', '/api/watchlist', { cookies: jo })).body.terms, []);
+  assert.strictEqual((await request('DELETE', `/api/watchlist/${add.body.id}`, { cookies: jo, headers: { 'X-CSRF-Token': jo.tp_csrf } })).status, 404);
+  assert.strictEqual((await request('DELETE', `/api/watchlist/${add.body.id}`, { cookies: jar, headers: csrf })).status, 200);
+});
+
+test('actor profile: built only from the caller\'s reports, with techniques, weeks and recent list', async () => {
+  const u = createUser('ap_user', PW), v = createUser('ap_other', PW);
+  const s = db.addSource({ name: 'AP feed', url: 'https://feeds.example/ap', user_id: u }).id;
+  const sv = db.addSource({ name: 'AP2 feed', url: 'https://feeds.example/ap2', user_id: v }).id;
+  db.insertArticle({ url: 'https://news.example/ap/1', title: 'Fancy Bear password spraying against ministries', description: 'APT28 used password spraying.',
+    user_id: u, source_id: s, source_name: 'AP', published_date: new Date().toISOString(), severity: 'high', threat_actors: 'APT28' });
+  db.insertArticle({ url: 'https://news.example/ap/2', title: 'Other user APT28 report', description: 'APT28 phishing.',
+    user_id: v, source_id: sv, source_name: 'AP2', published_date: new Date().toISOString(), severity: 'high', threat_actors: 'APT28' });
+  const jar = await h.login('ap_user', PW, ip());
+  const r = await request('GET', '/api/actors/profile?name=Fancy%20Bear', { cookies: jar });
+  assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+  assert.strictEqual(r.body.found, true);
+  assert.strictEqual(r.body.name, 'APT28', 'aliases fold to the canonical name');
+  assert.strictEqual(r.body.reports, 1, 'only the caller\'s own reports');
+  assert.ok(r.body.techniques.some((t) => t.id === 'T1110'));
+  assert.strictEqual(r.body.weeks.length, 13);
+  assert.strictEqual(r.body.recent[0].title, 'Fancy Bear password spraying against ministries');
+});

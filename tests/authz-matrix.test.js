@@ -302,6 +302,10 @@ const ROUTES = {
   'GET /api/articles': { policy: 'auth', allow: [200] },
   'GET /api/articles/stats': { policy: 'auth', allow: [200] },
   'GET /api/geo': { policy: 'auth', allow: [200] },
+  'GET /api/actors/profile': { policy: 'auth', allow: [400] }, // no name -> validation
+  'GET /api/watchlist': { policy: 'member', allow: [200] },
+  'POST /api/watchlist': { policy: 'member', allow: [400] }, // empty term -> validation
+  'DELETE /api/watchlist/:id': { policy: 'member', allow: [404], params: () => 999999 },
   'GET /api/search': { policy: 'auth', allow: [200], query: '?q=quokka' },
   'POST /api/articles/:id/review': { policy: 'member', allow: [200], params: ownArticle },
   'PUT /api/articles/:id/review': { policy: 'member', allow: [200], params: ownArticle, body: () => ({ notes: 'n' }) },
