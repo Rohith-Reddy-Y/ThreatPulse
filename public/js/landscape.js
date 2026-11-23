@@ -355,19 +355,25 @@
     if (!d || !d.cves.length) return empty(panel, 'No CVEs reported in this period.');
     const max = Math.max(...d.cves.map((x) => x.count));
     const yes = (on, label) => (on ? el('span', { class: 'lp-flag' }, el('i', { 'aria-hidden': 'true' }), label) : el('span', { class: 'lp-muted' }, '—'));
-    panel.append(el('p', { class: 'lp-note' }, 'Exploited first, then by severity. “KEV” = listed in CISA’s Known Exploited Vulnerabilities catalog.'));
-    panel.append(table(['CVE', 'Reports', 'Severity', 'Exploitation', 'Public PoC', 'Patch', 'Latest report', 'Last seen'], d.cves.map((c) => ({
+    panel.append(el('p', { class: 'lp-note' }, 'Most urgent first. Priority combines CISA KEV (known exploited), EPSS (chance of exploitation in the next 30 days, FIRST.org) and CVSS.'));
+    const PRI = { now: ['Patch now', 0], soon: ['Patch soon', 1], plan: ['Plan', 2], monitor: ['Monitor', 3] };
+    const rows = d.cves.slice().sort((x, y) => ((PRI[x.priority] || [0, 4])[1] - (PRI[y.priority] || [0, 4])[1]) || ((y.epss || 0) - (x.epss || 0)) || (y.count - x.count));
+    const pct = (v) => (v === null || v === undefined ? el('span', { class: 'lp-muted' }, '—') : `${(v * 100).toFixed(v < 0.1 ? 1 : 0)}%`);
+    panel.append(table(['CVE', 'Priority', 'EPSS', 'CVSS', 'Reports', 'Exploitation', 'Public PoC', 'Patch', 'Latest report'], rows.map((c) => ({
       cells: [
-        el('code', { class: 'lp-code lp-code-strong' }, c.id), bar(c.count, max), sevChip(c.worst),
+        el('code', { class: 'lp-code lp-code-strong' }, c.id),
+        c.priority ? el('span', { class: `vuln-pri vuln-pri-${c.priority}` }, PRI[c.priority][0]) : el('span', { class: 'lp-muted' }, 'Pending'),
+        pct(c.epss),
+        c.cvss !== null && c.cvss !== undefined ? String(c.cvss.toFixed(1)) : sevChip(c.worst),
+        bar(c.count, max),
         c.kev ? el('span', { class: 'lp-flag lp-flag-kev' }, el('i', { 'aria-hidden': 'true' }), 'KEV') : yes(c.exploited, 'Exploited'),
         yes(c.poc, 'PoC'),
         c.patch === 'patched' ? 'Available' : c.patch === 'unpatched' ? el('span', { class: 'lp-flag lp-flag-warn' }, el('i', { 'aria-hidden': 'true' }), 'Not yet') : el('span', { class: 'lp-muted' }, 'Unknown'),
         el('span', { class: 'lp-ellipsis', title: c.title }, c.title),
-        ago(c.lastSeen),
       ],
       onclick: () => filterFeed(c.id, c.id),
       label: `Filter the feed by ${c.id}`,
-    })), [1]));
+    })), [2, 3, 4]));
   }
 
   // ── Targeting ──

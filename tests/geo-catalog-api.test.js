@@ -105,3 +105,24 @@ test('articles API returns TTPs per report', async () => {
   assert.ok(ids.includes('T1555') && ids.includes('T1204') && ids.includes('T1059'), ids.join(','));
   assert.ok(a.ttps.every((t) => t.url.startsWith('https://attack.mitre.org/techniques/') && t.tacticName && t.how === 'inferred'));
 });
+
+test('articles carry patch priority from stored EPSS / CVSS and the CISA KEV catalog', async () => {
+  const vulnIntel = require('../src/vuln-intel');
+  const u = createUser('vi_user', PW);
+  const s = db.addSource({ name: 'VI feed', url: 'https://feeds.example/vi', user_id: u }).id;
+  db.insertArticle({ url: 'https://news.example/vi/1', title: 'Acme VPN CVE-2026-1111 exploited', description: '', user_id: u, source_id: s,
+    source_name: 'VI feed', published_date: new Date().toISOString(), category: 'vulnerability', severity: 'high' });
+  db.insertArticle({ url: 'https://news.example/vi/2', title: 'Foo CMS bug CVE-2026-2222', description: '', user_id: u, source_id: s,
+    source_name: 'VI feed', published_date: new Date().toISOString(), category: 'vulnerability', severity: 'medium' });
+  vulnIntel.lookup(['CVE-2026-0000']);   // creates the table
+  db.getDb().prepare("INSERT INTO cve_intel (cve, epss, percentile, cvss, epss_at) VALUES ('CVE-2026-2222', 0.02, 0.4, 7.5, datetime('now'))").run();
+  vulnIntel._setKevForTests(new Map([['CVE-2026-1111', { added: '2026-11-20', ransomware: true }]]));
+  const jar = await h.login('vi_user', PW, ip());
+  const r = await request('GET', '/api/articles?limit=50', { cookies: jar });
+  const by = Object.fromEntries(r.body.articles.map((a) => [a.title.slice(0, 8), a.vuln]));
+  assert.strictEqual(by['Acme VPN'][0].priority, 'now');
+  assert.strictEqual(by['Acme VPN'][0].kev.ransomware, true);
+  assert.strictEqual(by['Foo CMS '][0].priority, 'plan');
+  assert.strictEqual(by['Foo CMS '][0].cvss, 7.5);
+  vulnIntel._setKevForTests(new Map());
+});

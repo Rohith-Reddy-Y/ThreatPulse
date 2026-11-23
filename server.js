@@ -303,7 +303,15 @@ async function initialize() {
     }
   }, 5000);
 
-  // 8. PoC checker in the background (only with a GitHub token: 5,000 req/h).
+  // 8. Vulnerability priority intel (EPSS / CISA KEV / CVSS): shortly after start, then every 6 h
+  const vulnIntel = require('./src/vuln-intel');
+  const runVulnIntel = () => vulnIntel.refresh()
+    .then((r) => r && r.cves && console.log(`[VulnIntel] ${r.cves} CVEs: EPSS ${r.epss}, CVSS ${r.cvss}, KEV catalog ${r.kev}`))
+    .catch((e) => console.error('[VulnIntel] refresh error:', e.message));
+  setTimeout(runVulnIntel, 90 * 1000).unref();
+  setInterval(runVulnIntel, 6 * 3600 * 1000).unref();
+
+  // 9. PoC checker in the background (only with a GitHub token: 5,000 req/h).
   //    Without one the 60 req/h budget is left for the admin's manual checks.
   if (process.env.GITHUB_TOKEN) {
     const pocCheck = require('./src/poc-check');

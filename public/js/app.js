@@ -1269,6 +1269,7 @@
           ${article.author ? `<span>by ${escapeHtml(article.author)}</span>` : ''}
           <span>${relativeTime(article.published_date)}</span>
         </div>
+        ${vulnRowHtml(article)}
         ${Array.isArray(article.related) && article.related.length ? `<details class="also-reported"><summary>Also reported by ${article.related.length} more source${article.related.length === 1 ? '' : 's'}</summary><ul>${
           article.related.map(r => `<li><a href="${escapeHtml(safeUrl(r.url))}" target="_blank" rel="noopener">${escapeHtml(r.source_name || 'Source')}</a><span>${escapeHtml(r.title)}</span></li>`).join('')
         }</ul></details>` : ''}
@@ -1285,6 +1286,20 @@
         </div>
         ${aiAnalysisHtml(article)}
       </article>`;
+  }
+
+  // Patch priority for the article's CVEs: CISA KEV + EPSS + CVSS -> one plain label
+  const VULN_PRI = { now: 'Patch now', soon: 'Patch soon', plan: 'Plan', monitor: 'Monitor' };
+  function vulnRowHtml(a) {
+    if (!Array.isArray(a.vuln) || !a.vuln.length) return '';
+    return `<div class="vuln-rows">${a.vuln.slice(0, 2).map((v) => {
+      const bits = [];
+      if (v.kev) bits.push(`<span class="vuln-kev" title="Listed in CISA's Known Exploited Vulnerabilities catalog${v.kev.added ? ' since ' + escapeHtml(v.kev.added) : ''}${v.kev.ransomware ? '; used in ransomware campaigns' : ''}">KEV${v.kev.ransomware ? ' · ransomware' : ''}</span>`);
+      if (v.epss !== null && v.epss !== undefined) bits.push(`<span title="EPSS: chance of exploitation in the next 30 days (FIRST.org)${v.percentile !== null ? `; higher than ${Math.round(v.percentile * 100)}% of all CVEs` : ''}">EPSS ${(v.epss * 100).toFixed(v.epss < 0.1 ? 1 : 0)}%</span>`);
+      if (v.cvss !== null && v.cvss !== undefined) bits.push(`<span title="CVSS base score (NVD)">CVSS ${Number(v.cvss).toFixed(1)}</span>`);
+      const pri = VULN_PRI[v.priority] ? v.priority : 'monitor';
+      return `<div class="vuln-row"><span class="vuln-pri vuln-pri-${pri}">${VULN_PRI[pri]}</span><code>${escapeHtml(v.cve)}</code>${bits.join('<i aria-hidden="true">·</i>')}</div>`;
+    }).join('')}</div>`;
   }
 
   // Labels shared by feed cards and the admin PoC tracker
@@ -1362,6 +1377,7 @@
       `<a class="poc-title" href="${escapeHtml(safeUrl(it.url))}" target="_blank" rel="noopener">${escapeHtml(it.title)}</a>` +
       `<div class="poc-meta">${escapeHtml(it.source_name || '')}${it.published_date ? ` · ${relativeTime(it.published_date)}` : ''}` +
       (cves.length ? ` · ${cves.map(c => `<a href="https://nvd.nist.gov/vuln/detail/${escapeHtml(encodeURIComponent(c))}" target="_blank" rel="noopener" class="cve-link">${escapeHtml(c)}</a>`).join(' ')}` : '') + `</div>` +
+      vulnRowHtml(it) +
       `<div class="poc-sub">Links</div><ul class="poc-links">` +
         `<li class="poc-link poc-article"><span class="poc-dot" aria-hidden="true"></span><div class="poc-link-body"><a href="${escapeHtml(safeUrl(it.url))}" target="_blank" rel="noopener">Article / blog</a><span class="poc-link-meta">${escapeHtml(it.source_name || '')}</span></div></li>` +
         links.map(pocLinkHtml).join('') +

@@ -14,6 +14,7 @@ const attackKb = require('../attack-kb');
 const aiCache = require('../ai/cache');
 const landscape = require('../landscape');
 const storyCluster = require('../story-cluster');
+const vulnIntel = require('../vuln-intel');
 const sourceCatalog = require('../source-catalog');
 const {
   sendAlertEmail, sendVerificationEmail, isEmailConfigured, describeEmail,
@@ -661,6 +662,8 @@ router.get('/articles', auth.requireAuth, (req, res) => {
         }
         return { ...a, ttps, aiMapped, aiActors };
       });
+      // Patch priority per CVE: EPSS + CISA KEV + CVSS
+      result.articles = vulnIntel.attach(result.articles);
     }
     res.json(result);
   } catch (error) {
@@ -710,6 +713,10 @@ router.get('/landscape', auth.requireAuth, (req, res) => {
       try { const m = JSON.parse(raw); return Array.isArray(m.ttps) ? { ...a, _aiTtps: m.ttps } : a; } catch { return a; }
     });
     const data = landscape.buildLandscape(rows, days);
+    if (Array.isArray(data.cves)) {
+      const intel = vulnIntel.lookup(data.cves.map((c) => c.id));
+      data.cves = data.cves.map((c) => { const i = intel.get(c.id); return i ? { ...c, epss: i.epss, percentile: i.percentile, cvss: i.cvss, kev: c.kev || !!i.kev, priority: i.priority } : c; });
+    }
     if (landscapeCache.size > 500) landscapeCache.delete(landscapeCache.keys().next().value);
     landscapeCache.set(key, { at: Date.now(), data });
     res.json(data);
@@ -1273,7 +1280,7 @@ router.get('/admin/poc-tracker', auth.requireAuth, auth.requireAdmin, (req, res)
       items.push({ ...article, ttps, poc, aiSummary: pocSummary(a.id) });
       if (items.length >= 100) break;
     }
-    res.json({ days, items, githubToken: !!process.env.GITHUB_TOKEN });
+    res.json({ days, items: vulnIntel.attach(items), githubToken: !!process.env.GITHUB_TOKEN });
   } catch (error) {
     console.error('[API] PoC tracker error:', error.message);
     res.status(500).json({ error: 'Failed to load the PoC tracker' });
