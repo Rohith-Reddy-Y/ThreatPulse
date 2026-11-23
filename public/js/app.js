@@ -1269,6 +1269,9 @@
           ${article.author ? `<span>by ${escapeHtml(article.author)}</span>` : ''}
           <span>${relativeTime(article.published_date)}</span>
         </div>
+        ${Array.isArray(article.related) && article.related.length ? `<details class="also-reported"><summary>Also reported by ${article.related.length} more source${article.related.length === 1 ? '' : 's'}</summary><ul>${
+          article.related.map(r => `<li><a href="${escapeHtml(safeUrl(r.url))}" target="_blank" rel="noopener">${escapeHtml(r.source_name || 'Source')}</a><span>${escapeHtml(r.title)}</span></li>`).join('')
+        }</ul></details>` : ''}
         ${desc ? `<p class="article-desc">${desc}</p>` : ''}
         ${article.tags ? `<div class="article-tags">${String(article.tags).split(',').map(t => t.trim()).filter(Boolean).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join('')}</div>` : ''}
         ${ttpHtml}

@@ -77,7 +77,7 @@ const sysArticle = addArticle(sysSource, null, 'System article quokka');
 const data = {};
 for (const who of ['a', 'b', 'admin']) {
   const src = addSource(ids[who], { name: `Private ${who} feed` });
-  data[who] = { source: src, article: addArticle(src, ids[who], `Private ${who} article quokka`) };
+  data[who] = { source: src, article: addArticle(src, ids[who], `Private ${who} article quokka ${who}topic${who}`) };
 }
 db.escalateArticle(data.a.article, ids.a, 'A-secret-note');
 db.updateNotificationSettings({ telegram_bot_token: '111111:AAAA-secret-token-of-a', telegram_chat_id: 'chat-a', email: 'alerts-a@example.test' }, ids.a);

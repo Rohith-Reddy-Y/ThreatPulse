@@ -33,7 +33,7 @@ function seed(env) {
   for (const key of Object.keys(sys)) {
     const s = srcRow(sys[key]);
     sysArticles[key] = db.insertArticle(art({
-      title: `System article ${key} zebracorn`, source_id: s.id, user_id: s.user_id || null,
+      title: `${key}headline${key} story about ${key}topic zebracorn`, source_id: s.id, user_id: s.user_id || null,
       source_name: s.name, source_type: s.type,
     })).id;
   }

@@ -530,3 +530,14 @@ a.lp-col-name:hover { color: var(--text-accent); text-decoration: underline; }
 .poc-note { margin: 6px 0 0; font-size: 10.5px; color: var(--text-muted); }
 .poc-actions { display: flex; align-items: center; gap: 8px; margin-top: 9px; }
 .poc-checked { font-size: 10.5px; color: var(--text-muted); }
+
+/* ── Same story from several outlets, folded into one card ── */
+.also-reported { margin: 4px 0 2px; font-size: 12px; }
+.also-reported summary { cursor: pointer; color: var(--text-accent); list-style: none; display: inline-flex; align-items: center; gap: 5px; }
+.also-reported summary::-webkit-details-marker { display: none; }
+.also-reported summary::before { content: '⧉'; font-size: 11px; }
+.also-reported ul { list-style: none; margin: 6px 0 0; padding: 6px 8px; display: grid; gap: 5px; border-radius: 6px; background: var(--bg-input); border: 1px solid var(--border-subtle); }
+.also-reported li { display: grid; gap: 1px; }
+.also-reported li a { font-weight: 600; color: var(--text-primary); text-decoration: none; }
+.also-reported li a:hover { color: var(--text-accent); }
+.also-reported li span { color: var(--text-muted); font-size: 11.5px; line-height: 1.35; }

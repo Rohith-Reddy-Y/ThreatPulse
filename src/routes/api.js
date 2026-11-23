@@ -13,6 +13,7 @@ const geo = require('../geo');
 const attackKb = require('../attack-kb');
 const aiCache = require('../ai/cache');
 const landscape = require('../landscape');
+const storyCluster = require('../story-cluster');
 const sourceCatalog = require('../source-catalog');
 const {
   sendAlertEmail, sendVerificationEmail, isEmailConfigured, describeEmail,
@@ -643,6 +644,8 @@ router.get('/articles', auth.requireAuth, (req, res) => {
     // TTPs per report: tactic, technique (linked to MITRE), the procedure sentence,
     // and whether the report cites the ID or only describes the behaviour
     if (result && Array.isArray(result.articles)) {
+      // One card per story: the same news from several outlets is folded together
+      result.articles = storyCluster.clusterArticles(result.articles);
       // plus any AI mapping already done for the article (validated, cached)
       result.articles = result.articles.map((a) => {
         let ttps = attackKb.analyzeTtps(a);
