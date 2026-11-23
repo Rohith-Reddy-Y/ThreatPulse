@@ -176,6 +176,7 @@
     updateUserMenu();
     scheduleAutoRefresh();
     hideAuth();
+    loadPocTracker();
   }
 
   // Wipe everything the previous user could leave behind in the DOM
@@ -199,6 +200,8 @@
     renderEscalatedSidebar([]);
     resetAiPanel();
     aiAnalysis.clear();
+    pocState.items = []; pocState.seq++;
+    $('#poc-tracker-card')?.classList.add('hidden');
   }
 
   function logout() {
@@ -1089,8 +1092,8 @@
   }
 
   function createArticleCard(article) {
-    const catBadge = `<span class="badge badge-${escapeHtml(article.category)}">${escapeHtml(article.category)}</span>`;
-    const sevBadge = `<span class="badge badge-severity-${escapeHtml(article.severity)}">${escapeHtml(article.severity)}</span>`;
+    const catBadge = categoryBadge(article);
+    const sevBadge = severityBadge(article);
     const sectorBadge = article.sector ? `<span class="badge badge-sector">${escapeHtml(article.sector)}</span>` : '';
     // Threat actors render as a distinct label with their Synchrony class badge (A/B/C/D/E)
     const actorBadge = article.threat_actors ? article.threat_actors.split(',').map(a => {
@@ -1279,6 +1282,136 @@
         </div>
         ${aiAnalysisHtml(article)}
       </article>`;
+  }
+
+  // Labels shared by feed cards and the admin PoC tracker
+  function categoryBadge(a) { return `<span class="badge badge-${escapeHtml(a.category)}">${escapeHtml(a.category)}</span>`; }
+  function severityBadge(a) { return `<span class="badge badge-severity-${escapeHtml(a.severity)}">${escapeHtml(a.severity)}</span>`; }
+  function patchLabel(a) {
+    return a.is_patched === 1 ? '<span class="badge badge-patched">Patched</span>'
+      : a.is_patched === 0 ? '<span class="badge badge-unpatched">Unpatched</span>' : '';
+  }
+
+  // ── Admin: PoC tracker (sidebar) ──
+  // Articles that have (or claim) a proof of concept, with the PoC link(s) the
+  // checker found and whether each is real: verified / suspicious / unverified.
+  const pocState = { items: [], days: 30, filter: 'all', loading: false, error: '', token: false, busy: new Set(), seq: 0 };
+  const POC_VERDICT = {
+    verified: ['Verified PoC', 'Real exploit code found'],
+    suspicious: ['Suspicious PoC', 'Looks like a fake PoC / malware lure: do not run'],
+    unverified: ['Unverified', 'Links found but code could not be confirmed'],
+    none: ['No PoC found', 'The article mentions a PoC but no exploit link was found'],
+    unchecked: ['Not checked', 'Run the PoC check'],
+  };
+  const pocVerdictOf = (it) => (it.poc && it.poc.verdict) || 'unchecked';
+  function isAdminUser() { return !!(currentUser && currentUser.role === 'admin'); }
+
+  async function loadPocTracker() {
+    const card = $('#poc-tracker-card');
+    if (!card) return;
+    if (!isAdminUser()) { card.classList.add('hidden'); pocState.items = []; return; }
+    card.classList.remove('hidden');
+    const seq = ++pocState.seq;
+    pocState.loading = true; pocState.error = '';
+    renderPocTracker();
+    try {
+      const r = await api('GET', `/api/admin/poc-tracker?days=${pocState.days}`);
+      if (seq !== pocState.seq) return;
+      pocState.items = Array.isArray(r.items) ? r.items : [];
+      pocState.token = !!r.githubToken;
+    } catch (err) {
+      if (seq !== pocState.seq) return;
+      pocState.error = err.message || 'Could not load the PoC tracker';
+    } finally {
+      if (seq === pocState.seq) { pocState.loading = false; renderPocTracker(); }
+    }
+  }
+
+  function pocLinkHtml(l) {
+    const kind = { github: 'GitHub', gist: 'Gist', exploitdb: 'Exploit-DB', packetstorm: 'Packet Storm', gitlab: 'GitLab' }[l.kind] || 'Link';
+    let label = l.url;
+    try { const u = new URL(l.url); label = (u.hostname.replace(/^www\./, '') + u.pathname).replace(/\/$/, ''); label = label.replace(/^github\.com\//, ''); } catch { /* keep */ }
+    const meta = [kind];
+    if (l.stars !== null && l.stars !== undefined) meta.push(`★ ${l.stars}`);
+    if (l.source === 'cve-search') meta.push(`found by ${escapeHtml(l.via || 'CVE')} search`);
+    else meta.push('linked in article');
+    return `<li class="poc-link poc-${escapeHtml(l.status)}">` +
+      `<span class="poc-dot" aria-hidden="true"></span>` +
+      `<div class="poc-link-body"><a href="${escapeHtml(safeUrl(l.url))}" target="_blank" rel="noopener nofollow">${escapeHtml(label.slice(0, 80))}</a>` +
+      `<span class="poc-link-meta">${meta.join(' · ')}</span>` +
+      (l.reasons && l.reasons.length ? `<span class="poc-link-why">${escapeHtml(l.reasons[0])}${l.reasons.length > 1 ? ` · ${escapeHtml(l.reasons[1])}` : ''}</span>` : '') +
+      `</div></li>`;
+  }
+
+  function pocItemHtml(it) {
+    const v = pocVerdictOf(it);
+    const [vLabel, vTip] = POC_VERDICT[v] || POC_VERDICT.unchecked;
+    const cves = (it.poc && it.poc.cves && it.poc.cves.length) ? it.poc.cves : (it.cve_id ? [it.cve_id] : []);
+    const ttps = Array.isArray(it.ttps) ? it.ttps : [];
+    // Summary: AI summary if one exists, else the start of the description (never the title again)
+    const sumRaw = it.aiSummary || String(it.description || '').replace(/\s+/g, ' ').trim();
+    const sum = sumRaw && sumRaw.toLowerCase() !== String(it.title || '').toLowerCase() ? sumRaw.slice(0, 260) + (sumRaw.length > 260 ? '…' : '') : '';
+    const busy = pocState.busy.has(it.id);
+    const links = it.poc && Array.isArray(it.poc.links) ? it.poc.links : [];
+    return `<li class="poc-item poc-v-${v}" data-poc-id="${it.id}">` +
+      `<div class="poc-labels">${categoryBadge(it)}${severityBadge(it)}${patchLabel(it)}` +
+      `<span class="poc-verdict poc-verdict-${v}" title="${escapeHtml(vTip)}">${escapeHtml(vLabel)}</span></div>` +
+      `<a class="poc-title" href="${escapeHtml(safeUrl(it.url))}" target="_blank" rel="noopener">${escapeHtml(it.title)}</a>` +
+      `<div class="poc-meta">${escapeHtml(it.source_name || '')}${it.published_date ? ` · ${relativeTime(it.published_date)}` : ''}` +
+      (cves.length ? ` · ${cves.map(c => `<a href="https://nvd.nist.gov/vuln/detail/${escapeHtml(encodeURIComponent(c))}" target="_blank" rel="noopener" class="cve-link">${escapeHtml(c)}</a>`).join(' ')}` : '') + `</div>` +
+      `<div class="poc-sub">Links</div><ul class="poc-links">` +
+        `<li class="poc-link poc-article"><span class="poc-dot" aria-hidden="true"></span><div class="poc-link-body"><a href="${escapeHtml(safeUrl(it.url))}" target="_blank" rel="noopener">Article / blog</a><span class="poc-link-meta">${escapeHtml(it.source_name || '')}</span></div></li>` +
+        links.map(pocLinkHtml).join('') +
+        (!it.poc ? `<li class="poc-hint">PoC link not checked yet</li>` : (!links.length ? `<li class="poc-hint">No exploit link found${it.poc.cves && it.poc.cves.length ? '' : ' (no CVE ID to search)'}</li>` : '')) +
+      `</ul>` +
+      (sum ? `<div class="poc-sub">${it.aiSummary ? 'AI summary' : 'Summary'}</div><p class="poc-sum">${escapeHtml(sum)}</p>` : '') +
+      (ttps.length ? `<div class="poc-sub">Attack technique${ttps.length > 1 ? 's' : ''}</div><div class="poc-ttps">` +
+        ttps.slice(0, 4).map(t => `<a class="poc-ttp" href="${escapeHtml(mitreLink(t.subId || t.id))}" target="_blank" rel="noopener" title="${escapeHtml(t.tacticName || '')}"><code>${escapeHtml(t.subId || t.id)}</code>${escapeHtml(t.name)}</a>`).join('') +
+        (ttps.length > 4 ? `<span class="poc-more">+${ttps.length - 4}</span>` : '') +
+        `<button type="button" class="ti-3d-btn" data-attack-path="${it.id}">3D attack path</button></div>` : '') +
+      (it.poc && it.poc.notes && it.poc.notes.length ? `<p class="poc-note">${escapeHtml(it.poc.notes[it.poc.notes.length - 1])}</p>` : '') +
+      `<div class="poc-actions"><button type="button" class="poc-check-btn" data-poc-check="${it.id}"${busy ? ' disabled' : ''}>` +
+        `${busy ? 'Checking…' : it.poc ? 'Re-check PoC' : 'Check PoC'}</button>` +
+        (it.poc && it.poc.checkedAt ? `<span class="poc-checked">checked ${relativeTime(it.poc.checkedAt)}</span>` : '') + `</div>` +
+      `</li>`;
+  }
+
+  function renderPocTracker() {
+    const list = $('#poc-tracker-list');
+    if (!list) return;
+    const counts = { all: pocState.items.length, verified: 0, suspicious: 0, unchecked: 0 };
+    for (const it of pocState.items) { const v = pocVerdictOf(it); if (counts[v] !== undefined) counts[v]++; }
+    $$('#poc-tracker-card [data-poc-filter]').forEach((b) => {
+      const f = b.dataset.pocFilter;
+      b.setAttribute('aria-pressed', String(f === pocState.filter));
+      const n = b.querySelector('.poc-n'); if (n) n.textContent = counts[f] ?? '';
+    });
+    const countEl = $('#poc-tracker-count'); if (countEl) countEl.textContent = pocState.items.length ? String(pocState.items.length) : '';
+    const tokenNote = $('#poc-token-note'); if (tokenNote) tokenNote.classList.toggle('hidden', pocState.token || !pocState.items.length);
+    if (pocState.loading && !pocState.items.length) { list.innerHTML = '<li class="poc-empty">Loading…</li>'; return; }
+    if (pocState.error) { list.innerHTML = `<li class="poc-empty poc-err">${escapeHtml(pocState.error)}</li>`; return; }
+    const shown = pocState.items.filter((it) => pocState.filter === 'all' || pocVerdictOf(it) === pocState.filter);
+    list.innerHTML = shown.length ? shown.map(pocItemHtml).join('')
+      : `<li class="poc-empty">${pocState.items.length ? 'Nothing in this filter.' : `No PoC articles in the last ${pocState.days} days.`}</li>`;
+  }
+
+  async function runPocCheck(id) {
+    if (pocState.busy.has(id)) return;
+    pocState.busy.add(id);
+    renderPocTracker();
+    try {
+      const r = await api('POST', '/api/admin/poc-check', { articleId: id });
+      if (!r.success) throw new Error(r.error || 'PoC check failed');
+      const it = pocState.items.find((x) => x.id === id);
+      if (it) { it.poc = r.poc; if (r.poc.verdict === 'verified') it.has_poc = 1; }
+      const art = state.articles.find((x) => x.id === id);
+      if (art && r.poc.verdict === 'verified') art.has_poc = 1;
+    } catch (err) {
+      showToast('PoC check', err.message || 'PoC check failed', 'error');
+    } finally {
+      pocState.busy.delete(id);
+      renderPocTracker();
+    }
   }
 
   // ── AI analysis on a card: one button, one panel ──
@@ -2308,8 +2441,22 @@
       const pathBtn = e.target.closest('[data-attack-path]');
       if (pathBtn) {
         const id = parseInt(pathBtn.dataset.attackPath, 10);
-        const art = state.articles.find(a => a.id === id);
+        const art = state.articles.find(a => a.id === id) || pocState.items.find(a => a.id === id);
         if (art && window.ThreatPulseAttackPath) window.ThreatPulseAttackPath.open(art, pathBtn);
+        return;
+      }
+
+      // Admin PoC tracker controls
+      const pocBtn = e.target.closest('[data-poc-check]');
+      if (pocBtn) { runPocCheck(parseInt(pocBtn.dataset.pocCheck, 10)); return; }
+      const pocFilter = e.target.closest('[data-poc-filter]');
+      if (pocFilter) { pocState.filter = pocFilter.dataset.pocFilter; renderPocTracker(); return; }
+      const pocNext = e.target.closest('#poc-check-next');
+      if (pocNext) {
+        const todo = pocState.items.filter((it) => !it.poc).slice(0, 5);
+        if (!todo.length) { showToast('PoC check', 'Everything here has been checked.', 'info'); return; }
+        pocNext.disabled = true;
+        (async () => { for (const it of todo) await runPocCheck(it.id); pocNext.disabled = false; })();
         return;
       }
 
@@ -2349,6 +2496,10 @@
 
     // Export
     $('#export-btn').addEventListener('click', exportArticles);
+
+    // Admin PoC tracker: time range + periodic refresh (picks up background checks)
+    $('#poc-days')?.addEventListener('change', (e) => { pocState.days = parseInt(e.target.value, 10) || 30; loadPocTracker(); });
+    setInterval(() => { if (isAdminUser() && !document.hidden && !pocState.busy.size) loadPocTracker(); }, 180000);
 
     // Stat cards clickable — filter feed on click
     $$('.stat-card').forEach(card => {

@@ -302,6 +302,29 @@ async function initialize() {
       aggregator.startScheduler(process.env.FETCH_CRON || '*/15 * * * *');
     }
   }, 5000);
+
+  // 8. PoC checker in the background (only with a GitHub token: 5,000 req/h).
+  //    Without one the 60 req/h budget is left for the admin's manual checks.
+  if (process.env.GITHUB_TOKEN) {
+    const pocCheck = require('./src/poc-check');
+    let pocBusy = false;
+    setInterval(async () => {
+      if (pocBusy) return;
+      pocBusy = true;
+      try {
+        for (const a of db.getUncheckedPocArticles(5)) {
+          const r = await pocCheck.checkArticle(a);
+          db.savePocCheck(a.id, r);
+          if (r.rateLimited) break;
+        }
+      } catch (e) {
+        console.error('[PoC] Background check error:', e.message);
+      } finally { pocBusy = false; }
+    }, 20 * 60 * 1000).unref();
+    console.log('[Init] PoC checker: background checks every 20 min ✓');
+  } else {
+    console.log('[Init] PoC checker: manual only (set GITHUB_TOKEN for background checks)');
+  }
 }
 
 // ============================================

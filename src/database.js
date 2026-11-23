@@ -156,6 +156,13 @@ function initializeSchema() {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS poc_checks (
+      article_id INTEGER PRIMARY KEY,
+      verdict TEXT,
+      result TEXT,
+      checked_at TEXT DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS ai_cache (
       cache_key TEXT PRIMARY KEY,
       response TEXT,
@@ -933,6 +940,42 @@ function getGeoArticles(userId, sinceIso, limit = 4000) {
   ).all(...params);
 }
 
+// ── PoC tracker (admin) ──
+function savePocCheck(articleId, result) {
+  getDb().prepare(
+    `INSERT INTO poc_checks (article_id, verdict, result, checked_at) VALUES (?, ?, ?, datetime('now'))
+     ON CONFLICT(article_id) DO UPDATE SET verdict = excluded.verdict, result = excluded.result, checked_at = excluded.checked_at`
+  ).run(articleId, result.verdict, JSON.stringify(result));
+  // A verified PoC found by the checker makes the article a PoC article everywhere (filter, stats)
+  if (result.verdict === 'verified') getDb().prepare('UPDATE articles SET has_poc = 1 WHERE id = ?').run(articleId);
+}
+
+function getPocCheck(articleId) {
+  const row = getDb().prepare('SELECT result FROM poc_checks WHERE article_id = ?').get(articleId);
+  if (!row) return null;
+  try { return JSON.parse(row.result); } catch { return null; }
+}
+
+// Articles that claim a PoC, or where the checker found one / a suspicious one. Newest first.
+function getPocTrackerArticles(sinceIso, limit = 60) {
+  return getDb().prepare(
+    `SELECT a.id, a.title, a.url, substr(a.description, 1, 1500) AS description, a.severity, a.category, a.threat_actors,
+            a.mitre_ids, a.cve_id, a.has_poc, a.is_patched, a.sector, a.published_date, a.source_name, a.source_type,
+            p.verdict AS poc_verdict, p.result AS poc_result
+       FROM articles a LEFT JOIN poc_checks p ON p.article_id = a.id
+      WHERE a.published_date >= ? AND (a.has_poc = 1 OR p.verdict IN ('verified', 'suspicious'))
+      ORDER BY a.published_date DESC LIMIT ?`
+  ).all(sinceIso, Math.max(1, Math.min(500, limit | 0)));
+}
+
+function getUncheckedPocArticles(limit = 5) {
+  return getDb().prepare(
+    `SELECT a.* FROM articles a LEFT JOIN poc_checks p ON p.article_id = a.id
+      WHERE a.has_poc = 1 AND p.article_id IS NULL AND a.published_date >= datetime('now', '-30 days')
+      ORDER BY a.published_date DESC LIMIT ?`
+  ).all(Math.max(1, Math.min(50, limit | 0)));
+}
+
 function getArticles({ page = 1, limit = 50, category, severity, search, source_type, startDate, endDate, userId, sector, threat_actor, has_poc, has_mitre, is_patched } = {}) {
   let where = [];
   let params = [];
@@ -1435,6 +1478,10 @@ function deleteThread(threadId, userId) {
 }
 
 module.exports = {
+  savePocCheck,
+  getPocCheck,
+  getPocTrackerArticles,
+  getUncheckedPocArticles,
   getGeoArticles,
   getDb,
   initializeSchema,

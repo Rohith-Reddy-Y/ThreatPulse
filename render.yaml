@@ -47,6 +47,8 @@ services:
       # Optional API keys
       - key: NVD_API_KEY
         sync: false
+      - key: GITHUB_TOKEN   # optional: PoC checker (5,000 GitHub API req/h instead of 60)
+        sync: false
       - key: ABUSE_CH_API_KEY
         sync: false
       - key: GROQ_API_KEY

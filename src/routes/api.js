@@ -1240,6 +1240,66 @@ router.get('/admin/articles', auth.requireAuth, auth.requireAdmin, (req, res) =>
 
 // Admin: one entry per unique feed across all users (duplicates folded,
 // built-in vs user-submitted, with every contributor's name)
+// ── PoC tracker (admin): articles with a PoC, the PoC links, and whether they're real ──
+const pocCheck = require('../poc-check');
+const pocInflight = new Set();
+const pocRate = new Map(); // adminId -> { count, resetAt }
+function pocSummary(articleId) {
+  const raw = aiCache.get('summary', String(articleId));
+  if (!raw) return null;
+  try { const d = JSON.parse(raw); return d && typeof d.summary === 'string' ? d.summary.slice(0, 600) : null; } catch { return null; }
+}
+router.get('/admin/poc-tracker', auth.requireAuth, auth.requireAdmin, (req, res) => {
+  try {
+    const days = [7, 30, 90].includes(parseInt(req.query.days, 10)) ? parseInt(req.query.days, 10) : 30;
+    const since = new Date(Date.now() - days * 86400000).toISOString();
+    const rows = db.getPocTrackerArticles(since, 400);
+    // The admin sees every user's copy of the same story: show each story once
+    const seen = new Set();
+    const items = [];
+    for (const a of rows) {
+      const key = String(a.url || '').toLowerCase().replace(/^https?:\/\/(www\.)?/, '').replace(/[?#].*$/, '').replace(/\/$/, '') || `id:${a.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      let poc = null;
+      if (a.poc_result) { try { poc = JSON.parse(a.poc_result); } catch { poc = null; } }
+      let ttps = attackKb.analyzeTtps(a);
+      const rawTtps = aiCache.get('ttps', String(a.id));
+      if (rawTtps) { try { ttps = attackKb.mergeTtps(ttps, JSON.parse(rawTtps).ttps); } catch { /* ignore */ } }
+      const { poc_result, poc_verdict, ...article } = a;
+      items.push({ ...article, ttps, poc, aiSummary: pocSummary(a.id) });
+      if (items.length >= 100) break;
+    }
+    res.json({ days, items, githubToken: !!process.env.GITHUB_TOKEN });
+  } catch (error) {
+    console.error('[API] PoC tracker error:', error.message);
+    res.status(500).json({ error: 'Failed to load the PoC tracker' });
+  }
+});
+router.post('/admin/poc-check', auth.requireAuth, auth.requireAdmin, async (req, res) => {
+  const articleId = parseInt((req.body || {}).articleId, 10);
+  if (!Number.isInteger(articleId) || articleId <= 0) return res.status(400).json({ error: 'articleId required' });
+  const article = db.getArticleById(articleId);
+  if (!article) return res.status(404).json({ error: 'Article not found' });
+  const now = Date.now();
+  const r = pocRate.get(req.user.id);
+  if (r && now < r.resetAt && r.count >= 40) return res.status(429).json({ error: 'Too many PoC checks this hour. Try again later.' });
+  if (!r || now >= r.resetAt) pocRate.set(req.user.id, { count: 1, resetAt: now + 3600000 }); else r.count++;
+  if (pocInflight.has(articleId)) return res.status(409).json({ error: 'A check for this article is already running' });
+  pocInflight.add(articleId);
+  try {
+    const result = await pocCheck.checkArticle(article);
+    db.savePocCheck(articleId, result);
+    db.logAudit(req.user.id, 'poc_check', `Article ${articleId}: ${result.verdict}`, req.ip);
+    res.json({ success: true, poc: result });
+  } catch (error) {
+    console.error('[API] PoC check error:', error.message);
+    res.status(500).json({ error: 'PoC check failed' });
+  } finally {
+    pocInflight.delete(articleId);
+  }
+});
+
 router.get('/admin/source-catalog', auth.requireAuth, auth.requireAdmin, (req, res) => {
   try {
     res.json(sourceCatalog.buildCatalog(db.getAllSources(), db.getAllUsers()));

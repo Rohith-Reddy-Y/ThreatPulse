@@ -554,6 +554,31 @@
 
     <!-- ─────── SIDEBAR ─────── -->
     <aside class="sidebar" id="sidebar">
+      <!-- Admin only: articles with a proof of concept, the PoC links and whether they're real -->
+      <section class="sidebar-card poc-tracker hidden" id="poc-tracker-card" aria-labelledby="poc-tracker-title">
+        <h3 class="sidebar-title" id="poc-tracker-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+          PoC tracker <span class="poc-count" id="poc-tracker-count"></span><span class="poc-admin-tag">Admin</span>
+        </h3>
+        <div class="poc-controls">
+          <div class="poc-filters" role="group" aria-label="Filter by PoC status">
+            <button type="button" data-poc-filter="all" aria-pressed="true">All <span class="poc-n"></span></button>
+            <button type="button" data-poc-filter="verified" aria-pressed="false">Verified <span class="poc-n"></span></button>
+            <button type="button" data-poc-filter="suspicious" aria-pressed="false">Suspicious <span class="poc-n"></span></button>
+            <button type="button" data-poc-filter="unchecked" aria-pressed="false">Not checked <span class="poc-n"></span></button>
+          </div>
+          <div class="poc-controls-row">
+            <select id="poc-days" aria-label="Time range">
+              <option value="7">Last 7 days</option>
+              <option value="30" selected>Last 30 days</option>
+              <option value="90">Last 90 days</option>
+            </select>
+            <button type="button" class="poc-check-btn" id="poc-check-next" title="Check the next 5 unchecked articles">Check next 5</button>
+          </div>
+          <p class="poc-token-note hidden" id="poc-token-note">Checks use GitHub's public API (60 requests/hour). Add a <code>GITHUB_TOKEN</code> in Render for automatic background checks.</p>
+        </div>
+        <ul class="poc-list" id="poc-tracker-list"></ul>
+      </section>
       <div class="sidebar-card guest-hidden">
         <h3 class="sidebar-title">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
