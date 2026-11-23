@@ -337,6 +337,7 @@ const ROUTES = {
   // AI (no GROQ key in tests -> generation answers 503 once past the gates)
   'POST /api/ai/summarize': { policy: 'auth', allow: [503], body: (a) => ({ articleId: ownArticle(a) }) },
   'POST /api/ai/triage': { policy: 'auth', allow: [503], body: (a) => ({ articleId: ownArticle(a) }) },
+  'GET /api/landscape': { policy: 'auth', allow: [200] },
   'POST /api/ai/ttps': { policy: 'auth', allow: [503], body: (a) => ({ articleId: ownArticle(a) }) },
   'POST /api/ai/ask': { policy: 'auth', allow: [503], body: () => ({ question: 'ransomware quokka', mode: 'rag' }) },
   'GET /api/ai/threads': { policy: 'auth', allow: [200] },
