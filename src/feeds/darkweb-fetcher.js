@@ -10,13 +10,70 @@ const axios = require('axios');
 // Get one at https://auth.abuse.ch and set ABUSE_CH_API_KEY in your .env.
 const ABUSE_KEY = process.env.ABUSE_CH_API_KEY || '';
 
+const USER_AGENT = 'ThreatPulse/1.0 (Threat Intelligence Aggregator)';
 const HTTP_CONFIG = {
   timeout: 30000,
   headers: {
-    'User-Agent': 'ThreatPulse/1.0 (Threat Intelligence Aggregator)',
+    'User-Agent': USER_AGENT,
     ...(ABUSE_KEY ? { 'Auth-Key': ABUSE_KEY } : {})
   }
 };
+
+// Per-request config. The abuse.ch Auth-Key is only sent to abuse.ch (it used
+// to go to raw.githubusercontent.com with the RansomWatch request too), and
+// every request gets a hard deadline: axios' `timeout` is only a socket-idle timer.
+function requestConfig({ abuse = true, extraHeaders = {} } = {}) {
+  return {
+    timeout: HTTP_CONFIG.timeout,
+    headers: { ...(abuse ? HTTP_CONFIG.headers : { 'User-Agent': USER_AGENT }), ...extraHeaders },
+    signal: AbortSignal.timeout(60000)
+  };
+}
+
+// "2026-11-20 13:36:27 UTC" -> "2026-11-20"; used to give daily summary
+// articles a distinct URL per day (articles are de-duplicated on URL).
+function dayOf(value) {
+  const d = new Date(value || Date.now());
+  return (isNaN(d) ? new Date() : d).toISOString().slice(0, 10);
+}
+
+// ── Large JSON off the main thread ──────────────────────────────────
+// ThreatFox `get_iocs` returns every IOC of the last day (several MB). Parsing
+// that with JSON.parse on the main thread blocked the event loop long enough on
+// a ~0.1-CPU instance to fail the 5 s health check. Parse it in a worker and
+// hand back only the first `limit` rows.
+const { Worker } = require('worker_threads');
+const PARSE_WORKER_SRC = `
+const { parentPort, workerData } = require('worker_threads');
+try {
+  const d = JSON.parse(workerData.text);
+  const n = workerData.limit;
+  let out = d;
+  if (Array.isArray(d)) out = d.slice(0, n);
+  else if (d && typeof d === 'object') {
+    out = Object.assign({}, d);
+    if (Array.isArray(d.data)) out.data = d.data.slice(0, n);
+    if (Array.isArray(d.urls)) out.urls = d.urls.slice(0, n);
+  }
+  parentPort.postMessage({ ok: true, out });
+} catch (e) {
+  parentPort.postMessage({ ok: false, error: e.message });
+}`;
+
+function parseJsonOffThread(payload, limit) {
+  // Already parsed (small responses / test stubs) → just trim.
+  if (typeof payload !== 'string') {
+    if (payload && Array.isArray(payload.data)) return Promise.resolve({ ...payload, data: payload.data.slice(0, limit) });
+    if (payload && Array.isArray(payload.urls)) return Promise.resolve({ ...payload, urls: payload.urls.slice(0, limit) });
+    return Promise.resolve(payload);
+  }
+  return new Promise((resolve, reject) => {
+    const w = new Worker(PARSE_WORKER_SRC, { eval: true, workerData: { text: payload, limit } });
+    const timer = setTimeout(() => { w.terminate(); reject(new Error('JSON parse timed out')); }, 30000);
+    w.once('message', (m) => { clearTimeout(timer); w.terminate(); m.ok ? resolve(m.out) : reject(new Error(m.error)); });
+    w.once('error', (e) => { clearTimeout(timer); reject(e); });
+  });
+}
 
 /**
  * Fetch RansomWatch — Tracks ransomware group leak site posts
@@ -27,7 +84,7 @@ async function fetchRansomWatch(source) {
   try {
     const response = await axios.get(
       'https://raw.githubusercontent.com/joshhighet/ransomwatch/main/posts.json',
-      { ...HTTP_CONFIG, timeout: 30000 }
+      requestConfig({ abuse: false })
     );
 
     const posts = response.data;
@@ -44,7 +101,8 @@ async function fetchRansomWatch(source) {
         articles.push({
           title: `[Dark Web] Ransomware Leak: ${post.post_title || 'Unknown Victim'} (${post.group_name || 'Unknown Group'})`,
           description: `Ransomware group "${post.group_name}" posted a new victim on their dark web leak site.\n\nVictim: ${post.post_title || 'Unknown'}\nGroup: ${post.group_name || 'Unknown'}\nDiscovered: ${post.discovered || 'Unknown'}${post.post_url ? '\nLeak Site (Tor): ' + post.post_url : ''}`,
-          url: `https://github.com/joshhighet/ransomwatch`,
+          // One URL per post: a shared URL made the DB keep only the first post ever.
+          url: `https://github.com/joshhighet/ransomwatch#${encodeURIComponent(post.group_name || 'unknown')}/${encodeURIComponent(post.post_title || 'unknown')}`,
           source_name: 'RansomWatch - Dark Web Tracker',
           source_type: 'darkweb',
           source_id: source?.id || null,
@@ -70,6 +128,78 @@ async function fetchRansomWatch(source) {
   }
 }
 
+// ── Ransomware.live (maintained successor of the archived RansomWatch) ──
+// Free, no key, but rate-limited with a daily call cap → fetch at most hourly
+// and reuse the last result in between (the aggregator runs every 15 min).
+const RANSOMWARE_LIVE_URL = 'https://api.ransomware.live/v2/recentvictims';
+const RANSOMWARE_LIVE_TTL_MS = 60 * 60 * 1000;
+let ransomwareLiveCache = { at: 0, posts: null };
+
+async function fetchRansomwareLive(source) {
+  try {
+    let posts = ransomwareLiveCache.posts;
+    if (!posts || Date.now() - ransomwareLiveCache.at > RANSOMWARE_LIVE_TTL_MS) {
+      const response = await axios.get(RANSOMWARE_LIVE_URL, {
+        ...requestConfig({ abuse: false }),
+        maxContentLength: 5 * 1024 * 1024
+      });
+      posts = Array.isArray(response.data) ? response.data : [];
+      ransomwareLiveCache = { at: Date.now(), posts };
+    }
+
+    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const articles = [];
+    for (const post of posts.slice(0, 200)) {
+      if (!post || typeof post !== 'object') continue;
+      const discovered = post.discovered || post.attackdate;
+      const t = discovered ? new Date(discovered).getTime() : NaN;
+      if (!isNaN(t) && t < sevenDaysAgo) continue;
+
+      const victim = String(post.victim || post.domain || 'Unknown Victim').slice(0, 200);
+      const group = String(post.group || 'Unknown Group').slice(0, 80);
+      const pageUrl = /^https:\/\/(www\.)?ransomware\.live\//.test(post.url || '')
+        ? post.url
+        : `https://www.ransomware.live/group/${encodeURIComponent(group)}#${encodeURIComponent(victim)}`;
+
+      const lines = [
+        `Ransomware group "${group}" listed a new victim on its leak site.`,
+        '',
+        `Victim: ${victim}`,
+        `Group: ${group}`,
+        post.country ? `Country: ${post.country}` : null,
+        post.activity ? `Sector: ${post.activity}` : null,
+        post.attackdate ? `Attack date: ${post.attackdate}` : null,
+        `Discovered: ${discovered || 'Unknown'}`,
+        post.description ? `\n${String(post.description).slice(0, 600)}` : null
+      ].filter(Boolean);
+
+      articles.push({
+        title: `[Dark Web] Ransomware Leak: ${victim} (${group})`,
+        description: lines.join('\n'),
+        url: pageUrl,                       // unique per victim page
+        source_name: 'Ransomware.live',
+        source_type: 'darkweb',
+        source_id: source?.id || null,
+        user_id: source?.user_id || null,
+        author: group,
+        published_date: discovered || new Date().toISOString(),
+        category: 'darkweb',
+        severity: 'high',
+        cve_id: null,
+        is_patched: -1,
+        has_poc: 0,
+        tags: `ransomware,dark-web,leak,${group.toLowerCase().replace(/[^a-z0-9-]/g, '')}`
+      });
+    }
+
+    console.log(`[DarkWeb] Ransomware.live: ${articles.length} recent leak posts`);
+    return { success: true, articles, count: articles.length };
+  } catch (error) {
+    console.error(`[DarkWeb] Ransomware.live error: ${error.message}`);
+    return { success: false, articles: [], error: error.message };
+  }
+}
+
 /**
  * Fetch ThreatFox — Malware IOCs (many sourced from dark web)
  * Source: https://threatfox.abuse.ch
@@ -79,10 +209,10 @@ async function fetchThreatFox(source) {
     const response = await axios.post(
       'https://threatfox-api.abuse.ch/api/v1/',
       { query: 'get_iocs', days: 1 },
-      { ...HTTP_CONFIG }
+      { ...requestConfig(), responseType: 'text', maxContentLength: 50 * 1024 * 1024 }
     );
 
-    const data = response.data;
+    const data = (await parseJsonOffThread(response.data, 100)) || {};
     const articles = [];
 
     if (data.query_status === 'ok' && data.data && Array.isArray(data.data)) {
@@ -98,18 +228,21 @@ async function fetchThreatFox(source) {
 
       for (const [malware, iocs] of Object.entries(malwareGroups).slice(0, 20)) {
         const firstIoc = iocs[0];
-        const iocTypes = [...new Set(iocs.map(i => i.ioc_type_desc))].join(', ');
+        const iocTypes = [...new Set(iocs.map(i => i.ioc_type_desc || i.ioc_type))].join(', ');
+        const firstSeen = firstIoc.first_seen || firstIoc.first_seen_utc;
 
         articles.push({
           title: `[IOC] ${malware} — ${iocs.length} new indicators detected`,
-          description: `ThreatFox detected ${iocs.length} new IOC(s) for "${malware}".\n\nIOC Types: ${iocTypes}\nThreat Type: ${firstIoc.threat_type_desc || 'Unknown'}\nConfidence: ${firstIoc.confidence_level || 'N/A'}%\nFirst Seen: ${firstIoc.first_seen_utc || 'Unknown'}\n\nSample IOC: ${firstIoc.ioc || 'N/A'}`,
-          url: `https://threatfox.abuse.ch/browse/malware/${encodeURIComponent(firstIoc.malware_malpedia || malware)}/`,
+          description: `ThreatFox detected ${iocs.length} new IOC(s) for "${malware}".\n\nIOC Types: ${iocTypes}\nThreat Type: ${firstIoc.threat_type_desc || firstIoc.threat_type || 'Unknown'}\nConfidence: ${firstIoc.confidence_level || 'N/A'}%\nFirst Seen: ${firstSeen || 'Unknown'}\n\nSample IOC: ${firstIoc.ioc || 'N/A'}`,
+          // `malware` is the Malpedia id ("win.cobalt_strike"); `malware_malpedia` is a full URL.
+          // The #day fragment makes each day's summary a new article (DB de-dupes on URL).
+          url: `https://threatfox.abuse.ch/browse/malware/${encodeURIComponent(firstIoc.malware || malware)}/#${dayOf(firstSeen)}`,
           source_name: 'ThreatFox - Malware IOCs',
           source_type: 'darkweb',
           source_id: source?.id || null,
           user_id: source?.user_id || null,
           author: firstIoc.reporter || 'abuse.ch',
-          published_date: firstIoc.first_seen_utc || new Date().toISOString(),
+          published_date: firstSeen || new Date().toISOString(),
           category: 'darkweb',
           severity: (firstIoc.confidence_level || 0) >= 75 ? 'high' : 'medium',
           cve_id: null,
@@ -137,8 +270,9 @@ async function fetchURLhaus(source) {
   try {
     // URLhaus moved to a path-based endpoint (the old `urlhaus_recent` body 404s now).
     const response = await axios.get(
-      'https://urlhaus-api.abuse.ch/v1/urls/recent/',
-      { ...HTTP_CONFIG }
+      // /limit/<n>/ caps the response (default is up to 1000 URLs)
+      'https://urlhaus-api.abuse.ch/v1/urls/recent/limit/100/',
+      requestConfig()
     );
 
     const data = response.data;
@@ -150,8 +284,10 @@ async function fetchURLhaus(source) {
       const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
       for (const url of data.urls.slice(0, 50)) {
-        const addedDate = new Date(url.dateadded);
-        if (addedDate < oneDayAgo) continue;
+        // The API field is `date_added` ("2026-11-20 13:36:27 UTC"); `dateadded`
+        // never existed, so the 24h filter let everything through.
+        const addedDate = new Date(url.date_added || url.dateadded);
+        if (!(addedDate >= oneDayAgo)) continue;
 
         const threat = url.threat || 'malware_download';
         if (!threatGroups[threat]) {
@@ -170,13 +306,13 @@ async function fetchURLhaus(source) {
         articles.push({
           title: `[Malicious URLs] ${urls.length} new ${threat.replace('_', ' ')} URLs detected`,
           description: `URLhaus detected ${urls.length} new malicious URLs associated with "${threat}".\n\nStatuses: ${Object.entries(statusCounts).map(([k, v]) => `${k}: ${v}`).join(', ')}\nTags: ${[...new Set(urls.flatMap(u => u.tags || []))].slice(0, 10).join(', ')}\n\nSample: ${urls[0]?.url || 'N/A'}`,
-          url: 'https://urlhaus.abuse.ch/browse/',
+          url: `https://urlhaus.abuse.ch/browse/#${encodeURIComponent(threat)}-${dayOf(urls[0]?.date_added)}`,
           source_name: 'URLhaus - Malicious URLs',
           source_type: 'darkweb',
           source_id: source?.id || null,
           user_id: source?.user_id || null,
           author: urls[0]?.reporter || 'abuse.ch',
-          published_date: urls[0]?.dateadded || new Date().toISOString(),
+          published_date: urls[0]?.date_added || urls[0]?.dateadded || new Date().toISOString(),
           category: 'darkweb',
           severity: 'high',
           cve_id: null,
@@ -204,11 +340,8 @@ async function fetchMalwareBazaar(source) {
   try {
     const response = await axios.post(
       'https://mb-api.abuse.ch/api/v1/',
-      'query=get_recent&selector=time',
-      {
-        ...HTTP_CONFIG,
-        headers: { ...HTTP_CONFIG.headers, 'Content-Type': 'application/x-www-form-urlencoded' }
-      }
+      'query=get_recent&selector=100',   // latest 100 samples (bounded)
+      requestConfig({ extraHeaders: { 'Content-Type': 'application/x-www-form-urlencoded' } })
     );
 
     const data = response.data;
@@ -274,6 +407,8 @@ async function fetchDarkWebIntel(sources) {
 
     if (needsAbuseKey(source.url) && !ABUSE_KEY) {
       result = { success: false, articles: [], count: 0, error: 'abuse.ch API key required — set ABUSE_CH_API_KEY (free at auth.abuse.ch)' };
+    } else if (source.url.includes('ransomware.live')) {
+      result = await fetchRansomwareLive(source);
     } else if (source.url.includes('ransomwatch')) {
       result = await fetchRansomWatch(source);
     } else if (source.url.includes('threatfox')) {
@@ -290,10 +425,10 @@ async function fetchDarkWebIntel(sources) {
     }
 
     allArticles.push(...result.articles);
-    results.push({ source: source.name, ...result });
+    results.push({ source: source.name, sourceId: source.id, ...result });
   }
 
   return { articles: allArticles, results };
 }
 
-module.exports = { fetchDarkWebIntel, fetchRansomWatch, fetchThreatFox, fetchURLhaus, fetchMalwareBazaar };
+module.exports = { fetchDarkWebIntel, fetchRansomwareLive, fetchRansomWatch, fetchThreatFox, fetchURLhaus, fetchMalwareBazaar };

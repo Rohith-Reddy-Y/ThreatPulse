@@ -29,18 +29,39 @@
 
     if (body) opts.body = JSON.stringify(body);
 
-    const res = await fetch(endpoint, opts);
+    let res = await fetch(endpoint, opts);
+    // The access token lives 15 min and this page never refreshed it, so any
+    // action after 15 min idle bounced the admin to '/'. Refresh once and retry.
+    if (res.status === 401 && await refreshSession()) {
+      if (method !== 'GET') {
+        const csrf = getCsrfToken();
+        if (csrf) opts.headers['X-CSRF-Token'] = csrf;
+      }
+      res = await fetch(endpoint, opts);
+    }
     if (res.status === 401 || res.status === 403) {
       window.location.href = '/';
       throw new Error('Access denied');
     }
-    return res.json();
+    try { return await res.json(); } catch { return { success: false, error: `Request failed (${res.status})` }; }
+  }
+
+  let refreshPromise = null;
+  function refreshSession() {
+    if (!refreshPromise) {
+      refreshPromise = fetch(d('L2FwaS9hdXRoL3JlZnJlc2g='), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken() || '' }
+      }).then(r => r.ok).catch(() => false).finally(() => { refreshPromise = null; });
+    }
+    return refreshPromise;
   }
 
   // Check auth on load — cookie is sent automatically
   async function init() {
     try {
-      const res = await fetch(d('L2FwaS9hdXRoL21l'));
+      let res = await fetch(d('L2FwaS9hdXRoL21l'));
+      if (res.status === 401 && await refreshSession()) res = await fetch(d('L2FwaS9hdXRoL21l'));
       if (!res.ok) throw new Error('Not authenticated');
       const data = await res.json();
       if (!data.success || !data.user || data.user.role !== 'admin') {
@@ -52,7 +73,10 @@
       loadUsers();
       loadInvites();
       loadSources();
+      loadCatalog();
       loadAudit();
+      loadResets();
+      loadEmailStatus();
       loadAiSettings();
     } catch (e) {
       alert('Admin access required. Redirecting to login...');
@@ -60,14 +84,22 @@
     }
   }
 
+  // Must escape quotes too — results go into attribute values (title, data-*)
   function escapeHtml(str) {
-    if (!str) return '';
-    const d = document.createElement('div'); d.textContent = str; return d.innerHTML;
+    if (str === null || str === undefined || str === '') return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   function relativeTime(dateStr) {
     if (!dateStr) return 'Never';
-    const diff = Math.floor((Date.now() - new Date(dateStr)) / 1000);
+    // SQLite datetime('now') strings have no zone but are UTC
+    const when = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(dateStr) ? new Date(dateStr.replace(' ', 'T') + 'Z') : new Date(dateStr);
+    const diff = Math.floor((Date.now() - when) / 1000);
     if (diff < 60) return 'Just now';
     if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
     if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
@@ -129,23 +161,29 @@
     const data = await api('GET', d('L2FwaS9hZG1pbi91c2Vycw=='));
     if (!data || !data.users) return;
     const tbody = $('#users-tbody');
-    tbody.innerHTML = data.users.map(u => `
+    // The server refuses to demote, disable or delete your own account and to
+    // promote the shared guest account: don't offer those controls.
+    tbody.innerHTML = data.users.map(u => {
+      const self = currentUser && u.id === currentUser.id;
+      const guest = u.username === 'guest';
+      const lock = self ? ' disabled title="You cannot change your own role or status"' : '';
+      return `
       <tr>
         <td><strong>${escapeHtml(u.username)}</strong></td>
         <td>${escapeHtml(u.display_name)}</td>
-        <td><select data-user-role="${u.id}" class="filter-select" style="padding:4px 8px;font-size:12px;">
+        <td><select data-user-role="${u.id}" class="filter-select" style="padding:4px 8px;font-size:12px;"${lock}>
           <option value="analyst" ${u.role==='analyst'?'selected':''}>Analyst</option>
-          <option value="admin" ${u.role==='admin'?'selected':''}>Admin</option>
+          <option value="admin" ${u.role==='admin'?'selected':''}${guest ? ' disabled' : ''}>Admin</option>
         </select></td>
         <td>${u.source_count || 0}</td>
         <td>${relativeTime(u.last_login)}</td>
         <td><span class="badge ${u.is_active ? 'badge-advisory' : 'badge-breach'}">${u.is_active ? 'Active' : 'Disabled'}</span></td>
         <td>
-          <button class="btn btn-ghost" data-toggle-user="${u.id}" data-active="${u.is_active}" style="font-size:12px;padding:4px 8px;">${u.is_active ? 'Disable' : 'Enable'}</button>
-          <button class="btn btn-danger" data-delete-user="${u.id}" style="font-size:12px;padding:4px 8px;">Delete</button>
+          <button class="btn btn-ghost" data-toggle-user="${u.id}" data-active="${u.is_active}" style="font-size:12px;padding:4px 8px;"${lock}>${u.is_active ? 'Disable' : 'Enable'}</button>
+          <button class="btn btn-danger" data-delete-user="${u.id}" style="font-size:12px;padding:4px 8px;"${lock}>Delete</button>
         </td>
-      </tr>
-    `).join('');
+      </tr>`;
+    }).join('');
   }
 
   // Invite codes
@@ -237,6 +275,66 @@
     container.innerHTML = html;
   }
 
+  // Source catalog — one row per unique feed, contributors as name labels
+  let catalog = { entries: [], totals: {} };
+  let catalogFilter = 'all';
+  async function loadCatalog() {
+    const data = await api('GET', d('L2FwaS9hZG1pbi9zb3VyY2UtY2F0YWxvZw=='));
+    if (!data || !Array.isArray(data.entries)) return;
+    catalog = data;
+    const t = data.totals || {};
+    $('#catalog-stats').innerHTML = [
+      ['Unique feeds', t.feeds], ['Built-in', t.builtIn], ['User-submitted', t.userSubmitted],
+      ['New (48h)', t.newUserSubmitted], ['Duplicate rows folded', t.duplicatesFolded],
+    ].map(([k, v]) => `<div class="catalog-stat"><b>${Number(v) || 0}</b><span>${escapeHtml(k)}</span></div>`).join('');
+    const n = Number(t.newUserSubmitted) || 0;
+    for (const id of ['#catalog-new-badge', '#sources-tab-new']) {
+      const el = $(id);
+      if (!el) continue;
+      el.textContent = id === '#catalog-new-badge' ? `${n} new` : String(n);
+      el.classList.toggle('hidden', n === 0);
+    }
+    renderCatalog();
+  }
+
+  function renderCatalog() {
+    const q = ($('#catalog-search')?.value || '').trim().toLowerCase();
+    const rows = catalog.entries.filter((e) => {
+      if (catalogFilter === 'user' && !e.userSubmitted) return false;
+      if (catalogFilter === 'builtin' && !e.builtIn) return false;
+      if (catalogFilter === 'shared' && !(e.builtIn && e.contributorCount)) return false;
+      if (!q) return true;
+      return [e.name, e.url, e.host, ...e.contributors.map((c) => `${c.displayName} ${c.username} ${c.nameGiven}`)]
+        .some((v) => String(v || '').toLowerCase().includes(q));
+    });
+    const tbody = $('#catalog-tbody');
+    if (!rows.length) {
+      tbody.innerHTML = `<tr><td colspan="6" style="color:var(--text-muted);">${catalog.entries.length ? 'No feeds match.' : 'No sources yet.'}</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = rows.slice(0, 600).map((e) => {
+      const origin = e.builtIn
+        ? '<span class="catalog-origin builtin">Built-in</span>'
+        : `<span class="catalog-origin user">User-submitted</span>${e.isNew ? ' <span class="catalog-new">NEW</span>' : ''}`;
+      const chips = e.contributors.slice(0, 6).map((c) => {
+        const when = utcDate(c.addedAt);
+        const tip = `${c.displayName} (@${c.username}) added this${when ? ' ' + relativeTime(when.toISOString()) : ''} as “${c.nameGiven}”${c.enabled ? '' : ' — disabled'}`;
+        return `<span class="catalog-chip${c.enabled ? '' : ' off'}" title="${escapeHtml(tip)}">${escapeHtml(c.displayName)}</span>`;
+      }).join('') + (e.contributors.length > 6 ? `<span class="catalog-chip more">+${e.contributors.length - 6}</span>` : '');
+      const who = chips || '<span style="color:var(--text-muted);font-size:11px;">Platform only</span>';
+      const st = e.status === 'ok' ? ['active', 'OK'] : e.status === 'error' ? ['error', 'Error'] : ['idle', 'Pending'];
+      const first = utcDate(e.firstAddedAt);
+      return `<tr>
+        <td><strong>${escapeHtml(e.name)}</strong><div class="catalog-url" title="${escapeHtml(e.url)}">${escapeHtml(e.url)}</div></td>
+        <td style="white-space:nowrap;">${origin}</td>
+        <td><div class="catalog-chips">${who}</div></td>
+        <td>${escapeHtml(e.type || '')}</td>
+        <td style="white-space:nowrap;"><span class="source-status-dot ${st[0]}" title="${escapeHtml(e.lastError || st[1])}"></span> ${st[1]}</td>
+        <td style="white-space:nowrap;font-size:12px;">${first ? relativeTime(first.toISOString()) : (e.builtIn ? '—' : '')}</td>
+      </tr>`;
+    }).join('');
+  }
+
   // Audit log
   async function loadAudit() {
     const data = await api('GET', d('L2FwaS9hZG1pbi9hdWRpdC1sb2c='));
@@ -251,6 +349,70 @@
         <td style="font-size:11px;">${escapeHtml(e.ip_address || '—')}</td>
       </tr>
     `).join('');
+  }
+
+  // SQLite datetime('now') values are UTC without a zone marker
+  function utcDate(v) {
+    if (!v) return null;
+    return new Date(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(v) ? v.replace(' ', 'T') + 'Z' : v);
+  }
+
+  // Pending password resets: with no SMTP the forgot-password link only exists
+  // here (and in the server log), so the admin can hand it to the user.
+  async function loadResets() {
+    const data = await api('GET', d('L2FwaS9hZG1pbi9yZXNldC10b2tlbnM='));
+    if (!data || !Array.isArray(data.tokens)) return;
+    const tbody = $('#resets-tbody');
+    if (!data.tokens.length) {
+      tbody.innerHTML = '<tr><td colspan="5" style="color:var(--text-muted);">No pending reset requests.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = data.tokens.map(t => {
+      const link = t.token ? `${window.location.origin}/?reset=${encodeURIComponent(t.token)}` : null;
+      const linkCell = link
+        ? `<code class="copy-code" data-copy="${escapeHtml(link)}" style="color:var(--cyan);font-size:11px;cursor:pointer;word-break:break-all;" title="Click to copy">${escapeHtml(link)}</code>`
+        : `<span style="color:var(--text-muted);font-size:12px;">${t.withheld === 'admin_account' ? 'Hidden (another admin account)' : 'Sent by email'}</span>`;
+      const created = utcDate(t.created_at), expires = utcDate(t.expires_at);
+      return `
+      <tr>
+        <td><strong>${escapeHtml(t.username)}</strong></td>
+        <td>${escapeHtml(t.email || '—')}</td>
+        <td>${created ? relativeTime(created.toISOString()) : '—'}</td>
+        <td>${expires ? escapeHtml(expires.toLocaleTimeString()) : '—'}</td>
+        <td>${linkCell}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  // Email delivery status (Brevo / SMTP) + test message
+  async function loadEmailStatus() {
+    try {
+      const s = await api('GET', d('L2FwaS9hZG1pbi9lbWFpbC1zdGF0dXM='));
+      if (!s) return;
+      const badge = $('#email-status-badge');
+      badge.textContent = s.configured ? 'working config' : 'not set up';
+      badge.className = 'badge ' + (s.configured ? 'badge-advisory' : 'badge-breach');
+      $('#email-provider').textContent = s.provider === 'brevo' ? 'Brevo HTTPS API' : s.provider === 'smtp' ? 'SMTP' : 'None';
+      $('#email-from').textContent = s.from || '—';
+      $('#email-admin').textContent = s.adminEmail || 'none — add one with Change Email on the dashboard';
+      $('#email-invite').textContent = s.inviteRequired ? 'Invite code required' : 'Open (anyone can register)';
+      const prob = $('#email-problem');
+      prob.textContent = s.problem || '';
+      prob.classList.toggle('hidden', !s.problem);
+    } catch (e) { /* api() already redirects on 401/403 */ }
+  }
+
+  async function sendTestEmail() {
+    const btn = $('#email-test-btn');
+    btn.disabled = true; btn.textContent = 'Sending…';
+    try {
+      const r = await api('POST', d('L2FwaS9hZG1pbi9lbWFpbC10ZXN0'));
+      if (r && r.success) showToast(`Test email sent to ${r.to} — check inbox and spam`, 'success');
+      else showToast((r && r.error) || 'Test email failed', 'error');
+    } catch (e) {
+      showToast(e.message || 'Test email failed', 'error');
+    }
+    btn.disabled = false; btn.textContent = 'Send test email to me';
   }
 
   // AI settings (Groq + Tavily keys, stored server-side)
@@ -274,7 +436,11 @@
     const btn = $('#ai-save-btn');
     btn.disabled = true; btn.textContent = 'Saving...';
     try {
-      const result = await api('PUT', d('L2FwaS9hZG1pbi9haS1zZXR0aW5ncw=='), { groq_api_key: groq, tavily_api_key: tavily });
+      // Only send fields that were filled in: a blank box means "keep", not "delete"
+      const body = {};
+      if (groq.trim()) body.groq_api_key = groq.trim();
+      if (tavily.trim()) body.tavily_api_key = tavily.trim();
+      const result = await api('PUT', d('L2FwaS9hZG1pbi9haS1zZXR0aW5ncw=='), body);
       if (result && result.success) {
         $('#ai-groq-key').value = '';
         $('#ai-tavily-key').value = '';
@@ -295,8 +461,9 @@
     if (toggleBtn) {
       const id = parseInt(toggleBtn.dataset.toggleUser);
       const isActive = toggleBtn.dataset.active === '1';
-      await api('PUT', `${d('L2FwaS9hZG1pbi91c2Vycw==')}/${id}`, { is_active: isActive ? 0 : 1 });
-      showToast(`User ${isActive ? 'disabled' : 'enabled'}.`, 'success');
+      const result = await api('PUT', `${d('L2FwaS9hZG1pbi91c2Vycw==')}/${id}`, { is_active: isActive ? 0 : 1 });
+      if (result && result.success) showToast(`User ${isActive ? 'disabled' : 'enabled'}.`, 'success');
+      else showToast(result?.error || 'Failed to update user', 'error');
       loadUsers();
     }
 
@@ -322,7 +489,7 @@
         copyCode.textContent = 'Copied!';
         copyCode.style.color = 'var(--green)';
         setTimeout(() => { copyCode.textContent = original; copyCode.style.color = 'var(--cyan)'; }, 1500);
-        showToast('Invite code copied to clipboard', 'success');
+        showToast('Copied to clipboard', 'success');
       }).catch(() => showToast('Could not copy — select and copy manually', 'error'));
     }
   });
@@ -331,8 +498,13 @@
     const roleSelect = e.target.closest('[data-user-role]');
     if (roleSelect) {
       const id = parseInt(roleSelect.dataset.userRole);
-      await api('PUT', `${d('L2FwaS9hZG1pbi91c2Vycw==')}/${id}`, { role: roleSelect.value });
-      showToast('Role updated.', 'success');
+      const result = await api('PUT', `${d('L2FwaS9hZG1pbi91c2Vycw==')}/${id}`, { role: roleSelect.value });
+      if (result && result.success) {
+        showToast('Role updated.', 'success');
+      } else {
+        showToast(result?.error || 'Failed to update role', 'error');
+        loadUsers(); // revert the select to the real role
+      }
     }
 
     const groupCheckbox = e.target.closest('.group-select-all');
@@ -352,10 +524,22 @@
     if (result && result.success) {
       showToast(`Invite code: ${result.code}`, 'success');
       loadInvites();
+    } else {
+      showToast(result?.error || 'Failed to create invite code', 'error');
     }
   });
 
   $('#ai-save-btn').addEventListener('click', saveAiSettings);
+  $$('[data-catalog-filter]').forEach((btn) => btn.addEventListener('click', () => {
+    $$('[data-catalog-filter]').forEach((b) => b.classList.remove('active'));
+    btn.classList.add('active');
+    catalogFilter = btn.dataset.catalogFilter;
+    renderCatalog();
+  }));
+  $('#catalog-search')?.addEventListener('input', renderCatalog);
+  $('#email-test-btn').addEventListener('click', sendTestEmail);
+  $('#email-refresh-btn').addEventListener('click', loadEmailStatus);
+  $('#refresh-resets-btn').addEventListener('click', loadResets);
 
   $('#admin-logout-btn').addEventListener('click', async () => {
     try {
@@ -387,9 +571,10 @@
       const cb = checked[0];
       const newUrl = prompt(`Edit URL for "${cb.dataset.sourceName}":`, cb.dataset.sourceUrl);
       if (newUrl && newUrl.trim() !== cb.dataset.sourceUrl) {
-        await api('PUT', `${d('L2FwaS9zb3VyY2Vz')}/${cb.dataset.sourceId}`, { url: newUrl.trim() });
-        showToast('Source updated.', 'success');
-        loadSources();
+        const result = await api('PUT', `${d('L2FwaS9zb3VyY2Vz')}/${cb.dataset.sourceId}`, { url: newUrl.trim() });
+        if (result && result.success) showToast('Source updated.', 'success');
+        else showToast(result?.error || 'Failed to update source', 'error');
+        loadSources(); loadCatalog();
       }
     } else {
       showToast('Select only one source to edit URL.', 'error');
@@ -400,11 +585,15 @@
     const checked = document.querySelectorAll('.source-checkbox:checked');
     if (checked.length === 0) return;
     if (confirm(`Delete ${checked.length} selected source(s)?`)) {
+      let ok = 0, lastErr = '';
       for (const cb of checked) {
-        await api('DELETE', `${d('L2FwaS9zb3VyY2Vz')}/${cb.dataset.sourceId}`);
+        const result = await api('DELETE', `${d('L2FwaS9zb3VyY2Vz')}/${cb.dataset.sourceId}`);
+        if (result && result.success) ok++; else lastErr = result?.error || 'failed';
       }
-      showToast(`${checked.length} source(s) deleted.`, 'success');
-      loadSources(); loadStats();
+      if (ok) showToast(`${ok} source(s) deleted.`, 'success');
+      if (ok < checked.length) showToast(`${checked.length - ok} source(s) not deleted: ${lastErr}`, 'error');
+      $('#sources-bulk-actions').classList.add('hidden');
+      loadSources(); loadCatalog(); loadStats();
     }
   });
 

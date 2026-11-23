@@ -12,9 +12,13 @@ const defaultDbPath = fs.existsSync('/data')
 const DB_PATH = process.env.DB_PATH || defaultDbPath;
 
 let db;
+// Set when this process had to create the database file (fresh deploy / wiped
+// ephemeral disk): the UI uses it to explain why an old login no longer works.
+let dbCreatedAt = null;
 
 function getDb() {
   if (!db) {
+    if (DB_PATH !== ':memory:' && !fs.existsSync(DB_PATH)) dbCreatedAt = new Date().toISOString();
     db = new Database(DB_PATH);
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
@@ -152,6 +156,21 @@ function initializeSchema() {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS watchlist (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      term TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_watchlist_user_term ON watchlist(user_id, term COLLATE NOCASE);
+
+    CREATE TABLE IF NOT EXISTS poc_checks (
+      article_id INTEGER PRIMARY KEY,
+      verdict TEXT,
+      result TEXT,
+      checked_at TEXT DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS ai_cache (
       cache_key TEXT PRIMARY KEY,
       response TEXT,
@@ -191,6 +210,7 @@ function initializeSchema() {
     'ALTER TABLE articles ADD COLUMN threat_actors TEXT',
     'ALTER TABLE articles ADD COLUMN mitre_ids TEXT',
     'ALTER TABLE articles ADD COLUMN iocs TEXT',
+    'ALTER TABLE articles ADD COLUMN title_key TEXT',
     'ALTER TABLE notification_log ADD COLUMN user_id INTEGER',
   ];
   for (const sql of columnMigrations) {
@@ -277,6 +297,10 @@ function initializeSchema() {
 
   // Add must_change_password flag to users if missing (forces password change on first login)
   try { d.prepare('ALTER TABLE users ADD COLUMN must_change_password INTEGER DEFAULT 0').run(); } catch(e) { /* already exists */ }
+  // Forced password changes were removed (they looped on ephemeral hosting); clear legacy flags.
+  try { d.prepare('UPDATE users SET must_change_password = 0 WHERE must_change_password != 0').run(); } catch(e) { /* ignore */ }
+  // When the password last changed (unix seconds): access tokens issued earlier are rejected.
+  try { d.prepare('ALTER TABLE users ADD COLUMN password_changed_at INTEGER DEFAULT 0').run(); } catch(e) { /* already exists */ }
 
   // Step 5: Create indexes AFTER all columns are guaranteed to exist
   const indexes = [
@@ -289,6 +313,7 @@ function initializeSchema() {
     'CREATE INDEX IF NOT EXISTS idx_articles_url_hash ON articles(url_hash)',
     'CREATE INDEX IF NOT EXISTS idx_articles_user ON articles(user_id)',
     'CREATE INDEX IF NOT EXISTS idx_articles_sector ON articles(sector)',
+    'CREATE INDEX IF NOT EXISTS idx_articles_title_key ON articles(title_key)',
     'CREATE INDEX IF NOT EXISTS idx_sources_user ON sources(user_id)',
     'CREATE INDEX IF NOT EXISTS idx_reviews_article ON article_reviews(article_id)',
     'CREATE INDEX IF NOT EXISTS idx_reviews_user ON article_reviews(user_id)',
@@ -305,7 +330,18 @@ function initializeSchema() {
     ).get();
     if (hasOldUnique && hasOldUnique.sql && hasOldUnique.sql.includes('url TEXT NOT NULL UNIQUE')) {
       console.log('[DB] Migrating sources table: url UNIQUE -> UNIQUE(url, user_id)...');
-      d.exec(`
+      // Columns are copied BY NAME: in old tables user_id was appended by ALTER
+      // TABLE (last column), so "SELECT *" shifted every value one slot over.
+      // Foreign keys are switched off for the swap, otherwise DROP TABLE fires
+      // articles.source_id ON DELETE SET NULL and detaches every article.
+      const srcCols = d.prepare('PRAGMA table_info(sources)').all().map(c => c.name);
+      const copyCols = ['id', 'name', 'url', 'type', 'category', 'enabled', 'added_by', 'user_id',
+        'last_fetched', 'last_error', 'fetch_count', 'created_at'].filter(c => srcCols.includes(c)).join(', ');
+      d.pragma('foreign_keys = OFF');
+      try {
+        d.exec('BEGIN');
+        d.exec(`
+        DROP TABLE IF EXISTS sources_new;
         CREATE TABLE sources_new (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           name TEXT NOT NULL,
@@ -321,11 +357,18 @@ function initializeSchema() {
           created_at TEXT DEFAULT (datetime('now')),
           UNIQUE(url, user_id)
         );
-        INSERT INTO sources_new SELECT * FROM sources;
+        INSERT INTO sources_new (${copyCols}) SELECT ${copyCols} FROM sources;
         DROP TABLE sources;
         ALTER TABLE sources_new RENAME TO sources;
         CREATE INDEX IF NOT EXISTS idx_sources_user ON sources(user_id);
-      `);
+        `);
+        d.exec('COMMIT');
+      } catch (e) {
+        try { d.exec('ROLLBACK'); } catch (_) { /* not in a transaction */ }
+        throw e;
+      } finally {
+        d.pragma('foreign_keys = ON');
+      }
       console.log('[DB] Sources table migrated successfully ✓');
     }
   } catch(e) {
@@ -336,7 +379,9 @@ function initializeSchema() {
   try {
     const admin = d.prepare("SELECT id FROM users WHERE role = 'admin' ORDER BY id ASC LIMIT 1").get();
     if (admin) {
-      const orphanedSources = d.prepare('UPDATE sources SET user_id = ? WHERE user_id IS NULL').run(admin.id);
+      // OR IGNORE: a system source whose URL the admin also added personally
+      // would violate UNIQUE(url, user_id) and abort the whole migration.
+      const orphanedSources = d.prepare('UPDATE OR IGNORE sources SET user_id = ? WHERE user_id IS NULL').run(admin.id);
       const orphanedArticles = d.prepare('UPDATE articles SET user_id = ? WHERE user_id IS NULL').run(admin.id);
       if (orphanedSources.changes > 0 || orphanedArticles.changes > 0) {
         console.log(`[DB] Assigned ${orphanedSources.changes} orphaned sources and ${orphanedArticles.changes} orphaned articles to admin (id=${admin.id})`);
@@ -345,11 +390,103 @@ function initializeSchema() {
   } catch(e) {
     console.log('[DB] Orphan migration note:', e.message);
   }
+
+  // Step 7: Rows stored before published_date normalisation may hold RFC-822
+  // dates ("Fri, 20 Nov 2026 10:00:00 GMT") that SQLite's date() can't parse,
+  // so they vanished from "threats today" and showed up as a null day in the
+  // timeline. Rewrite them once to ISO UTC (falls back to fetched_date).
+  try {
+    const legacy = d.prepare(
+      "SELECT id, published_date, fetched_date FROM articles WHERE published_date IS NULL OR published_date NOT GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T*'"
+    ).all();
+    if (legacy.length > 0) {
+      const upd = d.prepare('UPDATE articles SET published_date = ? WHERE id = ?');
+      d.transaction(() => {
+        for (const r of legacy) {
+          const fetched = r.fetched_date && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(r.fetched_date)
+            ? r.fetched_date.replace(' ', 'T') + 'Z' : r.fetched_date;
+          const parsed = r.published_date && !isNaN(new Date(r.published_date).getTime()) ? r.published_date : fetched;
+          upd.run(normalizeDate(parsed), r.id);
+        }
+      })();
+      console.log(`[DB] Normalised published_date on ${legacy.length} legacy article(s) ✓`);
+    }
+  } catch(e) {
+    console.log('[DB] Date normalisation note:', e.message);
+  }
 }
 
 // --- URL Hash for dedup ---
 function hashUrl(url) {
   return crypto.createHash('sha256').update(url.trim().toLowerCase()).digest('hex');
+}
+
+// Per-owner dedup key: unowned (system) articles keep the plain url hash.
+function articleHash(url, userId) {
+  return userId ? hashUrl(`${url.trim()}\n${userId}`) : hashUrl(url);
+}
+
+// LIKE pattern that matches `s` literally (use with ESCAPE '\').
+function likeContains(s) {
+  return '%' + String(s).replace(/[\\%_]/g, '\\$&') + '%';
+}
+
+// Clamp pagination input: a negative LIMIT means "no limit" in SQLite.
+function clampInt(v, def, min, max) {
+  const n = parseInt(v, 10);
+  if (!Number.isFinite(n)) return def;
+  return Math.min(Math.max(n, min), max);
+}
+
+// ============================================
+// SYSTEM-ONLY SCOPE (shared anonymous guest account)
+// ============================================
+// Every anonymous visitor shares the one 'guest' account, so guests may only see
+// the built-in platform content — never another user's private sources (feed
+// URLs), their articles, review notes or names. Pass SYSTEM_SCOPE as the userId
+// of the read functions below to get that view (null = everything, for admins;
+// a numeric id = that user's own rows).
+//
+// "System" is identified by sources.added_by = 'system' (what seedDefaultSources
+// stores; user-added sources are stored with added_by = 'user'), NOT by
+// user_id IS NULL: on a restarted DB the orphan migration in initializeSchema
+// (step 6) re-assigns system sources and their articles to the admin's user_id,
+// which would otherwise make them indistinguishable from the admin's own
+// private content. Articles are system content when their source is a system
+// source (RSS, NVD/CISA KEV, abuse.ch, RansomWatch ... all carry the source's
+// id), or — for rows with no source at all — when they are also unowned.
+const SYSTEM_SCOPE = 'system';
+
+function isSystemScope(userId) {
+  return userId === SYSTEM_SCOPE;
+}
+
+function systemSourceClause(alias = 'sources') {
+  return `${alias}.added_by = 'system'`;
+}
+
+function systemArticleClause(alias = 'articles') {
+  return `(${alias}.source_id IN (SELECT id FROM sources WHERE added_by = 'system')` +
+    ` OR (${alias}.source_id IS NULL AND ${alias}.user_id IS NULL))`;
+}
+
+// Guests must not learn which account owns system content (on a migrated DB
+// that is the admin) nor see anyone's reviews/notes. Keeps the row shape.
+function redactForSystemScope(row) {
+  if (!row) return row;
+  if ('user_id' in row) row.user_id = null;
+  if ('owner_name' in row) row.owner_name = null;
+  if ('reviews' in row) row.reviews = '[]';
+  if ('added_by_name' in row) row.added_by_name = 'System';
+  return row;
+}
+
+function isSystemArticle(articleOrId) {
+  const id = typeof articleOrId === 'object' && articleOrId ? articleOrId.id : articleOrId;
+  if (id === undefined || id === null) return false;
+  return !!getDb().prepare(
+    `SELECT 1 FROM articles WHERE articles.id = ? AND ${systemArticleClause('articles')}`
+  ).get(id);
 }
 
 // ============================================
@@ -374,12 +511,35 @@ function getUserByUsername(username) {
   return getDb().prepare('SELECT * FROM users WHERE username = ?').get(username);
 }
 
+// Case-insensitive lookup for sign-in and uniqueness checks: "Alice" registering
+// and later typing "alice" used to get "Invalid username/email or password" with
+// the right password. An exact match wins; otherwise a single case-insensitive
+// match (legacy DBs may hold names differing only by case: then nothing matches).
+function getUserByUsernameCI(username) {
+  if (typeof username !== 'string' || !username) return undefined;
+  const exact = getUserByUsername(username);
+  if (exact) return exact;
+  const rows = getDb().prepare('SELECT * FROM users WHERE username = ? COLLATE NOCASE LIMIT 2').all(username);
+  return rows.length === 1 ? rows[0] : undefined;
+}
+
 function getUserById(id) {
   return getDb().prepare('SELECT * FROM users WHERE id = ?').get(id);
 }
 
+// Email addresses are matched case-insensitively (exact match preferred): mail
+// providers treat "Bob@Example.com" and "bob@example.com" as the same mailbox, so
+// login-by-email, forgot-password and the duplicate check must too.
 function getUserByEmail(email) {
-  return getDb().prepare('SELECT * FROM users WHERE email = ?').get(email);
+  if (typeof email !== 'string' || !email) return undefined;
+  const exact = getDb().prepare('SELECT * FROM users WHERE email = ?').get(email);
+  if (exact) return exact;
+  const rows = getDb().prepare('SELECT * FROM users WHERE email = ? COLLATE NOCASE LIMIT 2').all(email);
+  return rows.length === 1 ? rows[0] : undefined;
+}
+
+function getDbInfo() {
+  return { createdAt: dbCreatedAt };
 }
 
 function updateUserEmail(userId, email) {
@@ -393,6 +553,14 @@ function createPasswordResetToken(userId, token, expiresAt) {
   getDb().prepare(
     'INSERT INTO password_reset_tokens (user_id, token, expires_at) VALUES (?, ?, ?)'
   ).run(userId, token, expiresAt);
+}
+
+// True when a still-valid reset/change link was issued to this user recently
+// (per-account throttle: stops reset-email floods and link cancelling).
+function hasRecentResetToken(userId, withinMinutes = 5) {
+  return !!getDb().prepare(
+    `SELECT 1 FROM password_reset_tokens WHERE user_id = ? AND used = 0 AND expires_at > datetime('now') AND created_at > datetime('now', ?)`
+  ).get(userId, `-${Number(withinMinutes) || 5} minutes`);
 }
 
 function validatePasswordResetToken(token) {
@@ -448,7 +616,8 @@ function updateUser(id, updates) {
 
 function updateUserPassword(id, passwordHash, salt) {
   // Changing the password always clears the "must change password" flag
-  getDb().prepare('UPDATE users SET password_hash = ?, salt = ?, must_change_password = 0 WHERE id = ?').run(passwordHash, salt, id);
+  getDb().prepare('UPDATE users SET password_hash = ?, salt = ?, must_change_password = 0, password_changed_at = ? WHERE id = ?')
+    .run(passwordHash, salt, Math.floor(Date.now() / 1000), id);
   return { success: true };
 }
 
@@ -481,10 +650,17 @@ function deleteUser(id) {
   // Don't allow deleting the last admin
   const user = getUserById(id);
   if (!user) return { success: false, error: 'User not found' };
-  if (user.role === 'admin') {
+  // Only refuse when this is the last *active* admin (a disabled admin isn't
+  // counted in activeAdmins, so it must not block its own deletion).
+  if (user.role === 'admin' && user.is_active) {
     const adminCount = getDb().prepare("SELECT COUNT(*) as count FROM users WHERE role = 'admin' AND is_active = 1").get().count;
     if (adminCount <= 1) return { success: false, error: 'Cannot delete the last admin' };
   }
+  // AI chats have no FK to users — remove them explicitly (messages first).
+  try {
+    getDb().prepare('DELETE FROM ai_messages WHERE thread_id IN (SELECT id FROM ai_threads WHERE user_id = ?)').run(id);
+    getDb().prepare('DELETE FROM ai_threads WHERE user_id = ?').run(id);
+  } catch (e) { /* tables may not exist on very old DBs */ }
   // Delete user's sources and their articles
   getDb().prepare('DELETE FROM article_reviews WHERE user_id = ?').run(id);
   getDb().prepare('DELETE FROM notification_settings WHERE user_id = ?').run(id);
@@ -541,6 +717,13 @@ function getAllSources() {
   return getDb().prepare('SELECT * FROM sources ORDER BY added_by DESC, name ASC').all();
 }
 
+// Built-in platform sources only (the guest view). Same columns as getAllSources.
+function getSystemSources() {
+  return getDb().prepare(
+    `SELECT * FROM sources WHERE ${systemSourceClause('sources')} ORDER BY added_by DESC, name ASC`
+  ).all().map(redactForSystemScope);
+}
+
 // Fully isolated: each user sees ONLY their own sources.
 // New users start empty and build their own source list.
 function getSourcesForUserFixed(userId) {
@@ -588,12 +771,18 @@ function updateSource(id, updates) {
   for (const [key, val] of Object.entries(updates)) {
     if (allowed.includes(key)) {
       fields.push(`${key} = ?`);
-      values.push(val);
+      // better-sqlite3 can't bind booleans (JSON true/false threw -> HTTP 500)
+      values.push(key === 'enabled' ? (val && val !== '0' ? 1 : 0) : val);
     }
   }
   if (fields.length === 0) return { success: false, error: 'No valid fields to update' };
   values.push(id);
-  getDb().prepare(`UPDATE sources SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+  try {
+    getDb().prepare(`UPDATE sources SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+  } catch (err) {
+    if (err.message.includes('UNIQUE')) return { success: false, error: 'Source URL already exists for this user' };
+    throw err;
+  }
   return { success: true };
 }
 
@@ -623,15 +812,78 @@ function updateSourceFetchStatus(id, { last_fetched, last_error = null }) {
 // ARTICLE CRUD (user-scoped)
 // ============================================
 
+// Only http(s) links may be stored — feed-supplied "javascript:" / "data:" links
+// would become stored XSS when rendered as <a href>.
+function isHttpUrl(u) {
+  try { return ['http:', 'https:'].includes(new URL(u).protocol); } catch { return false; }
+}
+
+// Feeds use many date formats ("Fri, 20 Nov 2026 10:00:00 GMT", ISO, ...).
+// SQLite's date() only understands ISO-8601, so non-ISO dates silently fell out
+// of "threats today" and the activity chart. Normalise everything to ISO UTC;
+// unparseable or future dates (bad feed clocks) become "now".
+function normalizeDate(value) {
+  const now = new Date();
+  if (!value) return now.toISOString();
+  // Zone-less ISO timestamps (e.g. NVD's "2026-11-20T15:15:10.123", or SQLite's
+  // "2026-11-20 15:15:10") are UTC
+  const v = typeof value === 'string' && /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(value) ? value.replace(' ', 'T') + 'Z' : value;
+  const d = new Date(v);
+  if (isNaN(d.getTime())) return now.toISOString();
+  // Any future timestamp is a bad feed clock (often local time labelled GMT);
+  // storing it put items on "tomorrow" (missing from threats-today) and pinned
+  // them to the top of the feed.
+  if (d.getTime() > now.getTime()) return now.toISOString();
+  return d.toISOString();
+}
+
+// Normalised title used to merge the same story arriving from several sources
+// (direct feed + Google News fallback, syndicated posts, mirrors).
+function titleKey(title) {
+  return String(title || '')
+    .toLowerCase()
+    .replace(/\s+[-|–—]\s+[^-|–—]{2,60}$/, '')   // trailing " - Publisher"
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
 function insertArticle(article) {
+  if (!article || !isHttpUrl(article.url)) {
+    return { success: false, isNew: false, error: 'Rejected non-http(s) article URL' };
+  }
+  // Every fetcher funnels through here: bound untrusted text before enrichment.
+  if (typeof article.title === 'string' && article.title.length > 500) article.title = article.title.slice(0, 500);
+  if (typeof article.description === 'string' && article.description.length > 5000) article.description = article.description.slice(0, 5000);
+  if (typeof article.author === 'string' && article.author.length > 200) article.author = article.author.slice(0, 200);
+  // Cheap check first: already stored? Skip BEFORE the (CPU-heavy) enrichment.
+  // Every 15-min cycle re-reads thousands of known items; on a small CPU share,
+  // enriching them all blocked the event loop and failed health checks.
+  // url_hash is UNIQUE across the whole table but articles are per-user, so a
+  // plain url hash let the first owner "claim" a story and every other user
+  // subscribed to the same feed never received it. Owned articles use a
+  // per-user hash; legacy rows (plain hash) still dedupe for their own owner.
+  const plainHash = hashUrl(article.url);
+  const urlHash = articleHash(article.url, article.user_id);
+  if (getDb().prepare('SELECT 1 FROM articles WHERE url_hash = ? OR (url_hash = ? AND user_id IS ?) LIMIT 1')
+    .get(urlHash, plainHash, article.user_id || null)) {
+    return { success: true, isNew: false };
+  }
+  article.published_date = normalizeDate(article.published_date);
+  const key = titleKey(article.title);
+  // Same story already stored in the last 7 days (same owner scope)? Skip it.
+  if (key.length >= 20) {
+    const dup = getDb().prepare(
+      `SELECT id FROM articles WHERE title_key = ? AND user_id IS ? AND fetched_date >= datetime('now', '-7 days') LIMIT 1`
+    ).get(key, article.user_id || null);
+    if (dup) return { success: true, isNew: false, duplicate: true };
+  }
   // Centralized enrichment — fills sector / threat_actors / mitre_ids for every
   // source (RSS, CVE, CISA KEV, dark web, scraped) that didn't set them.
   enrichArticle(article);
-  const urlHash = hashUrl(article.url);
   try {
     const result = getDb().prepare(`
-      INSERT INTO articles (url_hash, title, description, url, source_name, source_type, source_id, user_id, author, published_date, category, severity, cve_id, is_patched, has_poc, tags, mitre_ids, iocs, sector, threat_actors)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO articles (url_hash, title, description, url, source_name, source_type, source_id, user_id, author, published_date, category, severity, cve_id, is_patched, has_poc, tags, mitre_ids, iocs, sector, threat_actors, title_key)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       urlHash,
       article.title || 'Untitled',
@@ -652,7 +904,8 @@ function insertArticle(article) {
       article.mitre_ids || null,
       article.iocs || null,
       article.sector || null,
-      article.threat_actors || null
+      article.threat_actors || null,
+      key || null
     );
     return { id: result.lastInsertRowid, success: true, isNew: true };
   } catch (err) {
@@ -679,13 +932,88 @@ function insertArticles(articles) {
   return insertMany(articles);
 }
 
-function getArticles({ page = 1, limit = 50, category, severity, search, source_type, startDate, endDate, userId, sector, threat_actor, has_poc, has_mitre, is_patched } = {}) {
+// Recent articles for the threat-geography globe, in the caller's read scope
+// (admin: null = all, guest: SYSTEM_SCOPE, user: own id). Text fields only.
+function getGeoArticles(userId, sinceIso, limit = 4000) {
+  const where = ['articles.published_date >= ?'];
+  const params = [sinceIso];
+  if (isSystemScope(userId)) where.push(systemArticleClause('articles'));
+  else if (userId) { where.push('articles.user_id = ?'); params.push(userId); }
+  params.push(Math.max(1, Math.min(10000, limit | 0)));
+  return getDb().prepare(
+    `SELECT id, title, url, substr(description, 1, 1500) AS description, severity, threat_actors,
+            mitre_ids, sector, cve_id, has_poc, is_patched, tags, published_date, source_name, category
+       FROM articles WHERE ${where.join(' AND ')}
+      ORDER BY published_date DESC LIMIT ?`
+  ).all(...params);
+}
+
+// ── Watchlist (per user) ──
+function getWatchlist(userId) {
+  return getDb().prepare('SELECT id, term, created_at FROM watchlist WHERE user_id = ? ORDER BY term COLLATE NOCASE').all(userId);
+}
+function addWatchTerm(userId, term) {
+  const count = getDb().prepare('SELECT COUNT(*) AS c FROM watchlist WHERE user_id = ?').get(userId).c;
+  if (count >= 50) return { success: false, error: 'Watchlist is full (50 terms)' };
+  try {
+    const r = getDb().prepare('INSERT INTO watchlist (user_id, term) VALUES (?, ?)').run(userId, term);
+    return { success: true, id: Number(r.lastInsertRowid) };
+  } catch (e) {
+    if (/UNIQUE/i.test(e.message)) return { success: false, error: 'Already on your watchlist' };
+    throw e;
+  }
+}
+function removeWatchTerm(userId, id) {
+  return getDb().prepare('DELETE FROM watchlist WHERE id = ? AND user_id = ?').run(id, userId).changes > 0;
+}
+
+// ── PoC tracker (admin) ──
+function savePocCheck(articleId, result) {
+  getDb().prepare(
+    `INSERT INTO poc_checks (article_id, verdict, result, checked_at) VALUES (?, ?, ?, datetime('now'))
+     ON CONFLICT(article_id) DO UPDATE SET verdict = excluded.verdict, result = excluded.result, checked_at = excluded.checked_at`
+  ).run(articleId, result.verdict, JSON.stringify(result));
+  // A verified PoC found by the checker makes the article a PoC article everywhere (filter, stats)
+  if (result.verdict === 'verified') getDb().prepare('UPDATE articles SET has_poc = 1 WHERE id = ?').run(articleId);
+}
+
+function getPocCheck(articleId) {
+  const row = getDb().prepare('SELECT result FROM poc_checks WHERE article_id = ?').get(articleId);
+  if (!row) return null;
+  try { return JSON.parse(row.result); } catch { return null; }
+}
+
+// Articles that claim a PoC, or where the checker found one / a suspicious one. Newest first.
+function getPocTrackerArticles(sinceIso, limit = 60) {
+  return getDb().prepare(
+    `SELECT a.id, a.title, a.url, substr(a.description, 1, 1500) AS description, a.severity, a.category, a.threat_actors,
+            a.mitre_ids, a.cve_id, a.has_poc, a.is_patched, a.sector, a.published_date, a.source_name, a.source_type,
+            p.verdict AS poc_verdict, p.result AS poc_result
+       FROM articles a LEFT JOIN poc_checks p ON p.article_id = a.id
+      WHERE a.published_date >= ? AND (a.has_poc = 1 OR p.verdict IN ('verified', 'suspicious'))
+      ORDER BY a.published_date DESC LIMIT ?`
+  ).all(sinceIso, Math.max(1, Math.min(500, limit | 0)));
+}
+
+function getUncheckedPocArticles(limit = 5) {
+  return getDb().prepare(
+    `SELECT a.* FROM articles a LEFT JOIN poc_checks p ON p.article_id = a.id
+      WHERE a.has_poc = 1 AND p.article_id IS NULL AND a.published_date >= datetime('now', '-30 days')
+      ORDER BY a.published_date DESC LIMIT ?`
+  ).all(Math.max(1, Math.min(50, limit | 0)));
+}
+
+function getArticles({ page = 1, limit = 50, category, severity, search, source_type, startDate, endDate, userId, sector, threat_actor, has_poc, has_mitre, is_patched, watchTerms } = {}) {
   let where = [];
   let params = [];
 
   // User scoping: fully isolated — each user sees only their own articles.
-  // (Admin bypasses this by calling getArticles without userId.)
-  if (userId) {
+  // (Admin bypasses this by calling getArticles without userId; the shared
+  // guest account passes SYSTEM_SCOPE and sees built-in content only.)
+  const systemOnly = isSystemScope(userId);
+  if (systemOnly) {
+    where.push(systemArticleClause('articles'));
+  } else if (userId) {
     where.push('articles.user_id = ?');
     params.push(userId);
   }
@@ -707,8 +1035,8 @@ function getArticles({ page = 1, limit = 50, category, severity, search, source_
     params.push(sector);
   }
   if (threat_actor) {
-    where.push('articles.threat_actors LIKE ?');
-    params.push(`%${threat_actor}%`);
+    where.push("articles.threat_actors LIKE ? ESCAPE '\\'");
+    params.push(likeContains(threat_actor));
   }
   // Detection-engineering filters
   if (has_poc === '1' || has_poc === 1 || has_poc === true) {
@@ -721,10 +1049,18 @@ function getArticles({ page = 1, limit = 50, category, severity, search, source_
     where.push('articles.is_patched = ?');
     params.push(parseInt(is_patched, 10));
   }
+  // Watchlist: any of the user's terms in the title, description, CVE or actor fields
+  if (Array.isArray(watchTerms)) {
+    if (!watchTerms.length) where.push('0');
+    else {
+      where.push('(' + watchTerms.map(() => "(articles.title LIKE ? ESCAPE '\\' OR articles.description LIKE ? ESCAPE '\\' OR articles.cve_id LIKE ? ESCAPE '\\' OR articles.threat_actors LIKE ? ESCAPE '\\')").join(' OR ') + ')');
+      for (const t of watchTerms) { const l = likeContains(t); params.push(l, l, l, l); }
+    }
+  }
   if (search) {
-    where.push('(articles.title LIKE ? OR articles.description LIKE ? OR articles.cve_id LIKE ? OR articles.author LIKE ? OR articles.tags LIKE ? OR articles.threat_actors LIKE ?)');
-    const term = `%${search}%`;
-    params.push(term, term, term, term, term, term);
+    where.push("(articles.title LIKE ? ESCAPE '\\' OR articles.description LIKE ? ESCAPE '\\' OR articles.cve_id LIKE ? ESCAPE '\\' OR articles.author LIKE ? ESCAPE '\\' OR articles.tags LIKE ? ESCAPE '\\' OR articles.threat_actors LIKE ? ESCAPE '\\' OR articles.mitre_ids LIKE ? ESCAPE '\\' OR articles.sector LIKE ? ESCAPE '\\')");
+    const term = likeContains(search);
+    params.push(term, term, term, term, term, term, term, term);
   }
   if (startDate) {
     where.push('articles.published_date >= ?');
@@ -736,6 +1072,8 @@ function getArticles({ page = 1, limit = 50, category, severity, search, source_
   }
 
   const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+  page = clampInt(page, 1, 1, 1000000);
+  limit = clampInt(limit, 50, 1, 200);
   const offset = (page - 1) * limit;
 
   const countRow = getDb().prepare(`SELECT COUNT(*) as total FROM articles ${whereClause}`).get(...params);
@@ -751,33 +1089,56 @@ function getArticles({ page = 1, limit = 50, category, severity, search, source_
      FROM articles ${whereClause} ORDER BY articles.published_date DESC LIMIT ? OFFSET ?`
   ).all(...params, limit, offset);
 
+  if (systemOnly) articles.forEach(redactForSystemScope);
   return { articles, total, page, totalPages };
 }
 
-function getArticleStats(userId = null) {
+// tzOffsetMinutes: the viewer's offset from UTC (minutes EAST of UTC, i.e.
+// -Date#getTimezoneOffset()). "Today", "yesterday" and the timeline's days are the
+// viewer's local calendar days, so the stat card, the chart and the feed's
+// "Today" group all count the same articles. The 7-day windows are exactly
+// "now - 7 days", the same as the feed's "Last 7 Days" filter.
+function tzModifier(tzOffsetMinutes) {
+  let tz = parseInt(tzOffsetMinutes, 10);
+  if (!Number.isFinite(tz)) tz = 0;
+  tz = Math.max(-14 * 60, Math.min(14 * 60, tz));
+  return `${tz >= 0 ? '+' : '-'}${Math.abs(tz)} minutes`;
+}
+
+function getArticleStats(userId = null, { tzOffsetMinutes = 0 } = {}) {
   const d = getDb();
-  // Fully isolated per user; admin passes no userId to see totals across everyone.
-  const userFilter = userId ? 'AND user_id = ?' : '';
-  const userFilterParam = userId ? [parseInt(userId)] : [];
+  // Fully isolated per user; admin passes no userId to see totals across everyone;
+  // SYSTEM_SCOPE (guest) counts built-in sources and their articles only.
+  const systemOnly = isSystemScope(userId);
+  const userFilter = systemOnly ? `AND ${systemArticleClause('articles')}` : userId ? 'AND user_id = ?' : '';
+  const userFilterParam = (!systemOnly && userId) ? [parseInt(userId)] : [];
+  const tz = tzModifier(tzOffsetMinutes);
+  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
   const threatsToday = d.prepare(
-    `SELECT COUNT(*) as count FROM articles WHERE date(published_date) = date('now') ${userFilter}`
-  ).get(...userFilterParam).count;
+    `SELECT COUNT(*) as count FROM articles WHERE date(published_date, ?) = date('now', ?) ${userFilter}`
+  ).get(tz, tz, ...userFilterParam).count;
 
   const threatsYesterday = d.prepare(
-    `SELECT COUNT(*) as count FROM articles WHERE date(published_date) = date('now', '-1 day') ${userFilter}`
-  ).get(...userFilterParam).count;
+    `SELECT COUNT(*) as count FROM articles WHERE date(published_date, ?) = date('now', ?, '-1 day') ${userFilter}`
+  ).get(tz, tz, ...userFilterParam).count;
 
+  // Unique critical *vulnerabilities*: one per CVE (many articles cover the same
+  // CVE), plus critical vulnerability/advisory items without a CVE ID. Critical
+  // general news no longer inflates this number.
   const criticalVulns = d.prepare(
-    `SELECT COUNT(*) as count FROM articles WHERE severity = 'critical' AND date(published_date) >= date('now', '-7 days') ${userFilter}`
-  ).get(...userFilterParam).count;
+    `SELECT COUNT(DISTINCT COALESCE(cve_id, 'article-' || id)) as count FROM articles
+     WHERE severity = 'critical'
+       AND (cve_id IS NOT NULL OR category IN ('vulnerability', 'advisory'))
+       AND published_date >= ? ${userFilter}`
+  ).get(weekAgo, ...userFilterParam).count;
 
   const pocsDetected = d.prepare(
-    `SELECT COUNT(*) as count FROM articles WHERE has_poc = 1 AND date(published_date) >= date('now', '-7 days') ${userFilter}`
-  ).get(...userFilterParam).count;
+    `SELECT COUNT(*) as count FROM articles WHERE has_poc = 1 AND published_date >= ? ${userFilter}`
+  ).get(weekAgo, ...userFilterParam).count;
 
-  const sourceFilter = userId ? 'AND user_id = ?' : '';
-  const sourceFilterParam = userId ? [parseInt(userId)] : [];
+  const sourceFilter = systemOnly ? `AND ${systemSourceClause('sources')}` : userId ? 'AND user_id = ?' : '';
+  const sourceFilterParam = (!systemOnly && userId) ? [parseInt(userId)] : [];
   const activeSources = d.prepare(
     `SELECT COUNT(*) as count FROM sources WHERE enabled = 1 AND last_fetched IS NOT NULL AND last_error IS NULL ${sourceFilter}`
   ).get(...sourceFilterParam).count;
@@ -787,7 +1148,7 @@ function getArticleStats(userId = null) {
   ).get(...sourceFilterParam).count;
 
   const lastFetch = d.prepare(
-    `SELECT MAX(s.last_fetched) as last FROM sources s WHERE s.enabled = 1 ${sourceFilter}`
+    `SELECT MAX(sources.last_fetched) as last FROM sources WHERE sources.enabled = 1 ${sourceFilter}`
   ).get(...sourceFilterParam);
 
   const totalArticles = d.prepare(
@@ -796,16 +1157,16 @@ function getArticleStats(userId = null) {
 
   // Timeline data: all article counts grouped by day (frontend handles range)
   const timeline = d.prepare(
-    `SELECT date(published_date) as day, COUNT(*) as count,
+    `SELECT date(published_date, ?) as day, COUNT(*) as count,
             SUM(CASE WHEN severity = 'critical' THEN 1 ELSE 0 END) as critical,
             SUM(CASE WHEN severity = 'high' THEN 1 ELSE 0 END) as high,
             SUM(CASE WHEN severity = 'medium' THEN 1 ELSE 0 END) as medium,
             SUM(CASE WHEN severity = 'low' THEN 1 ELSE 0 END) as low
      FROM articles
      WHERE 1=1 ${userFilter}
-     GROUP BY date(published_date)
+     GROUP BY day
      ORDER BY day ASC`
-  ).all(...userFilterParam);
+  ).all(tz, ...userFilterParam);
 
   return {
     threatsToday,
@@ -837,14 +1198,17 @@ function markAsNotified(articleIds) {
 }
 
 function searchArticles(query, limit = 50, userId = null) {
-  const term = `%${query}%`;
-  const userFilter = userId ? `AND user_id = ?` : '';
-  const params = userId
+  const term = likeContains(query);
+  limit = clampInt(limit, 50, 1, 200);
+  const systemOnly = isSystemScope(userId);
+  const userFilter = systemOnly ? `AND ${systemArticleClause('articles')}` : userId ? `AND user_id = ?` : '';
+  const params = (!systemOnly && userId)
     ? [term, term, term, term, term, userId, limit]
     : [term, term, term, term, term, limit];
-  return getDb().prepare(
-    `SELECT * FROM articles WHERE (title LIKE ? OR description LIKE ? OR cve_id LIKE ? OR tags LIKE ? OR author LIKE ?) ${userFilter} ORDER BY published_date DESC LIMIT ?`
+  const rows = getDb().prepare(
+    `SELECT * FROM articles WHERE (title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR cve_id LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\' OR author LIKE ? ESCAPE '\\') ${userFilter} ORDER BY published_date DESC LIMIT ?`
   ).all(...params);
+  return systemOnly ? rows.map(redactForSystemScope) : rows;
 }
 
 // Common English stopwords + threat-intel filler words so natural-language
@@ -872,7 +1236,8 @@ function searchArticlesRag(question, limit = 8, userId = null) {
   const keywords = extractKeywords(question);
   if (!keywords.length) return [];
 
-  const userFilter = userId ? 'AND user_id = ?' : '';
+  const systemOnly = isSystemScope(userId);
+  const userFilter = systemOnly ? `AND ${systemArticleClause('articles')}` : userId ? 'AND user_id = ?' : '';
   const select = getDb().prepare(
     `SELECT * FROM articles WHERE (title LIKE ? OR description LIKE ? OR cve_id LIKE ? OR tags LIKE ? OR author LIKE ?) ${userFilter} ORDER BY published_date DESC LIMIT 20`
   );
@@ -880,10 +1245,11 @@ function searchArticlesRag(question, limit = 8, userId = null) {
   const seen = new Map();
   for (const kw of keywords) {
     const term = `%${kw}%`;
-    const params = userId
+    const params = (!systemOnly && userId)
       ? [term, term, term, term, term, userId]
       : [term, term, term, term, term];
     const rows = select.all(...params);
+    if (systemOnly) rows.forEach(redactForSystemScope);
     for (const r of rows) {
       if (!seen.has(r.id)) seen.set(r.id, r);
     }
@@ -898,6 +1264,23 @@ function searchArticlesRag(question, limit = 8, userId = null) {
     })
     .sort((x, y) => (y.score - x.score) || (new Date(y.published_date || 0) - new Date(x.published_date || 0)))
     .slice(0, limit);
+}
+
+// Fallback context for feed questions that match no keywords ("what's new?",
+// "latest critical threats"): the most recent articles in scope, most severe first.
+function getRecentArticlesRag(limit = 8, userId = null) {
+  const systemOnly = isSystemScope(userId);
+  const where = systemOnly ? `WHERE ${systemArticleClause('articles')}` : userId ? 'WHERE user_id = ?' : '';
+  const rows = getDb().prepare(
+    `SELECT * FROM articles ${where} ORDER BY published_date DESC LIMIT 40`
+  ).all(...((!systemOnly && userId) ? [userId] : []));
+  if (systemOnly) rows.forEach(redactForSystemScope);
+  const rank = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+  return rows
+    .map((a, i) => ({ a, i, r: rank[String(a.severity || '').toLowerCase()] ?? 5 }))
+    .sort((x, y) => (x.r - y.r) || (x.i - y.i))
+    .slice(0, limit)
+    .map(x => ({ ...x.a, recent: true }));
 }
 
 function getArticleById(id) {
@@ -983,7 +1366,8 @@ function updateNotificationSettings(settings, userId = null) {
       // Skip masked secrets (don't overwrite a real value with its masked form)
       if ((key === 'telegram_bot_token' || key === 'whatsapp_apikey') && val && String(val).includes('...')) continue;
       fields.push(`${key} = ?`);
-      values.push(val);
+      // better-sqlite3 can't bind booleans (JSON true/false threw -> HTTP 500)
+      values.push(typeof val === 'boolean' ? (val ? 1 : 0) : val);
     }
   }
   if (fields.length === 0) return { success: false };
@@ -1026,9 +1410,10 @@ function getAuditLog(limit = 100) {
 // Verification codes for email/password updates
 function createVerificationCode(userId, type, targetValue, code, expiresAt) {
   getDb().prepare('DELETE FROM verification_codes WHERE user_id = ? AND type = ?').run(userId, type);
-  getDb().prepare(
+  const r = getDb().prepare(
     'INSERT INTO verification_codes (user_id, type, target_value, code, expires_at) VALUES (?, ?, ?, ?, ?)'
   ).run(userId, type, targetValue, code, expiresAt);
+  return r.lastInsertRowid;
 }
 
 function validateVerificationCode(userId, type, code) {
@@ -1050,6 +1435,22 @@ function getSetting(key) {
     const row = getDb().prepare('SELECT value FROM app_settings WHERE key = ?').get(key);
     return row ? row.value : null;
   } catch (e) { return null; }
+}
+
+// Random id of this database instance. Ephemeral hosting wipes the DB on
+// restart and user ids start again at 1, while JWT_SECRET stays the same:
+// tokens carry this id so a pre-restart token can't map onto a new user.
+let instanceIdCache = null;
+function getInstanceId() {
+  if (instanceIdCache) return instanceIdCache;
+  let id = getSetting('db_instance_id');
+  if (!id) {
+    id = require('crypto').randomBytes(12).toString('hex');
+    getDb().prepare('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)').run('db_instance_id', id);
+    id = getSetting('db_instance_id') || id;
+  }
+  instanceIdCache = id;
+  return id;
 }
 
 function setSetting(key, value) {
@@ -1112,11 +1513,22 @@ function deleteThread(threadId, userId) {
 }
 
 module.exports = {
+  getDbPath: () => DB_PATH,
+  getWatchlist,
+  addWatchTerm,
+  removeWatchTerm,
+  savePocCheck,
+  getPocCheck,
+  getPocTrackerArticles,
+  getUncheckedPocArticles,
+  getGeoArticles,
   getDb,
   initializeSchema,
   // Users
   createUser,
   getUserByUsername,
+  getUserByUsernameCI,
+  getDbInfo,
   getUserById,
   getUserByEmail,
   getAllUsers,
@@ -1134,6 +1546,7 @@ module.exports = {
   createPasswordResetToken,
   validatePasswordResetToken,
   markResetTokenUsed,
+  hasRecentResetToken,
   cleanupExpiredResetTokens,
   getPendingResetTokens,
   // Invite Codes
@@ -1143,6 +1556,7 @@ module.exports = {
   getValidInviteCodes,
   // Sources
   getAllSources,
+  getSystemSources,
   getSourcesForUser: getSourcesForUserFixed,
   getEnabledSources,
   getEnabledSourcesForUser,
@@ -1161,7 +1575,10 @@ module.exports = {
   markAsNotified,
   searchArticles,
   searchArticlesRag,
+  getRecentArticlesRag,
   getArticleById,
+  isSystemArticle,
+  SYSTEM_SCOPE,
   // Reviews
   startReview,
   completeReview,
@@ -1182,6 +1599,7 @@ module.exports = {
   // Utils
   hashUrl,
   getSetting,
+  getInstanceId,
   setSetting,
   // AI chat threads
   createThread,

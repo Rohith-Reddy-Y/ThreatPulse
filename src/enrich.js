@@ -8,16 +8,22 @@
 // ── Industry sector ──────────────────────────────────────────
 // Only the four sectors exposed in the dashboard filter dropdown.
 const SECTOR_PATTERNS = [
-  ['financial', /\b(bank|banking|financial|finance|fintech|payment|credit[- ]card|swift|atm|pci[- ]dss|pci|wire transfer|monetary|insurer|insurance|stock exchange|brokerage|trading platform|crypto(currency)?[- ]exchange|fs-isac)\b/i],
+  // "SWIFT" is matched case-sensitively below: "Swift" is also Apple's programming language.
+  ['financial', /\b(bank|banking|financial|finance|fintech|payment|credit[- ]card|atm|pci[- ]dss|pci|wire transfer|monetary|insurer|insurance|stock exchange|brokerage|trading platform|crypto(currency)?[- ]exchange|fs-isac)\b/i],
   ['healthcare', /\b(hospital|hipaa|patient|medical|pharma(ceutical)?|healthcare|health[- ]care|clinic|ehr|health data|medicare|medicaid|biotech|life sciences|medtech)\b/i],
-  ['government', /\b(government|federal|election|state[- ]sponsored|military|defense|ministry|municipal|public sector|national security|pentagon|nation[- ]state|city council|\.gov|cisa|nsa|fbi)\b/i],
+  // Victim sector only: agencies that *report* (CISA/FBI/NSA) and attacker
+  // descriptors (nation-state, state-sponsored) don't make an article "government",
+  // and "defense evasion" isn't the defense industry.
+  ['government', /\b(government agenc(y|ies)|government (network|system|website|entit(y|ies))s?|federal agenc(y|ies)|election(s)?|military|defen[cs]e (contractor|industr(y|ial)|ministry|department)|ministry|municipal(ity|ities)?|public sector|pentagon|city council|local government)\b/i],
   ['technology', /\b(cloud|saas|paas|devops|kubernetes|docker|ci\/cd|software supply chain|open[- ]source|data center|semiconductor|microservice|npm|pypi|github|gitlab|api gateway|tech giant|software vendor)\b/i],
 ];
+
+const SWIFT_NETWORK = /\bSWIFT\b/;
 
 function detectSector(text) {
   const t = String(text || '');
   for (const [sector, re] of SECTOR_PATTERNS) {
-    if (re.test(t)) return sector;
+    if (re.test(t) || (sector === 'financial' && SWIFT_NETWORK.test(t))) return sector;
   }
   return null;
 }
@@ -69,31 +75,37 @@ const DISTINCTIVE_ACTORS = [
   'UNC2452', 'UNC3886', 'Star Blizzard', 'Midnight Blizzard', 'Forest Blizzard',
   'BlackTech', 'Mustang Panda', 'Gamaredon', 'Lapsus', 'Vice Society',
   'BianLian', 'NoEscape', 'Hunters International', 'INC Ransom', 'RansomHub',
-  'Qilin', 'DragonForce', 'BlackByte', 'Snatch',
+  'Qilin', 'DragonForce', 'BlackByte',
 ];
 
 // Ambiguous names that are also ordinary English words — only tag these when the
 // text also mentions a threat context, to avoid false positives ("Play Store",
 // "Royal Mail", "display", etc.).
-const AMBIGUOUS_ACTORS = ['Play', 'Akira', 'Medusa', 'Royal', 'Embargo', 'Hive', 'Cuba', 'Maze'];
+const AMBIGUOUS_ACTORS = ['Play', 'Akira', 'Medusa', 'Royal', 'Embargo', 'Hive', 'Cuba', 'Maze', 'Snatch'];
 const THREAT_CONTEXT = /\b(ransomware|ransom|threat actor|threat group|apt|gang|extortion|leak site|data breach|cybercrime|affiliate|encryptor)\b/i;
 
 function escapeRegExp(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// Compile once (was: ~200 new RegExp objects per article on every fetch cycle).
+const DISTINCTIVE_RE = DISTINCTIVE_ACTORS.map(a => [a, new RegExp(`\\b${escapeRegExp(a)}\\b`, 'i')]);
+const AMBIGUOUS_RE = AMBIGUOUS_ACTORS.map(a => [a, new RegExp(`\\b${escapeRegExp(a)}\\b`, 'i')]);
+// Fast pre-filter: one combined pass; per-actor regexes only run if something matched.
+const ANY_DISTINCTIVE = new RegExp(`\\b(${DISTINCTIVE_ACTORS.map(escapeRegExp).join('|')})\\b`, 'i');
+
 function detectThreatActors(text) {
   const t = String(text || '');
   const found = new Set();
 
-  for (const actor of DISTINCTIVE_ACTORS) {
-    const re = new RegExp(`\\b${escapeRegExp(actor)}\\b`, 'i');
-    if (re.test(t)) found.add(actor);
+  if (ANY_DISTINCTIVE.test(t)) {
+    for (const [actor, re] of DISTINCTIVE_RE) {
+      if (re.test(t)) found.add(actor);
+    }
   }
 
   if (THREAT_CONTEXT.test(t)) {
-    for (const actor of AMBIGUOUS_ACTORS) {
-      const re = new RegExp(`\\b${escapeRegExp(actor)}\\b`, 'i');
+    for (const [actor, re] of AMBIGUOUS_RE) {
       if (re.test(t)) found.add(actor);
     }
   }
@@ -103,7 +115,9 @@ function detectThreatActors(text) {
 
 // ── MITRE ATT&CK technique / tactic IDs ──────────────────────
 function extractMitreIds(text) {
-  const matches = String(text || '').match(/\b(T[1-9]\d{3}(\.\d{3})?|TA00\d{2})\b/g);
+  // Enterprise ATT&CK IDs are T1xxx (and TA00xx tactics). "T8557" (a bug-tracker
+  // id) or "SPPA-T3000" (a product name) are not techniques.
+  const matches = String(text || '').match(/(?<![\w-])(T1\d{3}(\.\d{3})?|TA00\d{2})\b/g);
   if (!matches || matches.length === 0) return null;
   return [...new Set(matches.map(m => m.toUpperCase()))].join(',');
 }

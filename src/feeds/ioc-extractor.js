@@ -9,8 +9,25 @@
  * @param {string} text - Article title + description
  * @returns {{ ips: string[], domains: string[], hashes: {md5:string[],sha1:string[],sha256:string[]}, emails: string[] }}
  */
+const MAX_SCAN = 8000;
+// Anchored, per-token domain check. The old unanchored /\b(?:label\.)+tld\b/g
+// backtracked quadratically on long dotted runs ("1.1.1.1…" with no letter TLD)
+// and a single crafted feed title could block the event loop for minutes.
+const DOMAIN_TOKEN_RE = /^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
+function domainCandidates(text) {
+  const out = [];
+  for (let tok of text.split(/[\s\/\\:@<>()\[\]{}"'`,;|!?*=&#%+~^$]+/)) {
+    tok = tok.replace(/^[.\-_]+|[.\-_]+$/g, '');
+    if (tok.length < 4 || tok.length > 253 || tok.indexOf('.') === -1) continue;
+    if (DOMAIN_TOKEN_RE.test(tok)) out.push(tok);
+  }
+  return out;
+}
+
 function extractIOCs(text) {
   if (!text) return { ips: [], domains: [], hashes: { md5: [], sha1: [], sha256: [] }, emails: [] };
+  // Feed text is attacker-controlled: bound the work per article.
+  text = String(text).slice(0, MAX_SCAN);
 
   const results = {
     ips: [],
@@ -21,7 +38,24 @@ function extractIOCs(text) {
 
   // ── IPv4 ──
   const ipv4Re = /\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b/g;
-  const ipMatches = text.match(ipv4Re) || [];
+  const ipMatches = [];
+  for (const m of text.matchAll(ipv4Re)) {
+    const before = text.slice(Math.max(0, m.index - 12), m.index);
+    const after = text.slice(m.index + m[0].length, m.index + m[0].length + 2);
+    // Part of a longer dotted number ("4.4.2.1.5", "10.0.19041.1") or a version
+    // ("kernel 5.15.0.91", "version 1.2.3.4", "build 6.1.0.12") — not an IP.
+    if (/\d\.$/.test(before) || /^\.\d/.test(after)) continue;
+    if (/\b(version|ver\.?|build|release|kernel|firmware|v)\s*$/i.test(before)) continue;
+    // Product version right after a product name ("FortiOS 7.4.2.1", "Chrome
+    // 131.0.6778.85", "PAN-OS 10.2.9.1"): a word glued to the number by one
+    // space, with a small first octet typical of version numbers. Real IOCs are
+    // normally introduced by "IP", ":", "from", a list, or appear defanged.
+    const octs = m[0].split('.').map(Number);
+    if (/[A-Za-z][A-Za-z0-9-]*[A-Za-z0-9] $/.test(before) &&
+        !/\b(ip|ips|address|addresses|host|server|c2|c&c|from|to|at|via|and|or)\s$/i.test(before) &&
+        octs[0] <= 30 && octs[1] <= 30) continue;
+    ipMatches.push(m[0]);
+  }
   results.ips = [...new Set(ipMatches.filter(ip => {
     // Exclude common non-routable/placeholder IPs
     const octets = ip.split('.').map(Number);
@@ -31,19 +65,29 @@ function extractIOCs(text) {
       (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
       (octets[0] === 192 && octets[1] === 168) ||
       (octets[0] === 169 && octets[1] === 254) ||
+      (octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127) ||              // CGNAT
+      (octets[0] === 198 && (octets[1] === 18 || octets[1] === 19)) ||           // benchmarking
+      (octets[0] === 192 && octets[1] === 0 && (octets[2] === 0 || octets[2] === 2)) ||  // IETF / TEST-NET-1
+      (octets[0] === 198 && octets[1] === 51 && octets[2] === 100) ||            // TEST-NET-2
+      (octets[0] === 203 && octets[1] === 0 && octets[2] === 113) ||             // TEST-NET-3
       octets[0] >= 224
     );
   }))];
 
   // ── Domains (no IPs, no TLD-only) ──
-  const domainRe = /\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}\b/g;
-  const domainMatches = text.match(domainRe) || [];
+  const domainMatches = domainCandidates(text);
   results.domains = [...new Set(domainMatches.filter(d => {
     // Exclude IPs, common false positives, very short domains
     if (/^\d+\.\d+\.\d+\.\d+$/.test(d)) return false;
     // Exclude common TLDs that appear as sentence endings / filenames
     const fakeTlds = /\.(com|org|net|io|gov|edu|mil|info|biz|co|uk|de|jp|fr|ru|cn|br|in|au|ca|it|es|nl|se|ch|pl|kr|tw)$/i;
-    return d.length > 7 && fakeTlds.test(d);
+    if (!(d.length > 7 && fakeTlds.test(d))) return false;
+    // Code identifiers like "System.IO" / "ASP.NET": a capitalised TLD is not
+    // how domains are written in prose.
+    if (/\.[A-Z]{2,}$/.test(d) && /[a-z]/.test(d)) return false;
+    // ".au" is only registered at the third level (example.com.au); "sound.au" is a file
+    if (/\.au$/i.test(d) && d.split('.').length < 3) return false;
+    return true;
   }))].slice(0, 50); // cap at 50
 
   // ── Hashes ──
@@ -57,7 +101,7 @@ function extractIOCs(text) {
   results.hashes.sha256 = results.hashes.sha256.filter(h => !/^[0-9]+$/.test(h) && !/^0+$/.test(h));
 
   // ── Emails (limited) ──
-  const emailRe = /\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b/g;
+  const emailRe = /\b[a-zA-Z0-9._%+-]{1,64}@[a-zA-Z0-9.-]{1,253}\.[a-zA-Z]{2,24}\b/g;
   results.emails = [...new Set(text.match(emailRe) || [])].slice(0, 10);
 
   return results;

@@ -8,6 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/css/styles.css">
+  <link rel="stylesheet" href="/css/enterprise.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237c5cff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z'/><path d='M9 12l2 2 4-4'/></svg>">
   <script>
     (function () {
@@ -46,8 +47,10 @@
     <div style="display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap;">
       <button class="pill active" data-admin-tab="users">Users</button>
       <button class="pill" data-admin-tab="invites">Invite Codes</button>
-      <button class="pill" data-admin-tab="sources">All Sources</button>
+      <button class="pill" data-admin-tab="sources">All Sources <span id="sources-tab-new" class="catalog-new hidden"></span></button>
       <button class="pill" data-admin-tab="audit">Audit Log</button>
+      <button class="pill" data-admin-tab="resets">Password Resets</button>
+      <button class="pill" data-admin-tab="email">Email</button>
       <button class="pill" data-admin-tab="ai">AI Settings</button>
     </div>
 
@@ -78,8 +81,28 @@
 
     <!-- Sources Tab -->
     <div class="admin-tab hidden" id="tab-sources">
+      <!-- Source catalog: one row per unique feed across every user -->
+      <div class="sidebar-card catalog-card" style="max-width:100%;margin-bottom:18px;">
+        <h3 class="sidebar-title">Source Catalog <span id="catalog-new-badge" class="catalog-new hidden">0 new</span></h3>
+        <p style="color:var(--text-muted);font-size:12px;margin:0 0 12px;">Every feed on the platform, listed once. When someone adds a feed that isn't in the built-in list it appears here automatically as <b>User-submitted</b>; if several people add the same feed (or it matches a built-in one) it is not duplicated — their names are added to it instead.</p>
+        <div id="catalog-stats" class="catalog-stats"></div>
+        <div class="catalog-toolbar">
+          <button class="pill active" data-catalog-filter="all">All</button>
+          <button class="pill" data-catalog-filter="user">User-submitted</button>
+          <button class="pill" data-catalog-filter="shared">Built-in, also added by users</button>
+          <button class="pill" data-catalog-filter="builtin">Built-in</button>
+          <input type="search" id="catalog-search" class="filter-select" placeholder="Search feed, URL or person…" autocomplete="off">
+        </div>
+        <div style="overflow-x:auto;">
+          <table class="admin-table catalog-table">
+            <thead><tr><th>Feed</th><th>Origin</th><th>Added by</th><th>Type</th><th>Status</th><th>First added</th></tr></thead>
+            <tbody id="catalog-tbody"><tr><td colspan="6" style="color:var(--text-muted);">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
       <div class="sidebar-card" style="max-width:100%;">
-        <h3 class="sidebar-title">All Sources (God View)</h3>
+        <h3 class="sidebar-title">Per-user Sources (edit / delete)</h3>
         <div class="bulk-actions hidden" id="sources-bulk-actions">
           <span id="selected-count">0 selected</span>
           <button class="btn btn-ghost" id="bulk-edit-btn" style="font-size:12px;padding:4px 10px;">Edit URL</button>
@@ -103,6 +126,52 @@
       </div>
     </div>
 
+    <!-- Password Resets Tab (manual recovery when the server cannot send email) -->
+    <div class="admin-tab hidden" id="tab-resets">
+      <div class="sidebar-card" style="max-width:100%;">
+        <h3 class="sidebar-title">Pending Password Resets</h3>
+        <p id="resets-note" style="color:var(--text-muted);font-size:12px;margin:0 0 12px;">Reset links requested via "Forgot Password" that have not been used yet (valid for 1 hour). If this server cannot send email, verify the requester and give them their link.</p>
+        <button class="btn btn-ghost" id="refresh-resets-btn" style="margin-bottom:12px;font-size:12px;padding:4px 10px;">Refresh</button>
+        <div style="overflow-x:auto;">
+          <table class="admin-table" id="resets-table">
+            <thead><tr><th>User</th><th>Email</th><th>Requested</th><th>Expires</th><th>Reset link</th></tr></thead>
+            <tbody id="resets-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Email Delivery Tab -->
+    <div class="admin-tab hidden" id="tab-email">
+      <div class="sidebar-card" style="max-width:680px;">
+        <h3 class="sidebar-title">Email Delivery <span id="email-status-badge" class="badge badge-breach">checking…</span></h3>
+        <p style="color:var(--text-muted);font-size:12px;margin:0 0 14px;">Password-reset links, password/email change codes, security notices, welcome emails and email alerts all use this. Render's free tier blocks SMTP, so ThreatPulse sends through Brevo's HTTPS API (free: 300 emails/day).</p>
+        <table class="admin-table" style="margin-bottom:14px;">
+          <tbody>
+            <tr><td style="width:40%;color:var(--text-muted);">Provider</td><td id="email-provider">—</td></tr>
+            <tr><td style="color:var(--text-muted);">Sender (MAIL_FROM)</td><td id="email-from">—</td></tr>
+            <tr><td style="color:var(--text-muted);">Your admin email</td><td id="email-admin">—</td></tr>
+            <tr><td style="color:var(--text-muted);">Registration</td><td id="email-invite">—</td></tr>
+          </tbody>
+        </table>
+        <div id="email-problem" class="hidden" style="color:var(--amber, #ffb020);font-size:12px;margin-bottom:12px;"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn btn-primary" id="email-test-btn">Send test email to me</button>
+          <button class="btn btn-ghost" id="email-refresh-btn">Refresh</button>
+        </div>
+        <details style="margin-top:18px;font-size:12.5px;color:var(--text-muted);">
+          <summary style="cursor:pointer;color:var(--text-primary);">How to set up (free, 5 minutes)</summary>
+          <ol style="margin:10px 0 0 18px;line-height:1.7;">
+            <li>Create a free account at brevo.com.</li>
+            <li>Brevo → <b>Senders, Domains &amp; Dedicated IPs → Senders</b> → add the address mail should come from (e.g. your Gmail) and click the link Brevo emails you.</li>
+            <li>Brevo → <b>SMTP &amp; API → API Keys</b> → generate a key.</li>
+            <li>Render → threatpulse → <b>Environment</b>: add <code>BREVO_API_KEY</code> (the key) and <code>MAIL_FROM</code> (the verified sender). Save — Render redeploys.</li>
+            <li>If the test says the IP is unrecognised: Brevo → <b>Security → Authorised IPs</b> → turn off IP blocking (Render's IPs change).</li>
+          </ol>
+        </details>
+      </div>
+    </div>
+
     <!-- AI Settings Tab -->
     <div class="admin-tab hidden" id="tab-ai">
       <div class="sidebar-card" style="max-width:640px;">
@@ -112,7 +181,7 @@
         <input type="password" id="ai-groq-key" class="filter-select" placeholder="Paste your Groq API key..." autocomplete="off" style="width:100%;margin-bottom:12px;">
         <label class="form-label" for="ai-tavily-key" style="font-size:13px;">Tavily API key (web search, optional) <span id="ai-tavily-status" class="badge badge-breach">not set</span></label>
         <input type="password" id="ai-tavily-key" class="filter-select" placeholder="Paste your Tavily API key..." autocomplete="off" style="width:100%;margin-bottom:12px;">
-        <div style="font-size:12px;color:var(--text-muted);margin-bottom:16px;">Model: <span id="ai-model" style="color:var(--cyan);">llama-3.3-70b-versatile</span></div>
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:16px;">Model: <span id="ai-model" style="color:var(--cyan);">openai/gpt-oss-120b</span></div>
         <button class="btn btn-primary" id="ai-save-btn">Save AI Settings</button>
       </div>
     </div>

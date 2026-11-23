@@ -3,9 +3,9 @@
  * Scrapes article metadata from custom URLs that don't have RSS feeds
  */
 
-const axios = require('axios');
+const { safeGet } = require('../net-guard');
 const cheerio = require('cheerio');
-const { detectCategory, detectSeverity, extractCVE, detectPOC, detectPatchStatus } = require('./rss-fetcher');
+const { articleCategory, detectCategory, detectSeverity, extractCVE, detectPOC, detectPatchStatus } = require('./rss-fetcher');
 
 const HTTP_CONFIG = {
   timeout: 15000,
@@ -89,27 +89,47 @@ function extractArticleLinks($, baseUrl) {
       let href = $(el).attr('href');
       if (!href) return;
 
-      // Make absolute URL
-      if (href.startsWith('/')) {
-        try {
-          const base = new URL(baseUrl);
-          href = `${base.protocol}//${base.host}${href}`;
-        } catch { return; }
-      }
-      if (!href.startsWith('http')) return;
+      // Make absolute URL (handles "/path", "//host/path" and "path" correctly;
+      // "//cdn.example/x" used to become "https://site//cdn.example/x" and
+      // "posts/1" was dropped)
+      if (/^(javascript|mailto|tel|data):/i.test(href.trim())) return;
+      try { href = new URL(href, baseUrl).href; } catch { return; }
+      if (!/^https?:/i.test(href)) return;
 
       // Skip non-article URLs
       if (href.includes('#') || href.includes('javascript:') || href.includes('/tag/') ||
           href.includes('/category/') || href.includes('/author/') || href.includes('/page/')) return;
 
-      if (!seen.has(href)) {
-        seen.add(href);
-        links.push({
-          url: href,
-          title: $(el).text().trim() || null
-        });
-      }
+      // Keep every anchor (cleanLinks picks the best title per URL), but cap the work
+      seen.add(href);
+      if (links.length < 400) links.push({ url: href, title: $(el).text().trim() || null });
     });
+  }
+
+  // Generic fallback for sites whose markup matches none of the selectors above
+  // (e.g. Fox-IT's research index): same-site links exactly one slug-like path
+  // segment below the index page, such as /nl/research/<post-slug>/.
+  if (links.length === 0) {
+    let base = null;
+    try { base = new URL(baseUrl); } catch { /* ignore */ }
+    if (base) {
+      const basePath = base.pathname.endsWith('/') ? base.pathname : base.pathname + '/';
+      $('a[href]').each((_, el) => {
+        const raw = $(el).attr('href');
+        if (!raw || /^(javascript|mailto|tel|data):/i.test(raw.trim())) return;
+        let u;
+        try { u = new URL(raw, baseUrl); } catch { return; }
+        if (u.host !== base.host || !/^https?:$/.test(u.protocol)) return;
+        if (!u.pathname.startsWith(basePath) || u.pathname === basePath) return;
+        const rest = u.pathname.slice(basePath.length).replace(/\/$/, '');
+        // one segment, slug-like ("when-picos-attack-usb-exploit-engineering")
+        if (!rest || rest.includes('/') || rest.length < 8 || !/[a-z0-9]-[a-z0-9]/i.test(rest)) return;
+        if (/^(page|tag|tags|category|categories|author|search)\b/i.test(rest)) return;
+        const key = u.origin + u.pathname;
+        seen.add(key);
+        if (links.length < 400) links.push({ url: key, title: $(el).text().trim() || null });
+      });
+    }
   }
 
   return links.slice(0, 20); // Max 20 articles per source
@@ -120,7 +140,7 @@ function extractArticleLinks($, baseUrl) {
  */
 async function scrapeUrl(url) {
   try {
-    const response = await axios.get(url, HTTP_CONFIG);
+    const response = await safeGet(url, HTTP_CONFIG);
     const $ = cheerio.load(response.data);
     const metadata = extractMetadata($, url);
 
@@ -141,14 +161,44 @@ async function scrapeUrl(url) {
 /**
  * Scrape a source — either a single article or a blog/news index page
  */
+// Index pages often link each post several times ("Read more", an image, the
+// headline). Anchor text like "Read more" is not a title: fall back to the URL slug.
+const GENERIC_LINK_TEXT = /^(read( the)? more|more|continue( reading)?|learn more|view( more| all)?|details|full story|articles?|posts?|blog|news|research|click here|here|»|›|→)\W*$/i;
+const INDEX_SLUG = /^((research|security|threat)-)?(articles?|blogs?|news|posts|research|insights|resources|publications|reports)$/i;
+function titleFromSlug(url) {
+  try {
+    const seg = new URL(url).pathname.replace(/\/$/, '').split('/').pop() || '';
+    const words = decodeURIComponent(seg).replace(/\.(html?|php|aspx?)$/i, '').split(/[-_]+/).filter(Boolean);
+    if (words.length < 2) return '';
+    const t = words.join(' ');
+    return t.charAt(0).toUpperCase() + t.slice(1);
+  } catch { return ''; }
+}
+function cleanLinks(links) {
+  const byUrl = new Map();
+  for (const l of links) {
+    let seg = '';
+    try { seg = new URL(l.url).pathname.replace(/\/$/, '').split('/').pop() || ''; } catch { /* ignore */ }
+    if (INDEX_SLUG.test(seg)) continue;                      // section index, not a post
+    const text = (l.title || '').replace(/\s+/g, ' ').trim();
+    const good = text && text.length >= 12 && !GENERIC_LINK_TEXT.test(text) ? text : '';
+    const prev = byUrl.get(l.url);
+    if (!prev) byUrl.set(l.url, { url: l.url, title: good });
+    else if (!prev.title && good) prev.title = good;
+  }
+  return [...byUrl.values()]
+    .map(l => ({ url: l.url, title: l.title || titleFromSlug(l.url) }))
+    .filter(l => l.title);
+}
+
 async function scrapeSource(source) {
   try {
-    const response = await axios.get(source.url, HTTP_CONFIG);
+    const response = await safeGet(source.url, HTTP_CONFIG);
     const $ = cheerio.load(response.data);
     const articles = [];
 
     // First check if this is a single article or an index page
-    const articleLinks = extractArticleLinks($, source.url);
+    const articleLinks = cleanLinks(extractArticleLinks($, source.url));
 
     if (articleLinks.length > 0) {
       // It's an index page — scrape each article link
@@ -166,7 +216,7 @@ async function scrapeSource(source) {
           user_id: source.user_id || null,
           author: null,
           published_date: new Date().toISOString(),
-          category: source.category || category,
+          category: articleCategory(source, category),
           severity: detectSeverity(title, '', category),
           cve_id: extractCVE(title),
           is_patched: detectPatchStatus(title, ''),
@@ -190,7 +240,7 @@ async function scrapeSource(source) {
           user_id: source.user_id || null,
         author: metadata.author,
         published_date: metadata.publishedDate || new Date().toISOString(),
-        category: source.category || category,
+        category: articleCategory(source, category),
         severity: detectSeverity(metadata.title, metadata.description, category),
         cve_id: extractCVE(fullText),
         is_patched: detectPatchStatus(metadata.title, metadata.description),

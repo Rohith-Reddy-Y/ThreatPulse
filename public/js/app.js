@@ -9,9 +9,19 @@
   //  AUTH STATE (cookie-based httpOnly JWT — no localStorage)
   //
   let currentUser = null;
+  const aiAnalysis = new Map(); // articleId -> { open, loading, error, data }: AI card analysis kept across re-renders
+  let forcedChangeSecret = null; // sign-in password, held only until a forced change completes
   // Access token lifetime is 15 min; refresh proactively at 13 min
   const REFRESH_MARGIN = 13 * 60 * 1000; // refresh 2 min before expiry
   let refreshTimer = null;
+  let refreshPromise = null;   // single-flight: concurrent 401s share one refresh
+  let sessionEpoch = 0;        // bumped on logout so late refresh results are ignored
+  let clockInterval = null;
+  let faviconInterval = null;
+  let resetAiPanel = () => {}; // assigned in bindEvents (AI panel state lives there)
+  // Public server facts from /api/auth/config (invite codes, SMTP, DB reset time)
+  let emailNudged = false;
+  let serverConfig = { requireInvite: true, emailEnabled: false, dbCreatedAt: null };
 
   //
   //  STATE
@@ -22,7 +32,7 @@
     currentPage: 1,
     totalPages: 1,
     totalArticles: 0,
-    filters: { category: '', severity: '', source_type: '', search: '', sector: '', threat_actor: '', has_poc: '', has_mitre: '', is_patched: '', time_range: '', start_date: '', end_date: '' },
+    filters: { category: '', severity: '', source_type: '', search: '', sector: '', threat_actor: '', has_poc: '', has_mitre: '', watchlist: '', is_patched: '', time_range: '', start_date: '', end_date: '' },
     refreshCountdown: 60,
     refreshTimer: null,
     countdownTimer: null,
@@ -59,6 +69,11 @@
     return match ? match[1] : null;
   }
 
+  // Parse a JSON body without throwing on empty/HTML error pages (e.g. proxy 502s)
+  async function readJson(res) {
+    try { return await res.json(); } catch { return {}; }
+  }
+
   async function api(method, endpoint, body = null) {
     const opts = {
       method,
@@ -86,19 +101,29 @@
           logout();
           throw new Error('Session expired');
         }
-        const retryData = await retryRes.json();
+        const retryData = await readJson(retryRes);
         if (!retryRes.ok) throw new Error(retryData?.error || `Request failed (${retryRes.status})`);
         return retryData;
       }
       logout();
       throw new Error('Session expired');
     }
-    const data = await res.json();
+    const data = await readJson(res);
     if (!res.ok) throw new Error(data?.error || `Request failed (${res.status})`);
     return data;
   }
 
-  async function refreshAccessToken() {
+  // The server rotates (revokes) the refresh token on every use, so two parallel
+  // refreshes would make the second one fail and log the user out. Share one.
+  function refreshAccessToken() {
+    if (!refreshPromise) {
+      refreshPromise = doRefreshAccessToken().finally(() => { refreshPromise = null; });
+    }
+    return refreshPromise;
+  }
+
+  async function doRefreshAccessToken() {
+    const epoch = sessionEpoch;
     try {
       const csrf = getCsrfToken();
       const res = await fetch(d('L2FwaS9hdXRoL3JlZnJlc2g='), {
@@ -107,7 +132,14 @@
       });
       if (!res.ok) return false;
       const data = await res.json();
+      if (epoch !== sessionEpoch) return false; // logged out while refreshing
       if (data.success && data.user) {
+        // Older servers omitted mustChangePassword from the refresh payload: keep
+        // the flag we have only then (a server "false" means the change is done).
+        if (data.user.mustChangePassword === undefined && currentUser &&
+            currentUser.id === data.user.id && currentUser.mustChangePassword) {
+          data.user.mustChangePassword = true;
+        }
         currentUser = data.user;
         updateUserMenu();
         scheduleAutoRefresh();
@@ -138,21 +170,56 @@
   }
 
   function setUser(user) {
+    // Switching account (e.g. guest -> signed in): drop the previous user's AI chat
+    if (!currentUser || currentUser.id !== user.id) { resetAiPanel(); aiAnalysis.clear(); }
     currentUser = user;
     updateUserMenu();
     scheduleAutoRefresh();
     hideAuth();
+    loadPocTracker();
+    loadWatchlist();
+  }
+
+  // Wipe everything the previous user could leave behind in the DOM
+  function resetSessionUi() {
+    ['#email-modal', '#password-modal', '#verification-modal'].forEach(sel => $(sel)?.classList.add('hidden'));
+    ['#password-form', '#email-form', '#verification-form', '#notification-form', '#login-form'].forEach(sel => $(sel)?.reset());
+    forcedChangeSecret = null;
+    setCurrentPasswordFieldVisible(true);   // the next user must be asked for theirs
+    setForcedPasswordMode(false);
+    $('#password-forced-notice')?.classList.add('hidden');
+    $('#user-dropdown')?.classList.add('hidden');
+    state.pendingVerificationType = null;
+    state.articles = [];
+    state.sources = [];
+    state.currentPage = 1;
+    articlesReqSeq++;            // discard any in-flight article response from the old session
+    state.isLoading = false;
+    hideLoader();
+    const ac = $('#articles-container'); if (ac) ac.innerHTML = '';
+    renderSources();
+    renderEscalatedSidebar([]);
+    resetAiPanel();
+    aiAnalysis.clear();
+    pocState.items = []; pocState.seq++;
+    watchTerms = []; renderWatchlist();
+    $('#poc-tracker-card')?.classList.add('hidden');
   }
 
   function logout() {
     // Call server to clear cookies + blacklist tokens
     fetch(d('L2FwaS9hdXRoL2xvZ291dA=='), { method: 'POST', headers: { 'X-CSRF-Token': getCsrfToken() || '' } }).catch(() => {});
 
+    sessionEpoch++;
     currentUser = null;
     if (refreshTimer) clearTimeout(refreshTimer);
     refreshTimer = null;
     if (state.refreshTimer) clearInterval(state.refreshTimer);
     if (state.countdownTimer) clearInterval(state.countdownTimer);
+    state.refreshTimer = state.countdownTimer = null;
+    resetSessionUi();
+    // Offer "Continue as Guest" (starts a fresh guest session — see guest-back-btn)
+    const gb = $('#guest-back'); if (gb) gb.style.display = '';
     showAuth();
   }
 
@@ -169,6 +236,8 @@
     } else {
       $('#admin-link').classList.add('hidden');
     }
+    // Guests get 403 on sources / notifications / fetch-now — hide those controls
+    document.body.classList.toggle('guest-mode', isGuest);
     // Guests see a "Sign In / Register" entry; hide account-only options
     if (isGuest) {
       $('#sign-in-btn').classList.remove('hidden');
@@ -181,6 +250,12 @@
       $('#change-password-btn').classList.remove('hidden');
       $('#logout-btn').classList.remove('hidden');
     }
+    // Accounts without an email can't receive reset links or security notices
+    if (!isGuest && !currentUser.email && !currentUser.mustChangePassword && !emailNudged) {
+      emailNudged = true;
+      setTimeout(() => showToast('Add your email address',
+        'Your account has no email, so password-reset links and security alerts cannot reach you. Open your user menu → Change Email.', 'warning'), 1500);
+    }
   }
 
   //
@@ -191,11 +266,30 @@
     return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), ms); };
   }
 
+  // Defence in depth: never render non-http(s) links (e.g. javascript:) as hrefs.
+  function safeUrl(u) {
+    try { return ['http:', 'https:'].includes(new URL(u, location.href).protocol) ? u : '#'; }
+    catch { return '#'; }
+  }
+
+  // Must also escape quotes: the result is interpolated into attribute values
+  // (title="...", href="...", data-*="..."). textContent->innerHTML does not.
   function escapeHtml(str) {
-    if (!str) return '';
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
+    if (str === null || str === undefined || str === '') return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  // Set a <select> programmatically and keep its custom dropdown label in sync
+  function setSelectValue(el, value) {
+    if (!el) return;
+    el.value = value;
+    el.classList.toggle('has-value', value !== '');
+    if (el._syncDisplay) el._syncDisplay();
   }
 
   function relativeTime(dateStr) {
@@ -246,6 +340,22 @@
     if (articleDate.getTime() === today.getTime()) return 'Today';
     if (articleDate.getTime() === yesterday.getTime()) return 'Yesterday';
     return d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  }
+
+  // Local calendar day of a Date as YYYY-MM-DD (the stats API groups by the
+  // viewer's local day when given ?tz=)
+  function localDayKey(date) {
+    const dt = date instanceof Date ? date : new Date(date);
+    return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+  }
+
+  // ISO start/end instants of a local calendar day ('YYYY-MM-DD' or a Date)
+  function localDayBounds(day) {
+    const start = typeof day === 'string' ? new Date(day + 'T00:00:00') : new Date(day);
+    start.setHours(0, 0, 0, 0);
+    const next = new Date(start);
+    next.setDate(next.getDate() + 1);
+    return { start: start.toISOString(), end: new Date(next.getTime() - 1).toISOString() };
   }
 
   function showToast(title, message, type = 'info') {
@@ -367,7 +477,8 @@
 
   async function fetchStats() {
     try {
-      const stats = await api('GET', d('L2FwaS9hcnRpY2xlcy9zdGF0cw=='));
+      // tz: minutes east of UTC, so "today" / the chart days are the viewer's own
+      const stats = await api('GET', `${d('L2FwaS9hcnRpY2xlcy9zdGF0cw==')}?tz=${-new Date().getTimezoneOffset()}`);
       animateValue($('#stat-threats'), stats.threatsToday || 0);
       animateValue($('#stat-critical'), stats.criticalVulns || 0);
       animateValue($('#stat-pocs'), stats.pocsDetected || 0);
@@ -488,12 +599,13 @@
       grid: isLight ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.04)',
       axisLabel: isLight ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.35)',
       xLabel: isLight ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.42)',
-      dotFill: isLight ? '#f6f8fd' : '#0d0f1a',
-      areaTop: isLight ? 'rgba(8,145,178,0.25)' : 'rgba(34,211,238,0.28)',
-      areaMid: isLight ? 'rgba(109,75,255,0.1)' : 'rgba(124,92,255,0.12)',
-      areaBot: isLight ? 'rgba(109,75,255,0.02)' : 'rgba(124,92,255,0.02)',
-      line: isLight ? '#0891b2' : '#22d3ee',
-      glow: isLight ? 'rgba(8,145,178,0.4)' : 'rgba(34,211,238,0.6)'
+      dotFill: isLight ? '#ffffff' : '#1a1a19',
+      // One series, one hue: 2px line + ~10% area wash, no glow
+      areaTop: isLight ? 'rgba(42,120,214,0.14)' : 'rgba(57,135,229,0.16)',
+      areaMid: isLight ? 'rgba(42,120,214,0.08)' : 'rgba(57,135,229,0.08)',
+      areaBot: isLight ? 'rgba(42,120,214,0.01)' : 'rgba(57,135,229,0.01)',
+      line: isLight ? '#2a78d6' : '#3987e5',
+      glow: 'rgba(0,0,0,0)'
     };
   }
 
@@ -507,7 +619,7 @@
     const preset = CHART_PRESETS[days] || CHART_PRESETS[7];
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - preset.days);
-    const cutoffStr = cutoff.toISOString().split('T')[0];
+    const cutoffStr = localDayKey(cutoff);   // timeline days are local (see fetchStats)
 
     // Filter out null days and apply date range
     let data = (timeline || []).filter(d => d.day && d.day >= cutoffStr);
@@ -651,13 +763,14 @@
           if (dist < minDist) { minDist = dist; closest = p; }
         }
         if (minDist > 30) return;
-        // Set date filter to that specific day
-        state.filters.start_date = closest.day + 'T00:00:00.000Z';
-        state.filters.end_date = closest.day + 'T23:59:59.999Z';
+        // Set date filter to that (local) day — the timeline counts local days
+        const b = localDayBounds(closest.day);
+        state.filters.start_date = b.start;
+        state.filters.end_date = b.end;
         state.filters.time_range = 'custom';
+        showSelectedRangeTag(b.start, b.end);
         state.currentPage = 1;
-        const timeFilter = $('#time-range-filter');
-        if (timeFilter) timeFilter.value = 'custom';
+        setSelectValue($('#time-range-filter'), 'custom');
         updateClearAllButton();
         fetchArticles();
         showToast('Filtered', `Showing threats from ${closest.day}`, 'info');
@@ -677,7 +790,7 @@
         const dayOfWeek = date.getDay();
         const monday = new Date(date);
         monday.setDate(date.getDate() - ((dayOfWeek + 6) % 7));
-        key = monday.toISOString().split('T')[0];
+        key = localDayKey(monday);   // toISOString() shifted east-of-UTC weeks a day back
       } else {
         key = date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0');
       }
@@ -726,7 +839,8 @@
     }
     if (minDist > 30) { tip.classList.add('hidden'); return; }
 
-    tip.innerHTML = `<strong>${closest.day}</strong><br>Total: ${closest.count} | Crit: ${closest.critical} | High: ${closest.high} | Med: ${closest.medium} | Low: ${closest.low}`;
+    const n = (v) => Number(v) || 0;
+    tip.innerHTML = `<strong>${escapeHtml(closest.day)}</strong><br>Total: ${n(closest.count)} | Crit: ${n(closest.critical)} | High: ${n(closest.high)} | Med: ${n(closest.medium)} | Low: ${n(closest.low)}`;
     tip.classList.remove('hidden');
 
     const tipRect = tip.getBoundingClientRect();
@@ -739,38 +853,35 @@
     tip.style.top = ty + 'px';
   }
 
+  // Latest request wins. Previously a fetch issued while another was in flight
+  // (filter change during auto-refresh, stat-card click right after clearFilters)
+  // was silently dropped, leaving the feed out of sync with the filters shown.
+  let articlesReqSeq = 0;
   async function fetchArticles(page = 1, append = false) {
-    if (state.isLoading) return;
+    if (append && state.isLoading) return;   // don't stack "Load more" on a pending load
+    const seq = ++articlesReqSeq;
     state.isLoading = true;
     showLoader();
     try {
-      const params = new URLSearchParams({ page, limit: 50 });
-      if (state.filters.category) params.set('category', state.filters.category);
-      if (state.filters.severity) params.set('severity', state.filters.severity);
-      if (state.filters.source_type) params.set('source_type', state.filters.source_type);
-      if (state.filters.search) params.set('search', state.filters.search);
-      if (state.filters.sector) params.set('sector', state.filters.sector);
-      if (state.filters.threat_actor) params.set('threat_actor', state.filters.threat_actor);
-      if (state.filters.has_poc) params.set('has_poc', state.filters.has_poc);
-      if (state.filters.has_mitre) params.set('has_mitre', state.filters.has_mitre);
-      if (state.filters.is_patched !== '') params.set('is_patched', state.filters.is_patched);
-      if (state.filters.time_range) params.set('time_range', state.filters.time_range);
-      if (state.filters.start_date) params.set('start_date', state.filters.start_date);
-      if (state.filters.end_date) params.set('end_date', state.filters.end_date);
+      const params = filterParams(page, 50);
 
       const data = await api('GET', `${d('L2FwaS9hcnRpY2xlcw==')}?${params}`);
+      if (seq !== articlesReqSeq) return;     // superseded by a newer request
       state.currentPage = data.page;
       state.totalPages = data.totalPages;
       state.totalArticles = data.total;
 
+      const articles = Array.isArray(data.articles) ? data.articles : [];
       if (append) {
-        state.articles = [...state.articles, ...data.articles];
+        state.articles = [...state.articles, ...articles];
       } else {
-        state.articles = data.articles;
+        state.articles = articles;
       }
       renderArticles();
     } catch (e) { console.error('Articles error:', e); }
-    finally { state.isLoading = false; hideLoader(); }
+    finally {
+      if (seq === articlesReqSeq) { state.isLoading = false; hideLoader(); }
+    }
   }
 
   async function fetchSources() {
@@ -790,19 +901,31 @@
     try {
       const s = await api('GET', d('L2FwaS9ub3RpZmljYXRpb25zL3NldHRpbmdz'));
       if (!s) return;
-      if (s.email) $('#notif-email').value = s.email;
+      // Assign unconditionally so a previous user's values never linger in the form
+      // Alerts can only go to the account's own address
+      $('#notif-email').value = s.email || (currentUser && currentUser.email) || '';
       $('#notif-email-enabled').checked = !!s.email_enabled;
-      if (s.telegram_chat_id) $('#notif-telegram').value = s.telegram_chat_id;
-      if (s.telegram_bot_token) $('#notif-telegram-token').value = s.telegram_bot_token;
+      $('#notif-telegram').value = s.telegram_chat_id || '';
+      $('#notif-telegram-token').value = s.telegram_bot_token || '';
       $('#notif-telegram-enabled').checked = !!s.telegram_enabled;
-      if (s.teams_webhook) $('#notif-teams-webhook').value = s.teams_webhook;
+      $('#notif-teams-webhook').value = s.teams_webhook || '';
       $('#notif-teams-enabled').checked = !!s.teams_enabled;
-      if (s.whatsapp_number) $('#notif-whatsapp-number').value = s.whatsapp_number;
-      if (s.whatsapp_apikey) $('#notif-whatsapp-apikey').value = s.whatsapp_apikey;
+      $('#notif-whatsapp-number').value = s.whatsapp_number || '';
+      $('#notif-whatsapp-apikey').value = s.whatsapp_apikey || '';
       $('#notif-whatsapp-enabled').checked = !!s.whatsapp_enabled;
-      if (s.severity_threshold) $('#notif-severity').value = s.severity_threshold;
-      if (s.keywords_filter) $('#notif-keywords').value = s.keywords_filter;
+      setSelectValue($('#notif-severity'), s.severity_threshold || 'critical');
+      $('#notif-keywords').value = s.keywords_filter || '';
+      updateNotifSummary();
     } catch (e) { console.error('Notification settings error:', e); }
+  }
+
+  // "2 on" / "Off" chip on the collapsed Notifications header
+  function updateNotifSummary() {
+    const el = $('#notif-summary');
+    if (!el) return;
+    const on = [...$$('.notif-channel .toggle-switch input')].filter(i => i.checked).length;
+    el.textContent = on ? `${on} on` : 'Off';
+    el.classList.toggle('on', on > 0);
   }
 
   //
@@ -830,15 +953,26 @@
     // Render sidebar escalated/reviewed items
     renderEscalatedSidebar(resolved);
 
+    if (active.length === 0 && state.currentPage < (state.totalPages || 1)) {
+      // Everything on this page was reviewed/escalated (moved to the sidebar) but
+      // more pages exist: keep "Load more" reachable instead of an empty dashboard.
+      container.innerHTML = '<p class="empty-sources" style="padding:16px;">Everything on this page has been reviewed. Load more to see older threats.</p>';
+      empty.classList.add('hidden');
+      loadMore.classList.remove('hidden');
+      return;
+    }
     if (active.length === 0) {
       container.innerHTML = '';
       empty.classList.remove('hidden');
       loadMore.classList.add('hidden');
       const hasFilters = hasActiveFilters();
       $('#empty-title').textContent = hasFilters ? 'No threats match your filters' : 'No Threats Yet';
+      const isGuest = currentUser && currentUser.username === 'guest';
       $('#empty-message').textContent = hasFilters
         ? 'Your current filters returned nothing. Try widening them or clear all.'
-        : 'Your dashboard is empty. Add threat intelligence sources from the sidebar to start tracking threats, or click Fetch Now.';
+        : isGuest
+          ? 'No threats yet. Sign in or register to add your own sources.'
+          : 'Your dashboard is empty. Add threat intelligence sources from the sidebar to start tracking threats, or click Fetch Now.';
       const clearBtn = $('#clear-filters-btn-empty');
       if (clearBtn) {
         clearBtn.style.display = hasFilters ? '' : 'none';
@@ -895,9 +1029,10 @@
       const statusTag = escalated
         ? '<span class="badge badge-severity-critical">Escalated</span>'
         : '<span class="badge badge-patched">Reviewed</span>';
-      const noteSnippet = who && who.notes ? `<span class="sidebar-item-note">${escapeHtml(who.notes.substring(0, 50))}</span>` : '';
+      const noteSnippet = who && who.notes ? `<span class="sidebar-item-note">${escapeHtml(String(who.notes).substring(0, 50))}</span>` : '';
+      const title = String(a.title || '');
       return `<div class="sidebar-article-item">
-        <a href="${escapeHtml(a.url)}" target="_blank" rel="noopener" class="sidebar-article-link" title="${escapeHtml(a.title)}">${escapeHtml(a.title.substring(0, 60))}${a.title.length > 60 ? '...' : ''}</a>
+        <a href="${escapeHtml(safeUrl(a.url))}" target="_blank" rel="noopener" class="sidebar-article-link" title="${escapeHtml(title)}">${escapeHtml(title.substring(0, 60))}${title.length > 60 ? '...' : ''}</a>
         <div class="sidebar-article-meta">${statusTag} ${who ? escapeHtml(who.username) : ''} ${noteSnippet}</div>
       </div>`;
     }).join('');
@@ -959,8 +1094,8 @@
   }
 
   function createArticleCard(article) {
-    const catBadge = `<span class="badge badge-${article.category}">${escapeHtml(article.category)}</span>`;
-    const sevBadge = `<span class="badge badge-severity-${article.severity}">${article.severity}</span>`;
+    const catBadge = categoryBadge(article);
+    const sevBadge = severityBadge(article);
     const sectorBadge = article.sector ? `<span class="badge badge-sector">${escapeHtml(article.sector)}</span>` : '';
     // Threat actors render as a distinct label with their Synchrony class badge (A/B/C/D/E)
     const actorBadge = article.threat_actors ? article.threat_actors.split(',').map(a => {
@@ -969,8 +1104,10 @@
       const clsTag = cls ? `<span class="ta-class ta-class-${cls.toLowerCase()}">${cls}</span>` : '';
       return `<span class="badge badge-actor" title="${cls ? 'Class ' + cls : 'Threat actor'}">${clsTag}${escapeHtml(name)}</span>`;
     }).join('') : '';
-    const cveLink = article.cve_id ? `<a href="https://nvd.nist.gov/vuln/detail/${article.cve_id}" target="_blank" rel="noopener" class="cve-link">${article.cve_id}</a>` : '';
+    const cveLink = article.cve_id ? `<a href="https://nvd.nist.gov/vuln/detail/${escapeHtml(encodeURIComponent(article.cve_id))}" target="_blank" rel="noopener" class="cve-link">${escapeHtml(article.cve_id)}</a>` : '';
     const pocBadge = article.has_poc ? '<span class="badge badge-poc">PoC Available</span>' : '';
+    const watchBadge = Array.isArray(article.watch) && article.watch.length
+      ? `<span class="badge badge-watch" title="On your watchlist: ${escapeHtml(article.watch.join(', '))}">Watchlist: ${escapeHtml(article.watch.slice(0, 2).join(', '))}${article.watch.length > 2 ? '…' : ''}</span>` : '';
 
     // MITRE ATT&CK technique/tactic IDs — key signal for detection engineering
     const mitreIds = article.mitre_ids ? article.mitre_ids.split(',').map(s => s.trim()).filter(Boolean) : [];
@@ -978,6 +1115,57 @@
       `<a href="${mitreLink(id)}" target="_blank" rel="noopener" class="badge badge-mitre" title="MITRE ATT&CK ${escapeHtml(id)}">${escapeHtml(id)}</a>`
     ).join('');
     const ttpBadge = mitreIds.length ? '<span class="badge badge-ttp">TTP</span>' : '';
+
+    // Threat-intel panel: who (threat actor) → how (each MITRE technique ID tied
+    // to its tactic and to the sentence in the report that shows it = the TTP).
+    // "cited" = the report names the ID; "inferred" = it describes the behaviour.
+    const ttps = Array.isArray(article.ttps) ? article.ttps : null;
+    const actorNames = [...new Set([
+      ...(article.threat_actors ? article.threat_actors.split(',').map(a => a.trim()).filter(Boolean) : []),
+      ...(Array.isArray(article.aiActors) ? article.aiActors : []),
+    ])];
+    const actorChips = actorNames.map(name => {
+      const cls = actorClass(name);
+      const clsTag = cls ? `<span class="ta-class ta-class-${cls.toLowerCase()}">${cls}</span>` : '';
+      return `<button type="button" class="ti-actor" data-filter-actor="${escapeHtml(name)}" title="${cls ? 'Class ' + cls + ' threat actor' : 'Threat actor'}: open the ${escapeHtml(name)} profile">${clsTag}${escapeHtml(name)}</button>`;
+    }).join('');
+    // Don't repeat text the card already shows: skip a quote that is just the
+    // title, and show each distinct sentence only once across the steps.
+    const normTxt = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    const titleNorm = normTxt(article.title);
+    const shownDescNorm = normTxt(String(article.description || '').substring(0, 300));   // what the card prints
+    const quoted = new Set();
+    const quoteFor = (p) => {
+      const n = normTxt(p);
+      if (!n || n === titleNorm || titleNorm.includes(n) || shownDescNorm.includes(n) || quoted.has(n)) return '';
+      quoted.add(n);
+      return p;
+    };
+    const ttpItem = (t) => {
+      const shown = t.subId || t.id;
+      const proc = quoteFor(t.procedure);
+      const cited = t.how === 'cited';
+      const how = cited ? 'cited' : t.how === 'ai' ? 'AI' : 'inferred';
+      const howTip = cited ? 'Technique ID cited in the report' : t.how === 'ai' ? 'Mapped by AI from the quoted sentence — verify' : 'Inferred from the behaviour the report describes';
+      return `<li class="ti-step ${cited ? 'ti-cited' : t.how === 'ai' ? 'ti-ai' : 'ti-inferred'}">` +
+        `<span class="ti-tactic">${escapeHtml(t.tacticName || 'Unmapped')}</span>` +
+        `<a class="ti-id" href="${escapeHtml(mitreLink(shown))}" target="_blank" rel="noopener" title="Open ${escapeHtml(shown)} on attack.mitre.org">${escapeHtml(shown)}</a>` +
+        `<span class="ti-tech">${escapeHtml(t.name)}</span>` +
+        `<span class="ti-how" title="${howTip}">${how}</span>` +
+        (proc ? `<q class="ti-proc">${escapeHtml(proc)}</q>` : '') +
+        `</li>`;
+    };
+    const tacticCount = ttps ? new Set(ttps.map(t => t.tactic).filter(Boolean)).size : 0;
+    const ttpHtml = ttps && (ttps.length || actorNames.length) ? `<div class="ti-panel" aria-label="Threat actor and MITRE ATT&CK TTPs">` +
+      `<div class="ti-head"><span class="ti-title">MITRE ATT&amp;CK</span>` +
+      (ttps.length ? `<span class="ti-count">${ttps.length} TTP${ttps.length === 1 ? '' : 's'} · ${tacticCount}/14 tactics</span>` : '') +
+      (ttps.length ? `<span class="ti-head-actions"><button type="button" class="ti-3d-btn" data-attack-path="${article.id}" title="See this attack step by step in 3D">3D attack path</button></span>` : '') +
+      `</div>` +
+      (actorNames.length ? `<div class="ti-actor-row"><span class="ti-label">Threat actor</span>${actorChips}</div>` : '') +
+      (ttps.length ? `<ol class="ti-steps">${ttps.slice(0, 3).map(ttpItem).join('')}</ol>` +
+        (ttps.length > 3 ? `<details class="ti-more"><summary>+${ttps.length - 3} more TTP${ttps.length - 3 === 1 ? '' : 's'}</summary><ol class="ti-steps" start="4">${ttps.slice(3).map(ttpItem).join('')}</ol></details>` : '')
+        : '') +
+      `</div>` : '';
 
     // Patch status — 1 = patched, 0 = unpatched, -1 = unknown
     const patchBadge = article.is_patched === 1
@@ -993,18 +1181,15 @@
 
     // IOCs — extracted indicators
     let iocHtml = '';
-    if (article.iocs) {
-      const parts = article.iocs.split('|');
-      const items = [];
-      parts.forEach(p => {
-        const [type, values] = p.split(':');
-        if (values) {
-          values.split(',').slice(0, 3).forEach(v => {
-            items.push(`<span class="ioc-tag ioc-${type}" title="${type}: ${escapeHtml(v)}">${escapeHtml(v.length > 30 ? v.substring(0,28)+'..' : v)}</span>`);
-          });
-        }
-      });
-      if (items.length) iocHtml = `<div class="article-iocs">${items.join('')}</div>`;
+    const iocList = parseIocs(article.iocs);
+    if (iocList.length) {
+      const shownIocs = iocList.slice(0, 6).map(i => `<span class="ioc-tag ioc-${escapeHtml(i.type)}" title="${escapeHtml(i.label)}: ${escapeHtml(i.value)}">${escapeHtml(i.value.length > 30 ? i.value.substring(0, 28) + '..' : i.value)}</span>`).join('');
+      iocHtml = `<div class="article-iocs">${shownIocs}${iocList.length > 6 ? `<span class="ioc-more">+${iocList.length - 6}</span>` : ''}` +
+        `<span class="ioc-export" role="group" aria-label="Export IOCs">` +
+        `<button type="button" data-ioc-export="copy" data-ioc-article="${article.id}" title="Copy all ${iocList.length} IOCs (one per line)">Copy</button>` +
+        `<button type="button" data-ioc-export="csv" data-ioc-article="${article.id}" title="Download IOCs as CSV">CSV</button>` +
+        `<button type="button" data-ioc-export="stix" data-ioc-article="${article.id}" title="Download a STIX 2.1 bundle (for MISP, OpenCTI, SIEMs)">STIX</button>` +
+        `</span></div>`;
     }
 
     const desc = article.description ? escapeHtml(article.description.substring(0, 300)) : '';
@@ -1038,7 +1223,7 @@
         } else {
           label = `${escapeHtml(r.username)} · reviewed`;
         }
-        reviewHtml += `<span class="review-tag review-${r.status}">${label}</span>`;
+        reviewHtml += `<span class="review-tag review-${escapeHtml(r.status)}">${label}</span>`;
       });
       reviewHtml += '</div>';
     }
@@ -1075,28 +1260,320 @@
     else if (escalatedByAnyone) cardExtraCls = ' escalated-by-me';
 
     return `
-      <article class="article-card ${article.severity === 'critical' ? 'critical' : ''} ${mitreIds.length ? 'has-ttp' : ''}${cardExtraCls}" data-article-id="${article.id}">
+      <article class="article-card ${article.severity === 'critical' ? 'critical' : ''} ${(ttps && ttps.length) || mitreIds.length ? 'has-ttp' : ''}${watchBadge ? ' on-watchlist' : ''}${cardExtraCls}" data-article-id="${article.id}">
         <div class="article-header">
-          <div class="article-badges">${catBadge}${sevBadge}${ownerBadge}${ttpBadge}${pocBadge}${patchBadge}${sectorBadge}${actorBadge}${mitreBadges}${cveLink}</div>
+          <div class="article-badges">${watchBadge}${catBadge}${sevBadge}${ownerBadge}${ttps ? '' : ttpBadge}${pocBadge}${patchBadge}${sectorBadge}${ttpHtml ? '' : actorBadge}${ttps ? '' : mitreBadges}${cveLink}</div>
         </div>
-        <h3 class="article-title"><a href="${escapeHtml(article.url)}" target="_blank" rel="noopener">${escapeHtml(article.title)}</a></h3>
+        <h3 class="article-title"><a href="${escapeHtml(safeUrl(article.url))}" target="_blank" rel="noopener">${escapeHtml(article.title)}</a></h3>
         <div class="article-meta">
           <span>${escapeHtml(article.source_name)}</span>
           ${article.author ? `<span>by ${escapeHtml(article.author)}</span>` : ''}
           <span>${relativeTime(article.published_date)}</span>
         </div>
+        ${vulnRowHtml(article)}
+        ${Array.isArray(article.related) && article.related.length ? `<details class="also-reported"><summary>Also reported by ${article.related.length} more source${article.related.length === 1 ? '' : 's'}</summary><ul>${
+          article.related.map(r => `<li><a href="${escapeHtml(safeUrl(r.url))}" target="_blank" rel="noopener">${escapeHtml(r.source_name || 'Source')}</a><span>${escapeHtml(r.title)}</span></li>`).join('')
+        }</ul></details>` : ''}
         ${desc ? `<p class="article-desc">${desc}</p>` : ''}
-        ${article.tags ? `<div class="article-tags">${article.tags.split(',').map(t => `<span class="tag">${t.trim()}</span>`).join('')}</div>` : ''}
+        ${article.tags ? `<div class="article-tags">${String(article.tags).split(',').map(t => t.trim()).filter(Boolean).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join('')}</div>` : ''}
+        ${ttpHtml}
         ${iocHtml}
         ${reviewHtml}
         <div class="article-actions">
-          <button class="${reviewBtnCls}" data-review-article="${article.id}" title="Start reviewing"${reviewBtnDisabled}>${reviewBtnTxt}</button>
-          <button class="btn-review-done" data-review-done="${article.id}" title="Mark as reviewed"${doneBtnDisabled}>Done</button>
-          <button class="${escalateBtnCls}" data-escalate="${article.id}" title="Escalate"${escalateBtnDisabled}>${escalateBtnTxt}</button>
-          <button class="btn-ai" data-ai-summarize="${article.id}" title="AI summary + triage">AI</button>
+          <button class="${reviewBtnCls} guest-hidden" data-review-article="${article.id}" title="Start reviewing"${reviewBtnDisabled}>${reviewBtnTxt}</button>
+          <button class="btn-review-done guest-hidden" data-review-done="${article.id}" title="Mark as reviewed"${doneBtnDisabled}>Done</button>
+          <button class="${escalateBtnCls} guest-hidden" data-escalate="${article.id}" title="Escalate"${escalateBtnDisabled}>${escalateBtnTxt}</button>
+          ${aiAnalyzeButton(article)}
         </div>
-        <div class="ai-result" data-ai-result="${article.id}" style="display:none;"></div>
+        ${aiAnalysisHtml(article)}
       </article>`;
+  }
+
+  // Patch priority for the article's CVEs: CISA KEV + EPSS + CVSS -> one plain label
+  const VULN_PRI = { now: 'Patch now', soon: 'Patch soon', plan: 'Plan', monitor: 'Monitor' };
+  function vulnRowHtml(a) {
+    if (!Array.isArray(a.vuln) || !a.vuln.length) return '';
+    return `<div class="vuln-rows">${a.vuln.slice(0, 2).map((v) => {
+      const bits = [];
+      if (v.kev) bits.push(`<span class="vuln-kev" title="Listed in CISA's Known Exploited Vulnerabilities catalog${v.kev.added ? ' since ' + escapeHtml(v.kev.added) : ''}${v.kev.ransomware ? '; used in ransomware campaigns' : ''}">KEV${v.kev.ransomware ? ' · ransomware' : ''}</span>`);
+      if (v.epss !== null && v.epss !== undefined) bits.push(`<span title="EPSS: chance of exploitation in the next 30 days (FIRST.org)${v.percentile !== null ? `; higher than ${Math.round(v.percentile * 100)}% of all CVEs` : ''}">EPSS ${(v.epss * 100).toFixed(v.epss < 0.1 ? 1 : 0)}%</span>`);
+      if (v.cvss !== null && v.cvss !== undefined) bits.push(`<span title="CVSS base score (NVD)">CVSS ${Number(v.cvss).toFixed(1)}</span>`);
+      const pri = VULN_PRI[v.priority] ? v.priority : 'monitor';
+      return `<div class="vuln-row"><span class="vuln-pri vuln-pri-${pri}">${VULN_PRI[pri]}</span><code>${escapeHtml(v.cve)}</code>${bits.join('<i aria-hidden="true">·</i>')}</div>`;
+    }).join('')}</div>`;
+  }
+
+  // ── Watchlist ──
+  let watchTerms = [];
+  function renderWatchlist() {
+    const box = $('#watchlist-chips');
+    if (!box) return;
+    box.innerHTML = watchTerms.length
+      ? watchTerms.map(w => `<span class="watch-chip">${escapeHtml(w.term)}<button type="button" data-watch-remove="${w.id}" aria-label="Remove ${escapeHtml(w.term)} from the watchlist">×</button></span>`).join('')
+      : '<span class="watch-empty">Nothing yet. Add the products and vendors you run.</span>';
+  }
+  async function loadWatchlist() {
+    if (!currentUser || currentUser.username === 'guest') { watchTerms = []; renderWatchlist(); return; }
+    try { const r = await api('GET', '/api/watchlist'); watchTerms = r.terms || []; } catch { watchTerms = []; }
+    renderWatchlist();
+  }
+  async function addWatchTerm(term) {
+    const r = await api('POST', '/api/watchlist', { term });
+    if (!r.success) throw new Error(r.error || 'Could not add');
+    watchTerms = r.terms || watchTerms;
+    renderWatchlist();
+    fetchArticles();
+  }
+  async function removeWatchTerm(id) {
+    const r = await api('DELETE', `/api/watchlist/${id}`);
+    if (r.success) { watchTerms = r.terms || watchTerms.filter(w => w.id !== id); renderWatchlist(); fetchArticles(); }
+  }
+
+  // ── IOCs (stored as "ip:a,b|domain:c|hash:d|email:e") ──
+  function parseIocs(raw) {
+    const out = [];
+    const seen = new Set();
+    for (const part of String(raw || '').split('|')) {
+      const i = part.indexOf(':');
+      if (i < 0) continue;
+      const kind = part.slice(0, i);
+      for (const v of part.slice(i + 1).split(',').map(x => x.trim()).filter(Boolean)) {
+        let type = kind, label = kind;
+        if (kind === 'ip') { type = v.includes(':') ? 'ipv6' : 'ipv4'; label = 'IP'; }
+        else if (kind === 'domain') label = 'Domain';
+        else if (kind === 'email') label = 'Email';
+        else if (kind === 'hash') { type = v.length === 32 ? 'md5' : v.length === 40 ? 'sha1' : 'sha256'; label = type.toUpperCase(); }
+        const k = type + ':' + v.toLowerCase();
+        if (seen.has(k)) continue;
+        seen.add(k);
+        out.push({ type, label, value: v });
+      }
+    }
+    return out;
+  }
+  function downloadBlob(name, text, mime) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([text], { type: mime }));
+    a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  }
+  function stixBundle(article, iocs) {
+    const now = new Date().toISOString();
+    const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16); }));
+    const q = (v) => String(v).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    const pattern = (i) => ({
+      ipv4: `[ipv4-addr:value = '${q(i.value)}']`, ipv6: `[ipv6-addr:value = '${q(i.value)}']`,
+      domain: `[domain-name:value = '${q(i.value)}']`, email: `[email-addr:value = '${q(i.value)}']`,
+      md5: `[file:hashes.MD5 = '${q(i.value)}']`, sha1: `[file:hashes.'SHA-1' = '${q(i.value)}']`, sha256: `[file:hashes.'SHA-256' = '${q(i.value)}']`,
+    }[i.type]);
+    const ref = /^https?:\/\//i.test(article.url || '') ? [{ source_name: article.source_name || 'source', url: article.url }] : [];
+    const indicators = iocs.filter(pattern).map(i => ({
+      type: 'indicator', spec_version: '2.1', id: `indicator--${uuid()}`, created: now, modified: now,
+      name: `${i.label} ${i.value}`, pattern: pattern(i), pattern_type: 'stix', valid_from: now,
+      indicator_types: ['malicious-activity'],
+      description: `Extracted automatically by ThreatPulse from: ${article.title}. Review before blocking.`,
+      external_references: ref,
+    }));
+    const report = {
+      type: 'report', spec_version: '2.1', id: `report--${uuid()}`, created: now, modified: now,
+      name: article.title, published: article.published_date ? new Date(article.published_date).toISOString() : now,
+      report_types: ['threat-report'], object_refs: indicators.map(x => x.id), external_references: ref,
+    };
+    return JSON.stringify({ type: 'bundle', id: `bundle--${uuid()}`, objects: [report, ...indicators] }, null, 2);
+  }
+  async function exportIocs(article, how) {
+    const iocs = parseIocs(article.iocs);
+    if (!iocs.length) return;
+    const base = `iocs-${article.id}`;
+    if (how === 'copy') {
+      try { await navigator.clipboard.writeText(iocs.map(i => i.value).join('\n')); showToast('IOCs copied', `${iocs.length} indicator${iocs.length === 1 ? '' : 's'} copied. Review before blocking.`, 'success'); }
+      catch { showToast('Copy failed', 'Your browser blocked clipboard access. Use CSV instead.', 'error'); }
+    } else if (how === 'csv') {
+      const cell = (v) => { const t = String(v ?? ''); const safe = /^[=+\-@]/.test(t) ? `'${t}` : t; return `"${safe.replace(/"/g, '""')}"`; };
+      const rows = [['type', 'value', 'article_title', 'article_url', 'published'], ...iocs.map(i => [i.type, i.value, article.title, article.url, article.published_date])];
+      downloadBlob(`${base}.csv`, rows.map(r => r.map(cell).join(',')).join('\r\n'), 'text/csv');
+    } else if (how === 'stix') {
+      downloadBlob(`${base}.stix.json`, stixBundle(article, iocs), 'application/json');
+    }
+  }
+
+  // Labels shared by feed cards and the admin PoC tracker
+  function categoryBadge(a) { return `<span class="badge badge-${escapeHtml(a.category)}">${escapeHtml(a.category)}</span>`; }
+  function severityBadge(a) { return `<span class="badge badge-severity-${escapeHtml(a.severity)}">${escapeHtml(a.severity)}</span>`; }
+  function patchLabel(a) {
+    return a.is_patched === 1 ? '<span class="badge badge-patched">Patched</span>'
+      : a.is_patched === 0 ? '<span class="badge badge-unpatched">Unpatched</span>' : '';
+  }
+
+  // ── Admin: PoC tracker (sidebar) ──
+  // Articles that have (or claim) a proof of concept, with the PoC link(s) the
+  // checker found and whether each is real: verified / suspicious / unverified.
+  const pocState = { items: [], days: 30, filter: 'all', loading: false, error: '', token: false, busy: new Set(), seq: 0 };
+  const POC_VERDICT = {
+    verified: ['Verified PoC', 'Real exploit code found'],
+    suspicious: ['Suspicious PoC', 'Looks like a fake PoC / malware lure: do not run'],
+    unverified: ['Unverified', 'Links found but code could not be confirmed'],
+    none: ['No PoC found', 'The article mentions a PoC but no exploit link was found'],
+    unchecked: ['Not checked', 'Run the PoC check'],
+  };
+  const pocVerdictOf = (it) => (it.poc && it.poc.verdict) || 'unchecked';
+  function isAdminUser() { return !!(currentUser && currentUser.role === 'admin'); }
+
+  async function loadPocTracker() {
+    const card = $('#poc-tracker-card');
+    if (!card) return;
+    if (!isAdminUser()) { card.classList.add('hidden'); pocState.items = []; return; }
+    card.classList.remove('hidden');
+    const seq = ++pocState.seq;
+    pocState.loading = true; pocState.error = '';
+    renderPocTracker();
+    try {
+      const r = await api('GET', `/api/admin/poc-tracker?days=${pocState.days}`);
+      if (seq !== pocState.seq) return;
+      pocState.items = Array.isArray(r.items) ? r.items : [];
+      pocState.token = !!r.githubToken;
+    } catch (err) {
+      if (seq !== pocState.seq) return;
+      pocState.error = err.message || 'Could not load the PoC tracker';
+    } finally {
+      if (seq === pocState.seq) { pocState.loading = false; renderPocTracker(); }
+    }
+  }
+
+  function pocLinkHtml(l) {
+    const kind = { github: 'GitHub', gist: 'Gist', exploitdb: 'Exploit-DB', packetstorm: 'Packet Storm', gitlab: 'GitLab' }[l.kind] || 'Link';
+    let label = l.url;
+    try { const u = new URL(l.url); label = (u.hostname.replace(/^www\./, '') + u.pathname).replace(/\/$/, ''); label = label.replace(/^github\.com\//, ''); } catch { /* keep */ }
+    const meta = [kind];
+    if (l.stars !== null && l.stars !== undefined) meta.push(`★ ${l.stars}`);
+    if (l.source === 'cve-search') meta.push(`found by ${escapeHtml(l.via || 'CVE')} search`);
+    else meta.push('linked in article');
+    return `<li class="poc-link poc-${escapeHtml(l.status)}">` +
+      `<span class="poc-dot" aria-hidden="true"></span>` +
+      `<div class="poc-link-body"><a href="${escapeHtml(safeUrl(l.url))}" target="_blank" rel="noopener nofollow">${escapeHtml(label.slice(0, 80))}</a>` +
+      `<span class="poc-link-meta">${meta.join(' · ')}</span>` +
+      (l.reasons && l.reasons.length ? `<span class="poc-link-why">${escapeHtml(l.reasons[0])}${l.reasons.length > 1 ? ` · ${escapeHtml(l.reasons[1])}` : ''}</span>` : '') +
+      `</div></li>`;
+  }
+
+  function pocItemHtml(it) {
+    const v = pocVerdictOf(it);
+    const [vLabel, vTip] = POC_VERDICT[v] || POC_VERDICT.unchecked;
+    const cves = (it.poc && it.poc.cves && it.poc.cves.length) ? it.poc.cves : (it.cve_id ? [it.cve_id] : []);
+    const ttps = Array.isArray(it.ttps) ? it.ttps : [];
+    // Summary: AI summary if one exists, else the start of the description (never the title again)
+    const sumRaw = it.aiSummary || String(it.description || '').replace(/\s+/g, ' ').trim();
+    const sum = sumRaw && sumRaw.toLowerCase() !== String(it.title || '').toLowerCase() ? sumRaw.slice(0, 260) + (sumRaw.length > 260 ? '…' : '') : '';
+    const busy = pocState.busy.has(it.id);
+    const links = it.poc && Array.isArray(it.poc.links) ? it.poc.links : [];
+    return `<li class="poc-item poc-v-${v}" data-poc-id="${it.id}">` +
+      `<div class="poc-labels">${categoryBadge(it)}${severityBadge(it)}${patchLabel(it)}` +
+      `<span class="poc-verdict poc-verdict-${v}" title="${escapeHtml(vTip)}">${escapeHtml(vLabel)}</span></div>` +
+      `<a class="poc-title" href="${escapeHtml(safeUrl(it.url))}" target="_blank" rel="noopener">${escapeHtml(it.title)}</a>` +
+      `<div class="poc-meta">${escapeHtml(it.source_name || '')}${it.published_date ? ` · ${relativeTime(it.published_date)}` : ''}` +
+      (cves.length ? ` · ${cves.map(c => `<a href="https://nvd.nist.gov/vuln/detail/${escapeHtml(encodeURIComponent(c))}" target="_blank" rel="noopener" class="cve-link">${escapeHtml(c)}</a>`).join(' ')}` : '') + `</div>` +
+      vulnRowHtml(it) +
+      `<div class="poc-sub">Links</div><ul class="poc-links">` +
+        `<li class="poc-link poc-article"><span class="poc-dot" aria-hidden="true"></span><div class="poc-link-body"><a href="${escapeHtml(safeUrl(it.url))}" target="_blank" rel="noopener">Article / blog</a><span class="poc-link-meta">${escapeHtml(it.source_name || '')}</span></div></li>` +
+        links.map(pocLinkHtml).join('') +
+        (!it.poc ? `<li class="poc-hint">PoC link not checked yet</li>` : (!links.length ? `<li class="poc-hint">No exploit link found${it.poc.cves && it.poc.cves.length ? '' : ' (no CVE ID to search)'}</li>` : '')) +
+      `</ul>` +
+      (sum ? `<div class="poc-sub">${it.aiSummary ? 'AI summary' : 'Summary'}</div><p class="poc-sum">${escapeHtml(sum)}</p>` : '') +
+      (ttps.length ? `<div class="poc-sub">Attack technique${ttps.length > 1 ? 's' : ''}</div><div class="poc-ttps">` +
+        ttps.slice(0, 4).map(t => `<a class="poc-ttp" href="${escapeHtml(mitreLink(t.subId || t.id))}" target="_blank" rel="noopener" title="${escapeHtml(t.tacticName || '')}"><code>${escapeHtml(t.subId || t.id)}</code>${escapeHtml(t.name)}</a>`).join('') +
+        (ttps.length > 4 ? `<span class="poc-more">+${ttps.length - 4}</span>` : '') +
+        `<button type="button" class="ti-3d-btn" data-attack-path="${it.id}">3D attack path</button></div>` : '') +
+      (it.poc && it.poc.notes && it.poc.notes.length ? `<p class="poc-note">${escapeHtml(it.poc.notes[it.poc.notes.length - 1])}</p>` : '') +
+      `<div class="poc-actions"><button type="button" class="poc-check-btn" data-poc-check="${it.id}"${busy ? ' disabled' : ''}>` +
+        `${busy ? 'Checking…' : it.poc ? 'Re-check PoC' : 'Check PoC'}</button>` +
+        (it.poc && it.poc.checkedAt ? `<span class="poc-checked">checked ${relativeTime(it.poc.checkedAt)}</span>` : '') + `</div>` +
+      `</li>`;
+  }
+
+  function renderPocTracker() {
+    const list = $('#poc-tracker-list');
+    if (!list) return;
+    const counts = { all: pocState.items.length, verified: 0, suspicious: 0, unchecked: 0 };
+    for (const it of pocState.items) { const v = pocVerdictOf(it); if (counts[v] !== undefined) counts[v]++; }
+    $$('#poc-tracker-card [data-poc-filter]').forEach((b) => {
+      const f = b.dataset.pocFilter;
+      b.setAttribute('aria-pressed', String(f === pocState.filter));
+      const n = b.querySelector('.poc-n'); if (n) n.textContent = counts[f] ?? '';
+    });
+    const countEl = $('#poc-tracker-count'); if (countEl) countEl.textContent = pocState.items.length ? String(pocState.items.length) : '';
+    const tokenNote = $('#poc-token-note'); if (tokenNote) tokenNote.classList.toggle('hidden', pocState.token || !pocState.items.length);
+    if (pocState.loading && !pocState.items.length) { list.innerHTML = '<li class="poc-empty">Loading…</li>'; return; }
+    if (pocState.error) { list.innerHTML = `<li class="poc-empty poc-err">${escapeHtml(pocState.error)}</li>`; return; }
+    const shown = pocState.items.filter((it) => pocState.filter === 'all' || pocVerdictOf(it) === pocState.filter);
+    list.innerHTML = shown.length ? shown.map(pocItemHtml).join('')
+      : `<li class="poc-empty">${pocState.items.length ? 'Nothing in this filter.' : `No PoC articles in the last ${pocState.days} days.`}</li>`;
+  }
+
+  async function runPocCheck(id) {
+    if (pocState.busy.has(id)) return;
+    pocState.busy.add(id);
+    renderPocTracker();
+    try {
+      const r = await api('POST', '/api/admin/poc-check', { articleId: id });
+      if (!r.success) throw new Error(r.error || 'PoC check failed');
+      const it = pocState.items.find((x) => x.id === id);
+      if (it) { it.poc = r.poc; if (r.poc.verdict === 'verified') it.has_poc = 1; }
+      const art = state.articles.find((x) => x.id === id);
+      if (art && r.poc.verdict === 'verified') art.has_poc = 1;
+    } catch (err) {
+      showToast('PoC check', err.message || 'PoC check failed', 'error');
+    } finally {
+      pocState.busy.delete(id);
+      renderPocTracker();
+    }
+  }
+
+  // ── AI analysis on a card: one button, one panel ──
+  // State lives in aiAnalysis (survives the 60 s auto-refresh re-render).
+  // Techniques it finds are merged into the card's ATT&CK box, not listed twice.
+  function aiAnalyzeButton(article) {
+    const st = aiAnalysis.get(article.id);
+    const label = !st ? 'AI analysis' : st.loading ? 'Analysing…' : st.open ? 'Hide AI analysis' : 'AI analysis';
+    return `<button type="button" class="btn-ai-analyze${st && st.open ? ' open' : ''}" data-ai-analyze="${article.id}"` +
+      ` aria-expanded="${st && st.open ? 'true' : 'false'}" aria-controls="ai-an-${article.id}"${st && st.loading ? ' disabled' : ''}` +
+      ` title="Summary, why it matters, priority and MITRE ATT&CK mapping">${label}</button>`;
+  }
+  function aiAnalysisHtml(article) {
+    const st = aiAnalysis.get(article.id);
+    if (!st || !st.open) return '';
+    const id = `ai-an-${article.id}`;
+    if (st.loading) {
+      return `<div class="ai-an" id="${id}" aria-busy="true"><div class="ai-an-head"><span class="ai-an-title">AI analysis</span></div>` +
+        ['Summarising the report', 'Scoring priority for a defender', 'Mapping behaviour to MITRE ATT&CK']
+          .map(t => `<div class="ai-an-loading"><span class="ai-an-spin" aria-hidden="true"></span>${t}…</div>`).join('') + `</div>`;
+    }
+    if (st.error) {
+      return `<div class="ai-an" id="${id}"><div class="ai-an-head"><span class="ai-an-title">AI analysis</span></div>` +
+        `<p class="ai-an-error">${escapeHtml(st.error)}</p><button type="button" class="ai-an-retry" data-ai-analyze-retry="${article.id}">Try again</button></div>`;
+    }
+    const d = st.data || {};
+    const tri = d.triage || null;
+    const PRI = ['immediate', 'high', 'routine', 'informational'];
+    const pri = tri && PRI.includes(tri.priority) ? tri.priority : null;
+    const rel = tri && Number.isFinite(tri.relevance) ? tri.relevance : null;
+    const sum = d.summary || null;
+    const added = Array.isArray(d.addedTtps) ? d.addedTtps : [];
+    const attackLine = !d.aiMapped ? (d.errors && d.errors.ttps ? `ATT&CK mapping failed: ${escapeHtml(d.errors.ttps)}` : '')
+      : added.length ? `Added ${added.length} technique${added.length === 1 ? '' : 's'} to the ATT&amp;CK box above: ${added.map(x => `<code>${escapeHtml(x)}</code>`).join(' ')}`
+      : (article.ttps && article.ttps.length ? 'No techniques beyond those already in the ATT&amp;CK box.' : 'The report doesn’t describe attacker techniques to map.');
+    return `<div class="ai-an" id="${id}">` +
+      `<div class="ai-an-head"><span class="ai-an-title">AI analysis</span>` +
+      (pri ? `<span class="ai-an-pri ai-an-pri-${pri}" title="Priority for a defender">${pri}</span>` : '') +
+      (rel !== null ? `<span class="ai-an-rel" title="Operational relevance"><span class="ai-an-bar"><i style="width:${rel}%"></i></span>${rel}/100</span>` : '') +
+      `</div>` +
+      (sum && sum.summary ? `<p class="ai-an-sum">${escapeHtml(sum.summary)}</p>` : (d.errors && d.errors.summary ? `<p class="ai-an-error">Summary unavailable: ${escapeHtml(d.errors.summary)}</p>` : '')) +
+      (sum && sum.keyTakeaway ? `<p class="ai-an-why"><span>Why it matters</span>${escapeHtml(sum.keyTakeaway)}</p>` : '') +
+      (tri && tri.reason ? `<p class="ai-an-why"><span>Priority reason</span>${escapeHtml(tri.reason)}</p>` : '') +
+      (sum && sum.affectedTech && sum.affectedTech.length ? `<div class="ai-an-tech"><span>Affected</span>${sum.affectedTech.slice(0, 8).map(t => `<span class="ai-an-chip">${escapeHtml(t)}</span>`).join('')}</div>` : '') +
+      (attackLine ? `<p class="ai-an-attack">${attackLine}</p>` : '') +
+      `<p class="ai-an-note">Generated by AI from this report only. Verify before acting.</p>` +
+      `</div>`;
   }
 
   // Unified source health status — same logic used by the admin panel
@@ -1118,6 +1595,7 @@
       return;
     }
     list.innerHTML = state.sources.map(s => renderSourceItem(s)).join('');
+    updateDashBulkBar(); // re-render drops the checked boxes; hide a stale bulk bar
   }
 
   function renderSourceItem(source) {
@@ -1126,14 +1604,14 @@
 
     return `
       <div class="source-item" data-source-id="${source.id}">
-        <input type="checkbox" class="dash-source-cb" data-src-id="${source.id}" data-src-url="${escapeHtml(source.url)}" data-src-name="${escapeHtml(source.name)}" style="margin-right:6px;cursor:pointer;">
+        <input type="checkbox" class="dash-source-cb guest-hidden" data-src-id="${source.id}" data-src-url="${escapeHtml(source.url)}" data-src-name="${escapeHtml(source.name)}" aria-label="Select ${escapeHtml(source.name)}" style="margin-right:6px;cursor:pointer;">
         <span class="source-status-dot ${st.cls}" title="${st.label}"></span>
         <div class="source-info">
-          <div class="source-info-name" title="${escapeHtml(source.name)}"><a href="${escapeHtml(source.url || '#')}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;" onmouseover="this.style.color='var(--cyan)'" onmouseout="this.style.color='inherit'">${escapeHtml(source.name)}</a></div>
+          <div class="source-info-name" title="${escapeHtml(source.name)}"><a href="${escapeHtml(safeUrl(source.url))}" target="_blank" rel="noopener">${escapeHtml(source.name)}</a></div>
           <div class="source-info-meta">Fetched: ${lastFetched} <span style="color:${st.color};font-size:10px;" title="${source.last_error ? escapeHtml(source.last_error) : st.label}">${st.label}</span></div>
         </div>
-        <div class="source-actions">
-          <label class="toggle-switch source-toggle">
+        <div class="source-actions guest-hidden">
+          <label class="toggle-switch source-toggle" aria-label="Enable ${escapeHtml(source.name)}">
             <input type="checkbox" ${source.enabled ? 'checked' : ''} data-toggle-source="${source.id}">
             <span class="toggle-slider"></span>
           </label>
@@ -1157,10 +1635,17 @@
   //
   async function addSource(formData) {
     try {
-      await api('POST', d('L2FwaS9zb3VyY2Vz'), formData);
-      showToast('Source Added', `${formData.name} has been added.`, 'success');
+      const r = await api('POST', d('L2FwaS9zb3VyY2Vz'), formData);
+      showToast('Source Added', r && r.fetching
+        ? `${formData.name} has been added and is being fetched now.`
+        : `${formData.name} has been added. It will be fetched on the next scheduled run.`, 'success');
       fetchSources();
       $('#add-source-form').reset();
+      if (r && r.fetching) {
+        // The server fetches the new source in the background: pick up the result
+        setTimeout(() => { Promise.allSettled([fetchSources(), fetchStats(), fetchArticles()]); }, 8000);
+        setTimeout(() => { Promise.allSettled([fetchSources(), fetchStats(), fetchArticles()]); }, 30000);
+      }
     } catch (e) { showToast('Error', e.message, 'error'); }
   }
 
@@ -1194,8 +1679,13 @@
         severity_threshold: $('#notif-severity').value,
         keywords_filter: $('#notif-keywords').value.trim()
       });
-      showToast('Saved', 'Notification settings updated.', 'success');
-    } catch (e) { showToast('Error', e.message, 'error'); }
+      if ($('#notif-email-enabled').checked && !serverConfig.emailEnabled) {
+        showToast('Saved — email alerts unavailable', 'Email delivery is not set up on this server yet, so email alerts cannot be sent. Use Telegram, Teams or WhatsApp for now.', 'warning');
+      } else {
+        showToast('Saved', 'Notification settings updated.', 'success');
+      }
+      return true;
+    } catch (e) { showToast('Error', e.message, 'error'); return false; }
   }
 
   async function testNotification(type) {
@@ -1214,27 +1704,34 @@
     state.isFetching = true;
     $('#fetch-now-btn').disabled = true;
     showToast('Fetching', 'Fetching latest threats...', 'info');
+    const done = () => { state.isFetching = false; $('#fetch-now-btn').disabled = false; };
+    const reload = () => Promise.allSettled([fetchStats(), fetchArticles(), fetchSources()]);
     try {
-      await api('POST', d('L2FwaS9mZXRjaC1ub3c='));
-      setTimeout(async () => {
-        await Promise.allSettled([fetchStats(), fetchArticles(), fetchSources()]);
-        showToast('Complete', 'Feeds updated.', 'success');
-        state.isFetching = false;
-        $('#fetch-now-btn').disabled = false;
-      }, 5000);
+      // Users' own sources are fetched while the request waits (up to ~25 s) and
+      // the server reports what happened; admins start the full background run.
+      // Don't claim "Feeds updated" for a fetch that is still running.
+      const r = await api('POST', d('L2FwaS9mZXRjaC1ub3c=')) || {};
+      if (r.completed) {
+        await reload();
+        showToast('Fetch complete', r.message || 'Feeds updated.', r.errors ? 'warning' : 'success');
+        done();
+      } else {
+        showToast('Fetch running', r.message || 'New articles will appear as they arrive.', 'info');
+        setTimeout(reload, 10000);
+        setTimeout(() => { reload().then(done); }, 30000);
+      }
     } catch (e) {
       showToast('Error', e.message, 'error');
-      state.isFetching = false;
-      $('#fetch-now-btn').disabled = false;
+      done();
     }
   }
 
   function clearFilters() {
-    state.filters = { category: '', severity: '', source_type: '', search: '', sector: '', threat_actor: '', has_poc: '', has_mitre: '', is_patched: '', time_range: '', start_date: '', end_date: '' };
+    state.filters = { category: '', severity: '', source_type: '', search: '', sector: '', threat_actor: '', has_poc: '', has_mitre: '', watchlist: '', is_patched: '', time_range: '', start_date: '', end_date: '' };
     state.currentPage = 1;
     const si = $('#search-input'); if (si) si.value = '';
     ['#severity-filter', '#source-type-filter', '#sector-filter', '#threat-actor-filter', '#patch-filter', '#time-range-filter'].forEach(sel => {
-      const el = $(sel); if (el) { el.value = ''; el.classList.remove('has-value'); }
+      setSelectValue($(sel), '');
     });
     $$('.toggle-pill').forEach(b => b.classList.remove('active'));
     $$('#category-filters .pill').forEach(p => p.classList.remove('active'));
@@ -1264,12 +1761,76 @@
     }
   }
 
-  function exportArticles() {
-    const blob = new Blob([JSON.stringify(state.articles, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = `threatpulse-export-${new Date().toISOString().split('T')[0]}.json`;
-    a.click(); URL.revokeObjectURL(url);
+  // Query string for the current feed filters (shared by the feed and export)
+  function filterParams(page, limit) {
+    const params = new URLSearchParams({ page, limit });
+    const f = state.filters;
+    ['category', 'severity', 'source_type', 'search', 'sector', 'threat_actor', 'has_poc', 'has_mitre', 'watchlist',
+      'time_range', 'start_date', 'end_date'].forEach(k => { if (f[k]) params.set(k, f[k]); });
+    if (f.is_patched !== '') params.set('is_patched', f.is_patched);
+    return params;
+  }
+
+  // Shape of one exported article: readable fields only (no internal hashes /
+  // flags) and reviews as real objects instead of a JSON string.
+  function exportRecord(a) {
+    let reviews = [];
+    try { reviews = a.reviews ? JSON.parse(a.reviews) : []; } catch (e) { reviews = []; }
+    reviews = (Array.isArray(reviews) ? reviews : []).filter(r => r && r.user_id).map(r => ({
+      reviewer: r.username, status: r.status, started_at: r.started_at, completed_at: r.completed_at, notes: r.notes
+    }));
+    const list = (v) => (v ? String(v).split(',').map(x => x.trim()).filter(Boolean) : []);
+    return {
+      id: a.id, title: a.title, url: a.url, description: a.description,
+      source: a.source_name, source_type: a.source_type, author: a.author || null,
+      published: a.published_date, fetched: a.fetched_date,
+      category: a.category, severity: a.severity, cve: a.cve_id || null,
+      patched: a.is_patched === 1 ? true : a.is_patched === 0 ? false : null,
+      has_poc: !!a.has_poc, mitre: list(a.mitre_ids), sector: a.sector || null,
+      threat_actors: list(a.threat_actors), tags: list(a.tags), iocs: a.iocs || null,
+      owner: a.owner_name || null, reviews
+    };
+  }
+
+  // Exports EVERY article matching the current filters (it used to dump only the
+  // 50 loaded on screen while looking like a full export), within the viewer's
+  // own scope since it goes through the same /api/articles endpoint.
+  const EXPORT_MAX = 5000;
+  async function exportArticles() {
+    const btn = $('#export-btn');
+    if (btn) btn.disabled = true;
+    try {
+      const all = [];
+      let page = 1, totalPages = 1, total = 0;
+      do {
+        const data = await api('GET', `${d('L2FwaS9hcnRpY2xlcw==')}?${filterParams(page, 200)}`);
+        const rows = Array.isArray(data.articles) ? data.articles : [];
+        all.push(...rows);
+        totalPages = data.totalPages || 0;
+        total = data.total || all.length;
+        page++;
+      } while (page <= totalPages && all.length < EXPORT_MAX);
+      const records = all.slice(0, EXPORT_MAX).map(exportRecord);
+      const payload = {
+        exported_at: new Date().toISOString(),
+        filters: Object.fromEntries(Object.entries(state.filters).filter(([, v]) => v !== '')),
+        total_matching: total,
+        count: records.length,
+        articles: records
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `threatpulse-export-${localDayKey(new Date())}.json`;
+      a.click(); URL.revokeObjectURL(url);
+      showToast('Exported', total > records.length
+        ? `Exported the newest ${records.length} of ${total} matching articles.`
+        : `Exported ${records.length} article(s).`, 'success');
+    } catch (e) {
+      showToast('Export failed', e.message, 'error');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
   }
 
   //
@@ -1289,7 +1850,10 @@
 
     state.refreshTimer = setInterval(async () => {
       state.refreshCountdown = 60;
-      await Promise.allSettled([fetchStats(), fetchArticles()]);
+      // Re-fetching page 1 would throw away pages the user loaded via "Load more"
+      const tasks = [fetchStats()];
+      if (state.currentPage <= 1) tasks.push(fetchArticles());
+      await Promise.allSettled(tasks);
     }, 60000);
   }
 
@@ -1330,10 +1894,17 @@
         }).then(r => r.json());
 
         if (result.success) {
+          // Don't leave the password in the (hidden) form — the eye toggle would
+          // reveal it to whoever sees the login screen after logout.
+          $('#login-form').reset();
+          // Forced first-login change: reuse the password just typed at sign-in
+          // (kept in memory only until the change completes) instead of asking
+          // again — the browser tends to autofill a stale saved password there.
+          forcedChangeSecret = result.user && result.user.mustChangePassword ? password : null;
           setUser(result.user);
           initDashboard();
         } else {
-          errEl.textContent = (result.error || 'Invalid username/email or password');
+          errEl.textContent = (result.error || 'Invalid username/email or password') + (result.locked ? '' : dbResetHint());
           errEl.classList.remove('hidden');
           $('#login-password').value = '';
           $('#login-password').focus();
@@ -1393,7 +1964,7 @@
       const email = $('#reg-email').value.trim();
       const pw = $('#reg-password').value;
       const confirmPw = $('#reg-confirm').value;
-      const inviteCode = $('#reg-invite').value.trim();
+      const inviteCode = $('#reg-invite').value.trim().toUpperCase();
 
       // Client-side validation — check each field
       if (!username || username.length < 3) {
@@ -1441,8 +2012,13 @@
         errEl.classList.remove('hidden');
         return;
       }
-      // Invite code is optional (open registration) — only required if the
-      // field is visible (i.e. REQUIRE_INVITE_CODE is on).
+      // Invite code: required unless the server runs open registration
+      // (REQUIRE_INVITE_CODE=false, reported by /api/auth/config).
+      if (serverConfig.requireInvite !== false && !inviteCode) {
+        errEl.textContent = 'An invite code is required to register. Ask your admin for one.';
+        errEl.classList.remove('hidden');
+        return;
+      }
 
       $('#register-btn').disabled = true;
       $('#register-btn').textContent = 'Creating account…';
@@ -1455,6 +2031,8 @@
         }).then(r => r.json());
 
         if (result.success) {
+          $('#register-form').reset();
+          $('#password-strength').className = 'password-strength hidden';
           setUser(result.user);
           initDashboard();
         } else {
@@ -1515,11 +2093,8 @@
           body: JSON.stringify({ email })
         }).then(r => r.json());
         if (result.success) {
-          let msg = result.message || 'If that email exists, a reset link has been sent.';
-          if (result._devResetLink) {
-            msg += '\n\n⚠️ SMTP not configured. Copy this link to reset:\n' + result._devResetLink;
-          }
-          okEl.textContent = msg;
+          okEl.textContent = (result.message || 'If that email exists, a reset link has been sent.') +
+            (result.emailDelivery ? ' Check your inbox and spam folder — the link expires in 1 hour.' : '');
           okEl.classList.remove('hidden');
         } else {
           errEl.textContent = (result.error || 'Request failed');
@@ -1642,15 +2217,18 @@
       $('#guest-back').style.display = isGuest ? '' : 'none';
     });
 
-    // Continue as Guest — return to the dashboard from the auth overlay
+    // Continue as Guest — return to the dashboard from the auth overlay.
+    // After a logout there is no session (and no timers) left, so start a new guest one.
     $('#guest-back-btn').addEventListener('click', () => {
-      hideAuth();
+      if (currentUser && currentUser.username === 'guest') hideAuth();
+      else enterGuestSession();
     });
 
     // Change email
     $('#change-email-btn').addEventListener('click', () => {
       $('#email-error').classList.add('hidden');
       $('#account-email').value = (currentUser && currentUser.email) || '';
+      $('#email-current-password').value = '';
       $('#email-modal').classList.remove('hidden');
     });
     $('#cancel-email-btn').addEventListener('click', () => {
@@ -1661,7 +2239,10 @@
       const errEl = $('#email-error');
       errEl.classList.add('hidden');
       try {
-        const result = await api('PUT', d('L2FwaS9hdXRoL2VtYWls'), { email: $('#account-email').value.trim() });
+        const result = await api('PUT', d('L2FwaS9hdXRoL2VtYWls'), {
+          email: $('#account-email').value.trim(),
+          currentPassword: $('#email-current-password').value
+        });
         if (result.success && result.verificationRequired) {
           $('#email-modal').classList.add('hidden');
           $('#verification-code').value = '';
@@ -1669,6 +2250,11 @@
           $('#verification-notice').textContent = `We sent a 6-digit verification code to your new email: ${result.email}. Please enter it below to confirm.`;
           state.pendingVerificationType = 'email_change';
           $('#verification-modal').classList.remove('hidden');
+        } else if (result.success) {
+          // Applied directly (this server cannot send verification email)
+          if (currentUser) currentUser.email = result.email;
+          $('#email-modal').classList.add('hidden');
+          showToast('Email updated', result.message || 'Your email address has been updated.', 'success');
         } else {
           errEl.textContent = result.error || 'Failed to update email'; errEl.classList.remove('hidden');
         }
@@ -1677,8 +2263,14 @@
       }
     });
 
-    // Change password
+    // Change password: confirmed by email. We email a one-time link; the link
+    // opens the "choose a new password" page (same as forgot-password).
     $('#change-password-btn').addEventListener('click', () => {
+      $('#password-error').classList.add('hidden');
+      $('#password-success').classList.add('hidden');
+      $('#password-link-email').textContent = (currentUser && currentUser.email) || 'your email address';
+      const btn = $('#password-link-submit');
+      btn.disabled = false; btn.textContent = 'Email me a link';
       $('#password-modal').classList.remove('hidden');
     });
     $('#cancel-password-btn').addEventListener('click', () => {
@@ -1686,27 +2278,26 @@
     });
     $('#password-form').addEventListener('submit', async (e) => {
       e.preventDefault();
-      const errEl = $('#password-error');
-      errEl.classList.add('hidden');
+      const errEl = $('#password-error'), okEl = $('#password-success'), btn = $('#password-link-submit');
+      errEl.classList.add('hidden'); okEl.classList.add('hidden');
+      btn.disabled = true; btn.textContent = 'Sending…';
       try {
-        const result = await api('PUT', d('L2FwaS9hdXRoL3Bhc3N3b3Jk'), {
-          currentPassword: $('#current-password').value,
-          newPassword: $('#new-password').value
-        });
-        if (result.success && result.verificationRequired) {
-          $('#password-modal').classList.add('hidden');
-          $('#verification-code').value = '';
-          $('#verification-error').classList.add('hidden');
-          $('#verification-notice').textContent = `We sent a 6-digit verification code to your registered email: ${result.email}. Please enter it below to confirm.`;
-          state.pendingVerificationType = 'password_change';
-          $('#verification-modal').classList.remove('hidden');
+        const result = await api('POST', '/api/auth/password/request-link', {});
+        if (result.success) {
+          okEl.textContent = `Link sent to ${result.email}. Check your inbox (and spam folder) and open it within 60 minutes to set your new password.`;
+          okEl.classList.remove('hidden');
+          btn.textContent = 'Send again';
         } else {
-          errEl.textContent = result.error || 'Failed to change password';
+          errEl.textContent = result.error || 'Could not send the link';
           errEl.classList.remove('hidden');
+          btn.textContent = 'Email me a link';
         }
       } catch (err) {
         errEl.textContent = err.message;
         errEl.classList.remove('hidden');
+        btn.textContent = 'Email me a link';
+      } finally {
+        btn.disabled = false;
       }
     });
 
@@ -1736,10 +2327,8 @@
               currentUser.mustChangePassword = false;
             }
             showToast('Success', 'Password changed successfully.', 'success');
-            const notice = $('#password-forced-notice');
-            if (notice) notice.classList.add('hidden');
-            const cancelBtn = $('#cancel-password-btn');
-            if (cancelBtn) cancelBtn.classList.remove('hidden');
+            Promise.allSettled([fetchStats(), fetchArticles(), fetchSources(), fetchNotificationSettings()]);
+            setForcedPasswordMode(false);
           }
           $('#verification-modal').classList.add('hidden');
           $('#password-form').reset();
@@ -1799,6 +2388,13 @@
           '#time-range-filter': 'time_range'
         };
         state.filters[filterMap[sel]] = e.target.value;
+        // Picking a preset (or "All Time") drops an earlier custom/card date range;
+        // otherwise the stale start/end dates kept filtering the feed and exports.
+        if (sel === '#time-range-filter' && e.target.value !== 'custom') {
+          state.filters.start_date = '';
+          state.filters.end_date = '';
+          document.querySelectorAll('.selected-range-tag').forEach(t => t.remove());
+        }
         e.target.classList.toggle('has-value', e.target.value !== '');
         state.currentPage = 1;
         updateClearAllButton();
@@ -1844,7 +2440,7 @@
             <input type="datetime-local" id="custom-date-start">
             <label>To</label>
             <input type="datetime-local" id="custom-date-end">
-            <span class="tz-label">${tz}</span>
+            <span class="tz-label">${escapeHtml(tz)}</span>
             <button class="date-apply-btn" id="custom-date-apply">Apply</button>
           `;
           e.target.parentElement.appendChild(pickerEl);
@@ -1867,6 +2463,11 @@
         const startEl = $('#custom-date-start');
         const endEl = $('#custom-date-end');
         if (startEl && endEl) {
+          // Empty/invalid inputs made toISOString() throw a RangeError
+          if (isNaN(new Date(startEl.value)) || isNaN(new Date(endEl.value))) {
+            showToast('Invalid range', 'Pick both a start and an end date.', 'error');
+            return;
+          }
           state.filters.start_date = new Date(startEl.value).toISOString();
           state.filters.end_date = new Date(endEl.value).toISOString();
           state.currentPage = 1;
@@ -1881,7 +2482,10 @@
         if (tag) tag.remove();
         state.filters.start_date = '';
         state.filters.end_date = '';
-        $('#time-range-filter').value = '';
+        state.filters.time_range = '';
+        setSelectValue($('#time-range-filter'), '');
+        const picker = $('#custom-date-picker');
+        if (picker) picker.classList.remove('visible');
         updateClearAllButton();
         fetchArticles();
       }
@@ -1936,44 +2540,78 @@
         });
       }
 
-      // AI summary + triage button (per-article)
-      const aiBtn = e.target.closest('[data-ai-summarize]');
-      if (aiBtn) {
-        const articleId = parseInt(aiBtn.dataset.aiSummarize);
-        const resultEl = document.querySelector(`[data-ai-result="${articleId}"]`);
-        aiBtn.textContent = '...';
-        aiBtn.disabled = true;
+      // Threat actor chip → actor profile (which has "Show all reports in feed")
+      const actorBtn = e.target.closest('[data-filter-actor]');
+      if (actorBtn && window.ThreatPulseActor) { window.ThreatPulseActor.open(actorBtn.dataset.filterActor, actorBtn); return; }
+      if (actorBtn) {
+        const name = actorBtn.dataset.filterActor;
+        const sel = $('#threat-actor-filter');
+        const opt = sel && [...sel.options].find(o => o.value.toLowerCase() === name.toLowerCase());
+        if (opt) { sel.value = opt.value; sel.dispatchEvent(new Event('change', { bubbles: true })); }
+        else { const si = $('#search-input'); si.value = name; si.dispatchEvent(new Event('input', { bubbles: true })); }
+        document.querySelector('.filter-bar')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        return;
+      }
 
-        if (resultEl && resultEl.style.display !== 'none' && resultEl.dataset.loaded) {
-          // Toggle off
-          resultEl.style.display = 'none';
-          aiBtn.textContent = 'AI';
-          aiBtn.disabled = false;
+      // 3D attack path for one article
+      const pathBtn = e.target.closest('[data-attack-path]');
+      if (pathBtn) {
+        const id = parseInt(pathBtn.dataset.attackPath, 10);
+        const art = state.articles.find(a => a.id === id) || pocState.items.find(a => a.id === id);
+        if (art && window.ThreatPulseAttackPath) window.ThreatPulseAttackPath.open(art, pathBtn);
+        return;
+      }
+
+      // Watchlist chip remove
+      const wRm = e.target.closest('[data-watch-remove]');
+      if (wRm) { removeWatchTerm(parseInt(wRm.dataset.watchRemove, 10)); return; }
+
+      // IOC export (copy / CSV / STIX 2.1)
+      const iocBtn = e.target.closest('[data-ioc-export]');
+      if (iocBtn) {
+        const id = parseInt(iocBtn.dataset.iocArticle, 10);
+        const art = state.articles.find(a => a.id === id);
+        if (art) exportIocs(art, iocBtn.dataset.iocExport);
+        return;
+      }
+
+      // Admin PoC tracker controls
+      const pocBtn = e.target.closest('[data-poc-check]');
+      if (pocBtn) { runPocCheck(parseInt(pocBtn.dataset.pocCheck, 10)); return; }
+      const pocFilter = e.target.closest('[data-poc-filter]');
+      if (pocFilter) { pocState.filter = pocFilter.dataset.pocFilter; renderPocTracker(); return; }
+      const pocNext = e.target.closest('#poc-check-next');
+      if (pocNext) {
+        const todo = pocState.items.filter((it) => !it.poc).slice(0, 5);
+        if (!todo.length) { showToast('PoC check', 'Everything here has been checked.', 'info'); return; }
+        pocNext.disabled = true;
+        (async () => { for (const it of todo) await runPocCheck(it.id); pocNext.disabled = false; })();
+        return;
+      }
+
+      // AI analysis (summary + why it matters + priority + ATT&CK) — one button per card
+      const anBtn = e.target.closest('[data-ai-analyze], [data-ai-analyze-retry]');
+      if (anBtn) {
+        const id = parseInt(anBtn.dataset.aiAnalyze || anBtn.dataset.aiAnalyzeRetry, 10);
+        const st = aiAnalysis.get(id);
+        if (st && st.data && !anBtn.dataset.aiAnalyzeRetry) {       // already loaded: just show / hide
+          st.open = !st.open;
+          renderArticles();
           return;
         }
-
-        const summaryUrl = d('L2FwaS9haS9zdW1tYXJpemU='); // /api/ai/summarize
-        const triageUrl = d('L2FwaS9haS90cmlhZ2U=');       // /api/ai/triage
-        Promise.allSettled([
-          api('POST', summaryUrl, { articleId }),
-          api('POST', triageUrl, { articleId })
-        ]).then(([sumRes, triRes]) => {
-          const sum = sumRes.status === 'fulfilled' ? sumRes.value : { success: false, error: (sumRes.reason && sumRes.reason.message) || 'Summary failed' };
-          const tri = triRes.status === 'fulfilled' ? triRes.value : { success: false, error: (triRes.reason && triRes.reason.message) || 'Triage failed' };
-          if (resultEl) {
-            const triageBadge = tri.success && tri.priority
-              ? `<span class="ai-triage-badge ai-triage-${tri.priority}">${tri.priority} · ${tri.relevance || '?'}/100</span>`
-              : (tri.error ? `<div class="ai-message ai-error">Triage: ${escapeHtml(tri.error)}</div>` : '');
-            const summaryText = sum.success && sum.summary
-              ? `<div class="ai-summary-box"><strong>AI Summary:</strong> ${escapeHtml(sum.summary)}${sum.keyTakeaway ? `<br><em>${escapeHtml(sum.keyTakeaway)}</em>` : ''}</div>`
-              : `<div class="ai-message ai-error">Summary: ${escapeHtml(sum.error || 'Summary failed')}</div>`;
-            resultEl.innerHTML = `${triageBadge}${summaryText}`;
-            resultEl.style.display = 'block';
-            resultEl.dataset.loaded = '1';
-          }
-          aiBtn.textContent = 'AI';
-          aiBtn.disabled = false;
-        });
+        if (st && st.loading) return;
+        if (aiAnalysis.size > 200) aiAnalysis.delete(aiAnalysis.keys().next().value);
+        aiAnalysis.set(id, { open: true, loading: true });
+        renderArticles();
+        api('POST', '/api/ai/analyze', { articleId: id }).then((r) => {
+          if (!r.success) throw new Error(r.error || 'AI analysis failed');
+          const art = state.articles.find(a => a.id === id);
+          if (art) { art.ttps = r.ttps; art.aiMapped = r.aiMapped; art.aiActors = r.actors || []; }
+          aiAnalysis.set(id, { open: true, loading: false, data: r });
+        }).catch((err) => {
+          aiAnalysis.set(id, { open: true, loading: false, error: err.message || 'AI analysis failed' });
+        }).finally(() => renderArticles());
+        return;
       }
     });
 
@@ -1988,22 +2626,45 @@
     // Export
     $('#export-btn').addEventListener('click', exportArticles);
 
+    // Watchlist add / remove
+    $('#watchlist-form')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const inp = $('#watchlist-input');
+      const term = inp.value.trim();
+      if (!term) return;
+      try { await addWatchTerm(term); inp.value = ''; }
+      catch (err) { showToast('Watchlist', err.message, 'error'); }
+    });
+
+    // Admin PoC tracker: time range + periodic refresh (picks up background checks)
+    $('#poc-days')?.addEventListener('change', (e) => { pocState.days = parseInt(e.target.value, 10) || 30; loadPocTracker(); });
+    setInterval(() => { if (isAdminUser() && !document.hidden && !pocState.busy.size) loadPocTracker(); }, 180000);
+
     // Stat cards clickable — filter feed on click
     $$('.stat-card').forEach(card => {
       card.addEventListener('click', () => {
         const stat = card.dataset.stat;
         clearFilters();
+        // Each card filters the feed to the same window its number counts:
+        // "today" is the viewer's local day (as is the count, see fetchStats),
+        // critical / PoC counts cover the last 7 days.
         if (stat === 'threats') {
-          const today = new Date().toISOString().split('T')[0];
-          state.filters.start_date = today + 'T00:00:00.000Z';
-          state.filters.end_date = today + 'T23:59:59.999Z';
+          const b = localDayBounds(new Date());
+          state.filters.start_date = b.start;
+          state.filters.end_date = b.end;
           state.filters.time_range = 'custom';
+          setSelectValue($('#time-range-filter'), 'custom');
+          showSelectedRangeTag(b.start, b.end);
         } else if (stat === 'critical') {
           state.filters.severity = 'critical';
-          $('#severity-filter').value = 'critical';
+          state.filters.time_range = '7d';
+          setSelectValue($('#severity-filter'), 'critical');
+          setSelectValue($('#time-range-filter'), '7d');
         } else if (stat === 'pocs') {
           state.filters.has_poc = '1';
+          state.filters.time_range = '7d';
           $('#filter-poc').classList.add('active');
+          setSelectValue($('#time-range-filter'), '7d');
         }
         state.currentPage = 1;
         updateClearAllButton();
@@ -2071,6 +2732,36 @@
       }
     });
 
+    // Notifications panel: the whole card and each channel open like dropdowns
+    $('#notif-panel-toggle')?.addEventListener('click', () => {
+      const btn = $('#notif-panel-toggle');
+      const open = btn.getAttribute('aria-expanded') !== 'true';
+      btn.setAttribute('aria-expanded', String(open));
+      $('#notification-form').classList.toggle('is-collapsed', !open);
+      btn.closest('.notif-card')?.classList.toggle('open', open);
+    });
+    const setChannelOpen = (channel, open) => {
+      channel.classList.toggle('open', open);
+      channel.querySelector('.notif-channel-head')?.setAttribute('aria-expanded', String(open));
+    };
+    $$('.notif-channel-head').forEach(head => {
+      const channel = head.closest('.notif-channel');
+      head.addEventListener('click', (e) => {
+        if (e.target.closest('.toggle-switch')) return; // the on/off switch has its own job
+        setChannelOpen(channel, !channel.classList.contains('open'));
+      });
+      head.addEventListener('keydown', (e) => {
+        if (e.target !== head || (e.key !== 'Enter' && e.key !== ' ')) return;
+        e.preventDefault();
+        setChannelOpen(channel, !channel.classList.contains('open'));
+      });
+      // Switching a channel on opens it so its fields can be filled in
+      head.querySelector('.toggle-switch input')?.addEventListener('change', (e) => {
+        if (e.target.checked) setChannelOpen(channel, true);
+        updateNotifSummary();
+      });
+    });
+
     // Notification form
     $('#notification-form').addEventListener('submit', (e) => {
       e.preventDefault();
@@ -2079,8 +2770,7 @@
     // Per-channel test buttons — save first so the test uses current values
     $$('.notif-test').forEach(btn => {
       btn.addEventListener('click', async () => {
-        await saveNotificationSettings();
-        testNotification(btn.dataset.test);
+        if (await saveNotificationSettings()) testNotification(btn.dataset.test);
       });
     });
 
@@ -2134,10 +2824,14 @@
       const checked = document.querySelectorAll('.dash-source-cb:checked');
       if (checked.length === 0) return;
       if (confirm(`Delete ${checked.length} selected source(s)?`)) {
+        let ok = 0, lastErr = '';
         for (const cb of checked) {
-          try { await api('DELETE', `${d('L2FwaS9zb3VyY2Vz')}/${cb.dataset.srcId}`); } catch(e) {}
+          try { await api('DELETE', `${d('L2FwaS9zb3VyY2Vz')}/${cb.dataset.srcId}`); ok++; }
+          catch (e) { lastErr = e.message; }
         }
-        showToast('Deleted', `${checked.length} source(s) removed.`, 'success');
+        if (ok) showToast('Deleted', `${ok} source(s) removed.`, 'success');
+        if (ok < checked.length) showToast('Error', `${checked.length - ok} source(s) could not be removed: ${lastErr}`, 'error');
+        $('#dash-select-all').checked = false;
         fetchSources(); fetchStats();
       }
     });
@@ -2148,7 +2842,18 @@
         e.preventDefault();
         searchInput.focus();
       }
+      // Date headers are role="button" — make them operable from the keyboard
+      const dh = e.target.closest && e.target.closest('.date-header');
+      if (dh && (e.key === 'Enter' || e.key === ' ')) {
+        e.preventDefault();
+        dh.click();
+      }
     });
+
+    // Chart is sized from its container at render time — re-render on resize
+    window.addEventListener('resize', debounce(() => {
+      if (_chartTimeline.length) renderChart(_chartTimeline, _chartRange);
+    }, 200));
 
     // ─── Ask ThreatPulse (AI) panel ───
     let aiThreadId = null;
@@ -2163,6 +2868,16 @@
     $('#ai-panel-close').addEventListener('click', () => {
       $('#ai-panel').classList.add('hidden');
     });
+
+    // Minimal, safe markdown for AI answers: escape first, then only add <strong>
+    // and bullet glyphs (the model often answers with **bold** and "* " lists).
+    function formatAnswer(raw) {
+      return escapeHtml(String(raw || '')).split('\n').map(line => {
+        let l = line.replace(/^\s{0,3}#{1,6}\s+(.+)$/, '**$1**')
+                    .replace(/^(\s*)[*\-]\s+/, (m, sp) => `${sp.replace(/ /g, '&nbsp;')}&bull; `);
+        return l.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/【(\d+)(?:†[^】]*)?】/g, '[$1]');
+      }).join('<br>');
+    }
 
     function renderSources(sources) {
       if (!sources || !sources.length) return '';
@@ -2203,7 +2918,7 @@
           if (m.role === 'user') {
             body.insertAdjacentHTML('beforeend', `<div class="ai-message ai-user">${escapeHtml(m.content)}</div>`);
           } else {
-            const answerHtml = escapeHtml(m.content || '').replace(/\n/g, '<br>');
+            const answerHtml = formatAnswer(m.content);
             body.insertAdjacentHTML('beforeend', `<div class="ai-message ai-bot">${answerHtml}${renderSources(m.sources)}</div>`);
           }
         });
@@ -2219,6 +2934,17 @@
       loadAiThreads();
       $('#ai-question').focus();
     }
+
+    // On logout / account switch: the previous user's chat must not stay on screen,
+    // and their threadId would 404 ("Thread not found") for the next user.
+    resetAiPanel = () => {
+      aiThreadId = null;
+      $('#ai-panel').classList.add('hidden');
+      $('#ai-panel-body').innerHTML = '<div class="ai-message ai-bot">Ask me about threats in your feed, or toggle web search for anything else.</div>';
+      $('#ai-thread-list').innerHTML = '';
+      $('#ai-question').value = '';
+      $('#ai-web-toggle').checked = false;
+    };
 
     async function askAI() {
       const question = $('#ai-question').value.trim();
@@ -2244,11 +2970,10 @@
 
         if (result.success) {
           aiThreadId = result.threadId || aiThreadId;
-          const answerHtml = escapeHtml(result.answer || '').replace(/\n/g, '<br>');
+          const answerHtml = formatAnswer(result.answer);
           let extra = '';
-          if (result.mode === 'rag' && result.citations && result.citations.length) {
-            extra = `<br><br>[Citations: ${result.citations.join(', ')}]`;
-          } else if (result.mode === 'web') {
+          // Both modes return clickable sources (feed articles in RAG mode)
+          if (Array.isArray(result.sources) && result.sources.length) {
             extra = renderSources(result.sources);
           }
           body.insertAdjacentHTML('beforeend', `<div class="ai-message ai-bot">${answerHtml}${extra}</div>`);
@@ -2290,22 +3015,57 @@
   //
   //  INITIALIZATION
   //
-  function enforcePasswordChange() {
-    if (!currentUser || !currentUser.mustChangePassword) return;
-    const modal = $('#password-modal');
-    modal.classList.remove('hidden');
+  function setCurrentPasswordFieldVisible(visible) {
+    const input = $('#current-password');
+    if (!input) return;
+    const group = input.closest('.form-group');
+    if (group) group.classList.toggle('hidden', !visible);
+    input.required = visible;
+    if (!visible) input.value = '';
+  }
+
+  // Forced mode: notice shown, Cancel becomes "Sign out" (see its handler)
+  function setForcedPasswordMode(forced) {
     const cancelBtn = $('#cancel-password-btn');
-    if (cancelBtn) cancelBtn.classList.add('hidden');
+    if (cancelBtn) { cancelBtn.classList.remove('hidden'); cancelBtn.textContent = forced ? 'Sign out' : 'Cancel'; }
     const notice = $('#password-forced-notice');
-    if (notice) notice.classList.remove('hidden');
+    if (notice) notice.classList.toggle('hidden', !forced);
+  }
+
+  // Forced password changes were removed: they looped on ephemeral hosting, and
+  // every password change now goes through the emailed link instead.
+  function enforcePasswordChange() { /* intentionally empty */ }
+
+
+  // Shown under a failed sign-in when this server's database was created at this
+  // boot (ephemeral hosting wipes it on every redeploy/restart): the account or
+  // password the user remembers may simply no longer exist.
+  function dbResetHint() {
+    if (!serverConfig.dbCreatedAt) return '';
+    const when = new Date(serverConfig.dbCreatedAt);
+    if (isNaN(when.getTime())) return '';
+    return ` — Note: this server's database was reset on ${when.toLocaleString()} (e.g. by a redeploy). ` +
+      'Accounts and password changes made before then no longer exist: register again, or sign in as admin with the initial admin password.';
+  }
+
+  function loadServerConfig() {
+    return fetch(d('L2FwaS9hdXRoL2NvbmZpZw==')).then(r => (r.ok ? readJson(r) : {})).then(cfg => {
+      serverConfig = { ...serverConfig, ...(cfg || {}) };
+      const group = $('#reg-invite-group');
+      if (group) group.style.display = serverConfig.requireInvite ? '' : 'none';
+      const inv = $('#reg-invite');
+      if (inv) inv.required = !!serverConfig.requireInvite;
+      return serverConfig;
+    }).catch(() => serverConfig);
   }
 
   async function initDashboard() {
+    // initDashboard runs again on every login / guest->user switch: don't stack intervals
     updateClock();
-    setInterval(updateClock, 1000);
+    if (!clockInterval) clockInterval = setInterval(updateClock, 1000);
     // Dynamic favicon — shield + pulse, updated every 2s
     updateFavicon();
-    setInterval(updateFavicon, 2000);
+    if (!faviconInterval) faviconInterval = setInterval(updateFavicon, 2000);
     enforcePasswordChange();
     initCustomDropdowns();
     await Promise.allSettled([fetchStats(), fetchArticles(), fetchSources(), fetchNotificationSettings()]);
@@ -2345,6 +3105,15 @@
       display.className = 'custom-select-display';
       display.textContent = select.options[select.selectedIndex]?.textContent || '';
       wrapper.appendChild(display);
+      // Keep the label in sync with programmatic changes (setSelectValue) and with
+      // keyboard changes on the (visually hidden but focusable) native select.
+      select._syncDisplay = () => {
+        display.textContent = select.options[select.selectedIndex]?.textContent || '';
+      };
+      select.addEventListener('change', () => {
+        select._syncDisplay();
+        select.classList.toggle('has-value', select.value !== '');
+      });
 
       const list = document.createElement('div');
       list.className = 'custom-select-list hidden';
@@ -2413,6 +3182,7 @@
     // Wrap so a single binding error can never leave the login button dead.
     try { bindEvents(); } catch (e) { console.error('[init] bindEvents error:', e); }
     try { initTheme(); } catch (e) { console.error('[init] theme error:', e); }
+    loadServerConfig();
 
     // Arriving from a password-reset email link? Show the reset form.
     const resetToken = new URLSearchParams(window.location.search).get('reset');
@@ -2423,25 +3193,43 @@
       return;
     }
 
+    // "Secure my account" link in the password-changed email: open Forgot password
+    if (new URLSearchParams(window.location.search).get('forgot') === '1') {
+      history.replaceState(null, '', window.location.pathname);
+      showAuth();
+      $('#login-form')?.classList.add('hidden');
+      $('#forgot-password-form')?.classList.remove('hidden');
+      return;
+    }
+
     // Check if we have an httpOnly session cookie by hitting the auth endpoint
     // (the cookie is sent automatically, no JS involved)
-    fetch(d('L2FwaS9hdXRoL21l'))
-      .then(r => {
-        if (!r.ok) throw new Error('Not authenticated');
-        return r.json();
-      })
-      .then(data => {
-        if (data.success && data.user) {
-          currentUser = data.user;
-          updateUserMenu();
-          scheduleAutoRefresh();
-          hideAuth();
+    fetchSessionUser()
+      .then(user => {
+        if (user) {
+          setUser(user);
           initDashboard();
         } else {
           enterGuestSession();
         }
       })
       .catch(() => enterGuestSession());
+  }
+
+  // The access token only lives 15 min. A returning user with an expired access
+  // token but a valid refresh token used to be dropped straight into a guest
+  // session (which also overwrote their refresh cookie). Refresh first.
+  async function fetchSessionUser() {
+    const me = () => fetch(d('L2FwaS9hdXRoL21l')).then(async r => {
+      if (!r.ok) return { status: r.status, user: null };
+      const data = await readJson(r);
+      return { status: r.status, user: data.success && data.user ? data.user : null };
+    });
+    let res = await me();
+    if (!res.user && res.status === 401 && await refreshAccessToken()) {
+      res = await me();   // re-read so we get the full user (incl. mustChangePassword)
+    }
+    return res.user;
   }
 
   // Anonymous visitors land straight on the dashboard via a shared guest account.
@@ -2451,10 +3239,7 @@
       .then(r => r.json())
       .then(data => {
         if (data.success && data.user) {
-          currentUser = data.user;
-          updateUserMenu();
-          scheduleAutoRefresh();
-          hideAuth();
+          setUser(data.user);
           initDashboard();
         } else {
           showAuth();

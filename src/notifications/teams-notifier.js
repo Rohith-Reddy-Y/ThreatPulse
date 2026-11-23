@@ -9,6 +9,14 @@
  */
 
 const axios = require('axios');
+const http = require('http');
+const https = require('https');
+const { isSafeUrl, safeLookup } = require('../net-guard');
+
+// The webhook URL is user-supplied: refuse internal/private targets (checked
+// again after DNS resolution) so it can't be used for SSRF.
+const safeHttpAgent = new http.Agent({ lookup: safeLookup });
+const safeHttpsAgent = new https.Agent({ lookup: safeLookup });
 
 const severityColor = {
   critical: 'FF3B30',
@@ -65,18 +73,30 @@ async function sendTeamsAlert(articles, webhookUrl) {
   const url = webhookUrl || process.env.TEAMS_WEBHOOK;
   if (!url) return { success: false, error: 'Teams webhook not configured' };
   if (!articles || articles.length === 0) return { success: false, error: 'No articles to send' };
+  if (!isSafeUrl(url)) return { success: false, error: 'Teams webhook must be a public http(s) URL' };
 
   try {
     await axios.post(url, buildCard(articles), {
       timeout: 10000,
-      headers: { 'Content-Type': 'application/json' }
+      // axios' timeout is an idle timer; a webhook that drips bytes would keep the
+      // request open indefinitely, so also enforce an overall deadline.
+      signal: AbortSignal.timeout(20000),
+      headers: { 'Content-Type': 'application/json' },
+      httpAgent: safeHttpAgent,
+      httpsAgent: safeHttpsAgent,
+      proxy: false,
+      maxRedirects: 0,
+      // The URL is user-chosen: don't buffer an arbitrarily large reply
+      maxContentLength: 64 * 1024,
+      maxBodyLength: 1024 * 1024
     });
     console.log(`[Teams] Sent alert with ${articles.length} threat(s)`);
     return { success: true, sent: articles.length };
   } catch (error) {
     const msg = error.response?.data || error.message;
-    console.error(`[Teams] Send failed: ${typeof msg === 'string' ? msg : JSON.stringify(msg)}`);
-    return { success: false, error: typeof msg === 'string' ? msg : 'Teams send failed' };
+    console.error(`[Teams] Send failed: ${(typeof msg === 'string' ? msg : JSON.stringify(msg) || '').slice(0, 200)}`);
+    // The reply comes from a user-chosen URL and is shown to the user: keep it short
+    return { success: false, error: typeof msg === 'string' ? msg.slice(0, 200) : 'Teams send failed' };
   }
 }
 

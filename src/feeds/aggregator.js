@@ -10,6 +10,24 @@ const { fetchCVEs, fetchCISAKEV } = require('./cve-fetcher');
 const { fetchDarkWebIntel } = require('./darkweb-fetcher');
 const { scrapeSource } = require('./web-scraper');
 
+
+// Insert in small chunks and yield to the event loop between them. Each insert
+// runs synchronous enrichment (IOCs, actors, MITRE); a few hundred new items in
+// one transaction (e.g. NVD after a fresh boot) could block the event loop for
+// seconds on a ~0.1-CPU instance and fail the platform health check.
+const INSERT_CHUNK = 25;
+async function insertArticlesChunked(articles) {
+  let newCount = 0;
+  const newArticles = [];
+  for (let i = 0; i < articles.length; i += INSERT_CHUNK) {
+    const r = db.insertArticles(articles.slice(i, i + INSERT_CHUNK));
+    newCount += r.newCount;
+    newArticles.push(...r.newArticles);
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  return { newCount, newArticles };
+}
+
 let isRunning = false;
 let lastFetchTime = null;
 let fetchStats = { total: 0, new: 0, errors: 0 };
@@ -32,6 +50,28 @@ async function fetchAllSources() {
   }
 
   isRunning = true;
+  let result;
+  try {
+    result = await fetchSourceList(db.getEnabledSources());
+  } finally {
+    isRunning = false;
+  }
+  lastFetchTime = new Date().toISOString();
+  const { newArticles, ...stats } = result;
+  fetchStats = stats;
+  return result;
+}
+
+/**
+ * Fetch just the given sources (e.g. one user's own feeds, or a source that was
+ * just added) without waiting for — or blocking — the platform-wide run.
+ * Returns { total, new, errors, duration, newArticles }.
+ */
+async function fetchSources(sources) {
+  return fetchSourceList((sources || []).filter(s => s && s.enabled !== 0 && s.enabled !== false));
+}
+
+async function fetchSourceList(sources) {
   const startTime = Date.now();
   let totalNew = 0;
   let totalErrors = 0;
@@ -43,15 +83,20 @@ async function fetchAllSources() {
   console.log('='.repeat(60));
 
   try {
-    const sources = db.getEnabledSources();
     console.log(`[Aggregator] Fetching from ${sources.length} enabled sources`);
 
-    // Group sources by type for efficient processing
-    const rssSources = sources.filter(s => s.type === 'rss');
-    const apiSources = sources.filter(s => s.type === 'api');
+    // Group sources by type for efficient processing. Every type must land in
+    // exactly one group: the dashboard used to offer "Blog/Website" (blog) and
+    // "Other" (other), which matched no group, so those sources were never
+    // fetched and sat at "Not yet fetched" forever. Generic "API" URLs other than
+    // NVD / CISA KEV are read as feeds (most such endpoints serve RSS/Atom).
+    const isKnownApi = s => s.url.includes('nvd.nist.gov') || s.url.includes('known_exploited_vulnerabilities');
+    const rssSources = sources.filter(s => s.type === 'rss' || (s.type === 'api' && !isKnownApi(s)));
+    const apiSources = sources.filter(s => s.type === 'api' && isKnownApi(s));
     const darkwebSources = sources.filter(s => s.type === 'darkweb');
-    const customSources = sources.filter(s => s.type === 'custom' || s.type === 'website');
     const browserSources = sources.filter(s => s.type === 'browser');
+    const customSources = sources.filter(s =>
+      !['rss', 'api', 'darkweb', 'browser'].includes(s.type));   // custom, website, blog, other, ...
 
     // --- 1. Fetch RSS Feeds (parallel, batched) ---
     console.log(`\n[RSS] Fetching ${rssSources.length} RSS feeds...`);
@@ -69,7 +114,7 @@ async function fetchAllSources() {
         if (result.status === 'fulfilled' && result.value.success) {
           const { articles } = result.value;
           if (articles.length > 0) {
-            const inserted = db.insertArticles(articles);
+            const inserted = await insertArticlesChunked(articles);
             totalNew += inserted.newCount;
             totalFetched += articles.length;
             newArticles.push(...inserted.newArticles);
@@ -97,9 +142,27 @@ async function fetchAllSources() {
 
     // --- 2. Fetch CVE/API Sources ---
     console.log(`\n[API] Fetching ${apiSources.length} API sources...`);
+    const apiSeen = new Set();
     for (const source of apiSources) {
       try {
         let result;
+
+        // The NVD / CISA KEV fetchers use the server's own API key and rate-limit
+        // budget, so only the built-in (system) sources may trigger them, and
+        // each one at most once per cycle — a user-added "api" source pointing at
+        // NVD used to cost a full extra NVD call + 6.5 s pause each.
+        const kind = source.url.includes('nvd.nist.gov') ? 'nvd'
+          : source.url.includes('known_exploited_vulnerabilities') ? 'kev' : null;
+        if (kind && (source.added_by !== 'system' || apiSeen.has(kind))) {
+          db.updateSourceFetchStatus(source.id, {
+            last_fetched: new Date().toISOString(),
+            last_error: source.added_by !== 'system'
+              ? 'Built-in API feeds (NVD / CISA KEV) are provided by the platform sources'
+              : null
+          });
+          continue;
+        }
+        if (kind) apiSeen.add(kind);
 
         if (source.url.includes('nvd.nist.gov')) {
           const apiKey = process.env.NVD_API_KEY || null;
@@ -111,11 +174,12 @@ async function fetchAllSources() {
         }
 
         if (result.success && result.articles.length > 0) {
-          const inserted = db.insertArticles(result.articles);
+          const inserted = await insertArticlesChunked(result.articles);
           totalNew += inserted.newCount;
           totalFetched += result.articles.length;
           newArticles.push(...inserted.newArticles);
         }
+        if (!result.success) totalErrors++;   // fetchers report failure, they don't throw
 
         db.updateSourceFetchStatus(source.id, {
           last_fetched: new Date().toISOString(),
@@ -142,15 +206,16 @@ async function fetchAllSources() {
       try {
         const dwResult = await fetchDarkWebIntel(darkwebSources);
         if (dwResult.articles.length > 0) {
-          const inserted = db.insertArticles(dwResult.articles);
+          const inserted = await insertArticlesChunked(dwResult.articles);
           totalNew += inserted.newCount;
           totalFetched += dwResult.articles.length;
           newArticles.push(...inserted.newArticles);
         }
 
-        // Update source statuses
+        // Update source statuses (by id: names are not unique across users)
         for (const r of dwResult.results) {
-          const source = darkwebSources.find(s => s.name === r.source);
+          if (!r.success) totalErrors++;
+          const source = darkwebSources.find(s => s.id === r.sourceId);
           if (source) {
             db.updateSourceFetchStatus(source.id, {
               last_fetched: new Date().toISOString(),
@@ -171,11 +236,12 @@ async function fetchAllSources() {
         try {
           const result = await scrapeSource(source);
           if (result.success && result.articles.length > 0) {
-            const inserted = db.insertArticles(result.articles);
+            const inserted = await insertArticlesChunked(result.articles);
             totalNew += inserted.newCount;
             totalFetched += result.articles.length;
             newArticles.push(...inserted.newArticles);
           }
+          if (!result.success) totalErrors++;
           db.updateSourceFetchStatus(source.id, {
             last_fetched: new Date().toISOString(),
             last_error: result.success ? null : result.error
@@ -199,7 +265,7 @@ async function fetchAllSources() {
         try {
           const { articles, results } = await browserFetcher.fetchViaBrowser(browserSources);
           if (articles.length > 0) {
-            const inserted = db.insertArticles(articles);
+            const inserted = await insertArticlesChunked(articles);
             totalNew += inserted.newCount;
             totalFetched += articles.length;
             newArticles.push(...inserted.newArticles);
@@ -216,12 +282,27 @@ async function fetchAllSources() {
           console.error(`[Browser] Overall error: ${error.message}`);
         }
       } else {
-        console.log(`[Browser] Skipping ${browserSources.length} browser-type source(s) — no headless Chrome on this host (install Chrome or set PUPPETEER_EXECUTABLE_PATH).`);
+        // No headless Chrome here (e.g. Render free tier): fetch them like normal
+        // feeds instead — the RSS fetcher falls back to Google News if blocked.
+        console.log(`[Browser] No headless Chrome — fetching ${browserSources.length} browser-type source(s) as plain RSS (with fallback).`);
         for (const source of browserSources) {
-          db.updateSourceFetchStatus(source.id, {
-            last_fetched: new Date().toISOString(),
-            last_error: 'Headless browser not available on this host'
-          });
+          try {
+            const result = await fetchRSSFeed(source);
+            if (result.success && result.articles.length > 0) {
+              const inserted = await insertArticlesChunked(result.articles);
+              totalNew += inserted.newCount;
+              totalFetched += result.articles.length;
+              newArticles.push(...inserted.newArticles);
+            }
+            if (!result.success) totalErrors++;
+            db.updateSourceFetchStatus(source.id, {
+              last_fetched: new Date().toISOString(),
+              last_error: result.success ? null : result.error
+            });
+          } catch (error) {
+            totalErrors++;
+            db.updateSourceFetchStatus(source.id, { last_fetched: new Date().toISOString(), last_error: error.message });
+          }
         }
       }
     }
@@ -232,17 +313,13 @@ async function fetchAllSources() {
   }
 
   const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-  lastFetchTime = new Date().toISOString();
-  fetchStats = { total: totalFetched, new: totalNew, errors: totalErrors, duration };
 
   console.log('\n' + '='.repeat(60));
   console.log(`[Aggregator] Fetch complete in ${duration}s`);
   console.log(`[Aggregator] Total fetched: ${totalFetched} | New: ${totalNew} | Errors: ${totalErrors}`);
   console.log('='.repeat(60) + '\n');
 
-  isRunning = false;
-
-  return { ...fetchStats, newArticles };
+  return { total: totalFetched, new: totalNew, errors: totalErrors, duration, newArticles };
 }
 
 /**
@@ -281,4 +358,4 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-module.exports = { fetchAllSources, startScheduler, getStatus, setOnFetchComplete };
+module.exports = { fetchAllSources, fetchSources, startScheduler, getStatus, setOnFetchComplete, getOnFetchComplete: () => onFetchComplete };

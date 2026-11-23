@@ -16,7 +16,8 @@
 
 const fs = require('fs');
 const RSSParser = require('rss-parser');
-const { detectCategory, detectSeverity, extractCVE, detectPOC, detectPatchStatus } = require('./rss-fetcher');
+const { articleCategory, detectCategory, detectSeverity, extractCVE, detectPOC, detectPatchStatus } = require('./rss-fetcher');
+const { isSafeUrl } = require('../net-guard');
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 const parser = new RSSParser({ timeout: 20000 });
@@ -79,7 +80,7 @@ function normalize(item, source) {
     user_id: source.user_id || null,
     author: item.creator || item.author || item['dc:creator'] || null,
     published_date: item.isoDate || item.pubDate || new Date().toISOString(),
-    category: source.category && source.category !== 'news' ? source.category : category,
+    category: articleCategory(source, category),
     severity: detectSeverity(title, description, category),
     cve_id: extractCVE(`${title} ${description}`),
     is_patched: detectPatchStatus(title, description),
@@ -145,6 +146,13 @@ async function fetchViaBrowser(sources) {
   const results = [];
   try {
     for (const source of sources) {
+      // Sources are user-supplied: never point Chrome at internal addresses.
+      // (Static check only; Chrome resolves DNS itself, so this can't stop
+      // DNS rebinding the way safeGet's agent does.)
+      if (!isSafeUrl(source.url)) {
+        results.push({ source, success: false, error: 'Blocked: URL is not a public http(s) address' });
+        continue;
+      }
       try {
         const res = await fetchFeedText(browser, source.url);
         const body = res.text || '';

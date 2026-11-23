@@ -8,6 +8,8 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/css/styles.css">
+  <link rel="stylesheet" href="/css/enterprise.css">
+  <link rel="stylesheet" href="/css/attack-path.css">
   <link rel="icon" id="dynamic-favicon" href="">
 
 
@@ -55,7 +57,7 @@
           <label for="login-password">Password</label>
           <div class="password-field">
             <input type="password" id="login-password" placeholder="Enter password" required autocomplete="current-password">
-            <button type="button" class="eye-toggle" data-target="login-password"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg></button>
+            <button type="button" class="eye-toggle" data-target="login-password" aria-label="Show or hide password"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg></button>
           </div>
         </div>
         <div id="login-error" class="auth-error hidden"></div>
@@ -89,14 +91,14 @@
           <label for="reset-password">New Password</label>
           <div class="password-field">
             <input type="password" id="reset-password" placeholder="Min 8 chars, uppercase, lowercase, number" required minlength="8">
-            <button type="button" class="eye-toggle" data-target="reset-password"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg></button>
+            <button type="button" class="eye-toggle" data-target="reset-password" aria-label="Show or hide password"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg></button>
           </div>
         </div>
         <div class="form-group">
           <label for="reset-confirm">Confirm Password</label>
           <div class="password-field">
             <input type="password" id="reset-confirm" placeholder="Re-enter new password" required minlength="8">
-            <button type="button" class="eye-toggle" data-target="reset-confirm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg></button>
+            <button type="button" class="eye-toggle" data-target="reset-confirm" aria-label="Show or hide password"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg></button>
           </div>
         </div>
         <div id="reset-error" class="auth-error hidden"></div>
@@ -127,7 +129,7 @@
           <label for="reg-password">Password</label>
           <div class="password-field">
             <input type="password" id="reg-password" placeholder="Create a strong password" required minlength="8" autocomplete="new-password">
-            <button type="button" class="eye-toggle" data-target="reg-password"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg></button>
+            <button type="button" class="eye-toggle" data-target="reg-password" aria-label="Show or hide password"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg></button>
           </div>
           <div id="password-strength" class="password-strength hidden">
             <div class="strength-bar"><div id="strength-fill" class="strength-fill"></div></div>
@@ -139,14 +141,14 @@
           <label for="reg-confirm">Confirm Password</label>
           <div class="password-field">
             <input type="password" id="reg-confirm" placeholder="Re-enter your password" required minlength="8" autocomplete="new-password">
-            <button type="button" class="eye-toggle" data-target="reg-confirm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg></button>
+            <button type="button" class="eye-toggle" data-target="reg-confirm" aria-label="Show or hide password"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg></button>
           </div>
           <span id="confirm-match" class="input-hint hidden" style="color:var(--red);">Passwords do not match</span>
         </div>
-        <div class="form-group" id="reg-invite-group" style="display:none;">
-          <label for="reg-invite">Invite Code</label>
-          <input type="text" id="reg-invite" placeholder="e.g. A1B2C3D4" style="font-family:'JetBrains Mono',monospace;letter-spacing:2px;text-transform:uppercase;">
-          <span class="input-hint">Get an invite code from your admin to join.</span>
+        <div class="form-group" id="reg-invite-group">
+          <label for="reg-invite">Invite Code <span style="color:var(--red, #ff4d6d);">*</span></label>
+          <input type="text" id="reg-invite" placeholder="e.g. A1B2C3D4" required maxlength="32" autocomplete="off" spellcheck="false" style="font-family:'JetBrains Mono',monospace;letter-spacing:2px;text-transform:uppercase;">
+          <span class="input-hint">ThreatPulse is invite-only. Ask your administrator for a one-time invite code.</span>
         </div>
         <div id="register-error" class="auth-error hidden"></div>
         <button type="submit" class="btn btn-primary btn-full" id="register-btn">
@@ -197,7 +199,7 @@
       <button class="theme-toggle" id="theme-toggle" title="Toggle light / dark theme" aria-label="Toggle theme"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
       <!-- User Menu -->
       <div class="user-menu" id="user-menu">
-        <button class="user-menu-btn" id="user-menu-btn">
+        <button class="user-menu-btn" id="user-menu-btn" aria-haspopup="true">
           <span class="user-avatar" id="user-avatar">A</span>
           <span class="user-name" id="user-display-name">User</span>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="6 9 12 15 18 9"/></svg>
@@ -285,6 +287,35 @@
     </div>
   </section>
 
+  <!-- ═══════════════════ THREAT LANDSCAPE ═══════════════════ -->
+  <section class="landscape" id="landscape" aria-labelledby="landscape-title">
+    <div class="landscape-head">
+      <div class="landscape-titles">
+        <h3 class="chart-title" id="landscape-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+          Threat Landscape
+        </h3>
+        <p class="landscape-sub" id="landscape-sub">Loading…</p>
+      </div>
+      <div class="chart-time-pills" role="group" aria-label="Landscape time range">
+        <button type="button" class="pill" data-landscape-days="1">24h</button>
+        <button type="button" class="pill active" data-landscape-days="7">7d</button>
+        <button type="button" class="pill" data-landscape-days="30">30d</button>
+      </div>
+    </div>
+    <div class="landscape-tabs" role="tablist" aria-label="Threat landscape views">
+      <button type="button" role="tab" id="lt-attack" aria-controls="lp-attack" data-landscape-tab="attack">ATT&amp;CK techniques <span class="lt-count" id="lt-count-attack"></span></button>
+      <button type="button" role="tab" id="lt-actors" aria-controls="lp-actors" data-landscape-tab="actors">Threat actors <span class="lt-count" id="lt-count-actors"></span></button>
+      <button type="button" role="tab" id="lt-cves" aria-controls="lp-cves" data-landscape-tab="cves">Vulnerabilities <span class="lt-count" id="lt-count-cves"></span></button>
+      <button type="button" role="tab" id="lt-targeting" aria-controls="lp-targeting" data-landscape-tab="targeting">Targeting <span class="lt-count" id="lt-count-targeting"></span></button>
+    </div>
+    <div class="landscape-panel" role="tabpanel" id="lp-attack" aria-labelledby="lt-attack"></div>
+    <div class="landscape-panel hidden" role="tabpanel" id="lp-actors" aria-labelledby="lt-actors"></div>
+    <div class="landscape-panel hidden" role="tabpanel" id="lp-cves" aria-labelledby="lt-cves"></div>
+    <div class="landscape-panel hidden" role="tabpanel" id="lp-targeting" aria-labelledby="lt-targeting"></div>
+    <div class="sr-only" id="landscape-live" aria-live="polite"></div>
+  </section>
+
   <!-- ═══════════════════ FILTER / SEARCH BAR ═══════════════════ -->
   <section class="filter-bar">
     <div class="search-box">
@@ -317,6 +348,7 @@
           <option value="rss">RSS Feed</option>
           <option value="api">API</option>
           <option value="darkweb">Dark Web</option>
+          <option value="custom">Website (scraped)</option>
         </select>
         <select id="sector-filter" class="filter-select">
           <option value="">All Sectors</option>
@@ -484,13 +516,14 @@
       <div class="detect-toggles">
         <button class="pill toggle-pill" id="filter-poc" data-filter="has_poc" title="Show only items with a public proof-of-concept">PoC Available</button>
         <button class="pill toggle-pill" id="filter-mitre" data-filter="has_mitre" title="Show only items mapped to MITRE ATT&CK techniques">MITRE Mapped</button>
+        <button class="pill toggle-pill guest-hidden" id="filter-watch" data-filter="watchlist" title="Show only items that mention your watchlist">Watchlist</button>
         <button class="clear-all-filters-btn" id="clear-all-filters-btn" title="Clear all active filters">Clear All</button>
       </div>
-      <button class="btn btn-primary fetch-now-btn" id="fetch-now-btn">
+      <button class="btn btn-primary fetch-now-btn guest-hidden" id="fetch-now-btn">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
         Fetch Now
       </button>
-      <button class="btn btn-ghost export-btn" id="export-btn" title="Export as JSON">
+      <button class="btn btn-ghost export-btn" id="export-btn" title="Export as JSON" aria-label="Export as JSON">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
       </button>
     </div>
@@ -511,7 +544,7 @@
         <p id="empty-message">Your dashboard is empty. Add your first threat intelligence source from the sidebar to start tracking threats, or click "Fetch Now" to pull the latest data.</p>
         <div id="empty-actions" style="display:flex;gap:10px;justify-content:center;margin-top:14px;flex-wrap:wrap;">
           <button class="btn btn-primary" id="clear-filters-btn-empty" style="display:none;">Clear All Filters</button>
-          <button class="btn btn-secondary" id="fetch-now-empty">Fetch Now</button>
+          <button class="btn btn-secondary guest-hidden" id="fetch-now-empty">Fetch Now</button>
         </div>
       </div>
       <div id="articles-container"></div>
@@ -522,7 +555,46 @@
 
     <!-- ─────── SIDEBAR ─────── -->
     <aside class="sidebar" id="sidebar">
-      <div class="sidebar-card">
+      <!-- Watchlist: products / vendors / CVEs / actors this user cares about -->
+      <section class="sidebar-card guest-hidden" id="watchlist-card" aria-labelledby="watchlist-title">
+        <h3 class="sidebar-title" id="watchlist-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          Watchlist
+        </h3>
+        <form id="watchlist-form" class="watch-form" autocomplete="off">
+          <input type="text" id="watchlist-input" maxlength="60" placeholder="e.g. FortiOS, Exchange, CVE-2026-1111" aria-label="Add a product, vendor, CVE or actor">
+          <button type="submit" class="poc-check-btn">Add</button>
+        </form>
+        <div id="watchlist-chips" class="watch-chips" aria-live="polite"></div>
+        <p class="watch-note">Matching articles are highlighted, can be filtered with the <b>Watchlist</b> chip above the feed, and always trigger your alerts.</p>
+      </section>
+
+      <!-- Admin only: articles with a proof of concept, the PoC links and whether they're real -->
+      <section class="sidebar-card poc-tracker hidden" id="poc-tracker-card" aria-labelledby="poc-tracker-title">
+        <h3 class="sidebar-title" id="poc-tracker-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+          PoC tracker <span class="poc-count" id="poc-tracker-count"></span><span class="poc-admin-tag">Admin</span>
+        </h3>
+        <div class="poc-controls">
+          <div class="poc-filters" role="group" aria-label="Filter by PoC status">
+            <button type="button" data-poc-filter="all" aria-pressed="true">All <span class="poc-n"></span></button>
+            <button type="button" data-poc-filter="verified" aria-pressed="false">Verified <span class="poc-n"></span></button>
+            <button type="button" data-poc-filter="suspicious" aria-pressed="false">Suspicious <span class="poc-n"></span></button>
+            <button type="button" data-poc-filter="unchecked" aria-pressed="false">Not checked <span class="poc-n"></span></button>
+          </div>
+          <div class="poc-controls-row">
+            <select id="poc-days" aria-label="Time range">
+              <option value="7">Last 7 days</option>
+              <option value="30" selected>Last 30 days</option>
+              <option value="90">Last 90 days</option>
+            </select>
+            <button type="button" class="poc-check-btn" id="poc-check-next" title="Check the next 5 unchecked articles">Check next 5</button>
+          </div>
+          <p class="poc-token-note hidden" id="poc-token-note">Checks use GitHub's public API (60 requests/hour). Add a <code>GITHUB_TOKEN</code> in Render for automatic background checks.</p>
+        </div>
+        <ul class="poc-list" id="poc-tracker-list"></ul>
+      </section>
+      <div class="sidebar-card guest-hidden">
         <h3 class="sidebar-title">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
           Add Source
@@ -540,16 +612,15 @@
             <div class="form-group">
               <label for="source-type">Type</label>
               <select id="source-type" class="form-select">
-                <option value="rss">RSS Feed</option>
-                <option value="blog">Blog/Website</option>
-                <option value="api">API</option>
-                <option value="other">Other</option>
+                <option value="rss">RSS / Atom Feed</option>
+                <option value="website">Blog / Website (scraped)</option>
+                <option value="api">API (RSS/JSON endpoint)</option>
               </select>
             </div>
             <div class="form-group">
               <label for="source-category">Category</label>
               <select id="source-category" class="form-select">
-                <option value="general">General</option>
+                <option value="general">General (auto-classify)</option>
                 <option value="vulnerability">Vulnerabilities</option>
                 <option value="malware">Malware</option>
                 <option value="breach">Breaches</option>
@@ -571,10 +642,10 @@
           My Sources
         </h3>
         <div class="sources-toolbar">
-          <label class="select-all-label"><input type="checkbox" id="dash-select-all"> Select all</label>
+          <label class="select-all-label guest-hidden"><input type="checkbox" id="dash-select-all"> Select all</label>
           <span class="sources-count" id="dash-sources-total"></span>
         </div>
-        <div class="sources-bulk-bar hidden" id="dashboard-bulk-bar">
+        <div class="sources-bulk-bar hidden guest-hidden" id="dashboard-bulk-bar">
           <span id="dash-selected-count">0</span>
           <button class="btn btn-ghost" id="dash-edit-btn" style="font-size:11px;padding:3px 8px;">Edit URL</button>
           <button class="btn btn-danger" id="dash-delete-btn" style="font-size:11px;padding:3px 8px;">Delete</button>
@@ -594,70 +665,95 @@
         </div>
       </div>
 
-      <div class="sidebar-card">
-        <h3 class="sidebar-title">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-          Notifications
+      <div class="sidebar-card guest-hidden notif-card">
+        <h3 class="sidebar-title notif-panel-title">
+          <button type="button" class="notif-panel-toggle" id="notif-panel-toggle" aria-expanded="false" aria-controls="notification-form">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+            <span>Notifications</span>
+            <span class="notif-summary" id="notif-summary">Off</span>
+            <svg class="notif-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
         </h3>
-        <form id="notification-form" class="notification-form">
+        <form id="notification-form" class="notification-form is-collapsed">
 
           <!-- Email -->
-          <div class="notif-channel">
-            <div class="notif-channel-head">
+          <div class="notif-channel" data-channel="email">
+            <div class="notif-channel-head" role="button" tabindex="0" aria-expanded="false">
               <span class="notif-channel-title">Email</span>
-              <label class="toggle-switch"><input type="checkbox" id="notif-email-enabled"><span class="toggle-slider"></span></label>
+              <span class="notif-channel-controls">
+                <label class="toggle-switch"><input type="checkbox" id="notif-email-enabled"><span class="toggle-slider"></span></label>
+                <svg class="notif-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+              </span>
             </div>
-            <div class="form-group">
-              <input type="email" id="notif-email" placeholder="you@company.com">
+            <div class="notif-channel-body">
+              <div class="form-group">
+                <input type="email" id="notif-email" placeholder="you@company.com">
+              </div>
+              <p class="notif-hint">No setup needed — just enter your email and we'll send alerts from ThreatPulse.</p>
+              <button type="button" class="btn btn-ghost notif-test" data-test="email">Test Email</button>
             </div>
-            <p class="notif-hint">No setup needed — just enter your email and we'll send alerts from ThreatPulse.</p>
-            <button type="button" class="btn btn-ghost notif-test" data-test="email">Test Email</button>
           </div>
 
           <!-- Telegram -->
-          <div class="notif-channel">
-            <div class="notif-channel-head">
+          <div class="notif-channel" data-channel="telegram">
+            <div class="notif-channel-head" role="button" tabindex="0" aria-expanded="false">
               <span class="notif-channel-title">Telegram</span>
-              <label class="toggle-switch"><input type="checkbox" id="notif-telegram-enabled"><span class="toggle-slider"></span></label>
+              <span class="notif-channel-controls">
+                <label class="toggle-switch"><input type="checkbox" id="notif-telegram-enabled"><span class="toggle-slider"></span></label>
+                <svg class="notif-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+              </span>
             </div>
-            <div class="form-group">
-              <input type="text" id="notif-telegram" placeholder="Chat ID (e.g., 123456789)">
+            <div class="notif-channel-body">
+              <div class="form-group">
+                <input type="text" id="notif-telegram" placeholder="Chat ID (e.g., 123456789)">
+              </div>
+              <div class="form-group">
+                <input type="text" id="notif-telegram-token" placeholder="Bot token (e.g., 123456:ABC-DEF...)">
+              </div>
+              <button type="button" class="btn btn-ghost notif-test" data-test="telegram">Test Telegram</button>
             </div>
-            <div class="form-group">
-              <input type="text" id="notif-telegram-token" placeholder="Bot token (e.g., 123456:ABC-DEF...)">
-            </div>
-            <button type="button" class="btn btn-ghost notif-test" data-test="telegram">Test Telegram</button>
           </div>
 
           <!-- Microsoft Teams -->
-          <div class="notif-channel">
-            <div class="notif-channel-head">
+          <div class="notif-channel" data-channel="teams">
+            <div class="notif-channel-head" role="button" tabindex="0" aria-expanded="false">
               <span class="notif-channel-title">Microsoft Teams</span>
-              <label class="toggle-switch"><input type="checkbox" id="notif-teams-enabled"><span class="toggle-slider"></span></label>
+              <span class="notif-channel-controls">
+                <label class="toggle-switch"><input type="checkbox" id="notif-teams-enabled"><span class="toggle-slider"></span></label>
+                <svg class="notif-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+              </span>
             </div>
-            <div class="form-group">
-              <input type="text" id="notif-teams-webhook" placeholder="Teams incoming webhook URL">
+            <div class="notif-channel-body">
+              <div class="form-group">
+                <input type="text" id="notif-teams-webhook" placeholder="Teams incoming webhook URL">
+              </div>
+              <button type="button" class="btn btn-ghost notif-test" data-test="teams">Test Teams</button>
             </div>
-            <button type="button" class="btn btn-ghost notif-test" data-test="teams">Test Teams</button>
           </div>
 
           <!-- WhatsApp -->
-          <div class="notif-channel">
-            <div class="notif-channel-head">
+          <div class="notif-channel" data-channel="whatsapp">
+            <div class="notif-channel-head" role="button" tabindex="0" aria-expanded="false">
               <span class="notif-channel-title">WhatsApp</span>
-              <label class="toggle-switch"><input type="checkbox" id="notif-whatsapp-enabled"><span class="toggle-slider"></span></label>
+              <span class="notif-channel-controls">
+                <label class="toggle-switch"><input type="checkbox" id="notif-whatsapp-enabled"><span class="toggle-slider"></span></label>
+                <svg class="notif-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+              </span>
             </div>
-            <div class="form-group">
-              <input type="text" id="notif-whatsapp-number" placeholder="Number w/ country code (e.g., 14155551234)">
+            <div class="notif-channel-body">
+              <div class="form-group">
+                <input type="text" id="notif-whatsapp-number" placeholder="Number w/ country code (e.g., 14155551234)">
+              </div>
+              <div class="form-group">
+                <input type="text" id="notif-whatsapp-apikey" placeholder="CallMeBot API key">
+              </div>
+              <p class="notif-hint">One-time setup: message <b>+34 644 51 95 23</b> on WhatsApp with “I allow callmebot to send me messages” to get your API key.</p>
+              <button type="button" class="btn btn-ghost notif-test" data-test="whatsapp">Test WhatsApp</button>
             </div>
-            <div class="form-group">
-              <input type="text" id="notif-whatsapp-apikey" placeholder="CallMeBot API key">
-            </div>
-            <p class="notif-hint">One-time setup: message <b>+34 644 51 95 23</b> on WhatsApp with “I allow callmebot to send me messages” to get your API key.</p>
-            <button type="button" class="btn btn-ghost notif-test" data-test="whatsapp">Test WhatsApp</button>
           </div>
 
           <hr class="notif-divider">
+          <p class="notif-hint notif-general-hint">These apply to every channel above.</p>
 
           <div class="form-group">
             <label for="notif-severity">Severity Threshold</label>
@@ -702,13 +798,17 @@
   </div><!-- end #app-container -->
 
   <!-- ═══════════════════ CHANGE EMAIL MODAL ═══════════════════ -->
-  <div id="email-modal" class="modal-overlay hidden">
+  <div id="email-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="email-modal-title">
     <div class="auth-card" style="max-width: 400px;">
-      <h2 style="color: var(--cyan); margin-bottom: 1rem;">Change Email</h2>
+      <h2 id="email-modal-title" style="color: var(--cyan); margin-bottom: 1rem;">Change Email</h2>
       <form id="email-form">
         <div class="form-group">
           <label for="account-email">Email Address</label>
           <input type="email" id="account-email" placeholder="you@company.com" required>
+        </div>
+        <div class="form-group">
+          <label for="email-current-password">Current Password</label>
+          <input type="password" id="email-current-password" autocomplete="current-password" required>
         </div>
         <div id="email-error" class="auth-error hidden"></div>
         <div style="display: flex; gap: 8px;">
@@ -720,24 +820,19 @@
   </div>
 
   <!-- ═══════════════════ CHANGE PASSWORD MODAL ═══════════════════ -->
-  <div id="password-modal" class="modal-overlay hidden">
+  <div id="password-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="password-modal-title">
     <div class="auth-card" style="max-width: 400px;">
-      <h2 style="color: var(--cyan); margin-bottom: 1rem;">Change Password</h2>
-      <div id="password-forced-notice" class="auth-error hidden" style="margin-bottom:1rem;">
-        For security, you must set a new password before continuing.
-      </div>
+      <h2 id="password-modal-title" style="color: var(--cyan); margin-bottom: 1rem;">Change Password</h2>
       <form id="password-form">
-        <div class="form-group">
-          <label for="current-password">Current Password</label>
-          <input type="password" id="current-password" required>
-        </div>
-        <div class="form-group">
-          <label for="new-password">New Password</label>
-          <input type="password" id="new-password" required minlength="8">
-        </div>
+        <p id="password-link-intro" style="color: var(--text-secondary); font-size: 0.9rem; line-height: 1.5; margin-bottom: 1rem;">
+          For your security, password changes are confirmed by email. We'll send a one-time link to
+          <b id="password-link-email" style="color: var(--text-primary);">your email address</b>.
+          Open it to choose your new password &mdash; it expires in 60 minutes.
+        </p>
+        <div id="password-success" class="auth-success hidden" style="margin-bottom:1rem;"></div>
         <div id="password-error" class="auth-error hidden"></div>
         <div style="display: flex; gap: 8px;">
-          <button type="submit" class="btn btn-primary" style="flex:1;">Save</button>
+          <button type="submit" class="btn btn-primary" id="password-link-submit" style="flex:1;">Email me a link</button>
           <button type="button" class="btn btn-ghost" id="cancel-password-btn">Cancel</button>
         </div>
       </form>
@@ -745,9 +840,9 @@
   </div>
 
   <!-- ═══════════════════ VERIFICATION CODE MODAL ═══════════════════ -->
-  <div id="verification-modal" class="modal-overlay hidden">
+  <div id="verification-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="verification-modal-title">
     <div class="auth-card" style="max-width: 400px;">
-      <h2 style="color: var(--cyan); margin-bottom: 0.5rem;">Enter Verification Code</h2>
+      <h2 id="verification-modal-title" style="color: var(--cyan); margin-bottom: 0.5rem;">Enter Verification Code</h2>
       <p id="verification-notice" style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 1.5rem;"></p>
       <form id="verification-form">
         <div class="form-group">
@@ -770,7 +865,7 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M12 3l1.9 5.8L20 10.7l-6.1 1.9L12 18.4l-1.9-5.8L4 10.7l6.1-1.9z"/></svg>
         Ask ThreatPulse
       </span>
-      <button class="ai-panel-close" id="ai-panel-close" title="Close">&times;</button>
+      <button class="ai-panel-close" id="ai-panel-close" title="Close" aria-label="Close AI panel">&times;</button>
     </div>
     <div class="ai-panel-main">
       <div class="ai-threads">
@@ -791,10 +886,13 @@
       </div>
     </div>
   </div>
-  <button class="ai-fab" id="ai-fab" title="Ask ThreatPulse AI">
+  <button class="ai-fab" id="ai-fab" title="Ask ThreatPulse AI" aria-label="Ask ThreatPulse AI">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M12 3l1.9 5.8L20 10.7l-6.1 1.9L12 18.4l-1.9-5.8L4 10.7l6.1-1.9z"/></svg>
   </button>
 
   <script src="/js/app.js"></script>
+  <script src="/js/landscape.js" defer></script>
+  <script src="/js/attack-path.js" defer></script>
+  <script src="/js/actor-profile.js" defer></script>
 </body>
 </html>

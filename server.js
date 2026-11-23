@@ -15,11 +15,16 @@ const aiRoutes = require('./src/routes/ai');
 const { handleNotifications } = require('./src/routes/api');
 const aggregator = require('./src/feeds/aggregator');
 const { seedDefaultSources } = require('./src/feeds/default-sources');
-const { initTransporter } = require('./src/notifications/email-notifier');
+const mailer = require('./src/notifications/mailer');
 const auth = require('./src/auth');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Behind Caddy (docker network) req.ip would otherwise be the proxy's IP for every
+// visitor, making rate limits global. Trust only private-network proxies, so a
+// directly-exposed server can't be fooled by a spoofed X-Forwarded-For.
+app.set('trust proxy', process.env.TRUST_PROXY || 'loopback, linklocal, uniquelocal');
 
 // ============================================
 // SECURITY MIDDLEWARE
@@ -36,7 +41,13 @@ app.use('/api', (req, res, next) => {
   // from CSRF — these are the endpoints that establish/give tokens
   const csrfExempt = ['/auth/login', '/auth/register', '/auth/forgot-password',
                       '/auth/reset-password', '/auth/refresh', '/auth/guest'];
-  if (csrfExempt.some(p => req.path === p)) return next();
+  if (csrfExempt.some(p => req.path === p)) {
+    // These can't use the double-submit token (no session yet), so refuse
+    // cross-site requests instead: blocks login CSRF / forced guest sessions.
+    const site = req.get('sec-fetch-site');
+    if (site === 'cross-site') return res.status(403).json({ success: false, error: 'Cross-site request blocked' });
+    return next();
+  }
   return csrfMiddleware(req, res, next);
 });
 
@@ -47,6 +58,14 @@ app.use((req, res, next) => {
   res.setHeader('X-XSS-Protection', '1; mode=block');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  // Blocks injected inline scripts / javascript: URLs from running.
+  // The sha256 hashes allow the small inline <script> blocks in index.html and
+  // admin.html — if you edit those blocks, regenerate the hashes (browser console
+  // prints the expected hash when one is blocked).
+  res.setHeader('Content-Security-Policy',
+    "default-src 'self'; script-src 'self' 'sha256-rwPhTO8AH2YTkM4qY4TAdsfwG/NzhP/ujV/DyMysVbo=' 'sha256-NEKOWahk3VTXigudAbS/Ab55vpvYBInuLocngBFznf0=' 'sha256-ZpYQh6FbExcbZMpg++Z26FEb8DFc2iu8gJ2zbysByYk='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+    "font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https:; connect-src 'self'; " +
+    "frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'");
   if (process.env.NODE_ENV === 'production' || process.env.RAILWAY_ENVIRONMENT) {
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   }
@@ -161,10 +180,17 @@ app.get('/admin', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
 
+
 // ============================================
 // ERROR HANDLING — never expose internals
 // ============================================
 app.use((err, req, res, next) => {
+  // Client errors raised by body parsing (malformed JSON → 400, body too large → 413)
+  // carry their own status; report them as such instead of a 500.
+  const status = err.status || err.statusCode;
+  if (status >= 400 && status < 500) {
+    return res.status(status).json({ success: false, error: err.expose ? err.message : 'Bad request' });
+  }
   console.error('[Server] Unhandled error:', err.message);
   res.status(500).json({ error: 'Internal server error' });
 });
@@ -195,14 +221,23 @@ async function initialize() {
   // 0. Validate production configuration
   validateConfig();
 
+  // 0. Restore the latest database snapshot (free hosting has no persistent disk)
+  const dbBackup = require('./src/db-backup');
+  await dbBackup.restore(db.getDbPath());
+
   // 1. Initialize database
   console.log('[Init] Initializing database...');
   db.getDb();
   console.log('[Init] Database ready ✓');
 
-  // 2. Create default admin user + invite codes (first run only)
+  // 1b. Keep it: snapshots every few minutes (when changed) and on shutdown
+  dbBackup.schedule(db);
+
+  // 2. Create default admin user + invite codes (first run only). Hashing is
+  // async now, so wait for it: the admin must exist (and own the seeded
+  // sources) before seeding and before the server accepts logins.
   console.log('[Init] Checking user accounts...');
-  auth.ensureAdminExists();
+  await auth.ensureAdminExists();
 
   // 3. Seed default sources (system-level, user_id = NULL)
   console.log('[Init] Seeding default threat intelligence sources...');
@@ -211,7 +246,7 @@ async function initialize() {
 
   // 4. Initialize email transporter
   console.log('[Init] Setting up email notifications...');
-  initTransporter();
+  mailer.logStatus();
 
   // 5. Register notification handler
   aggregator.setOnFetchComplete(async (newArticles) => {
@@ -230,6 +265,28 @@ async function initialize() {
     console.log('📡 API:          http://localhost:' + PORT + '/api');
     console.log('');
   });
+
+  // 6b. Render free tier: the service sleeps after 15 min without inbound
+  // traffic, which would also stop the feed scheduler. Ping our own public URL
+  // (RENDER_EXTERNAL_URL is set automatically by Render) every 10 minutes.
+  if (process.env.RENDER_EXTERNAL_URL) {
+    const https = require('https');
+    const pingUrl = `${process.env.RENDER_EXTERNAL_URL.replace(/\/$/, '')}/healthz`;
+    setInterval(() => {
+      https.get(pingUrl, (r) => r.resume()).on('error', (e) => console.warn('[KeepAlive] ping failed:', e.message));
+    }, 10 * 60 * 1000);
+    console.log(`[Init] Keep-alive ping enabled → ${pingUrl} every 10 min ✓`);
+  }
+
+  // 6c. Event-loop lag monitor: logs whenever the process was blocked for >1s,
+  // so a failed platform health check can be traced to what was running.
+  let lagLast = Date.now();
+  setInterval(() => {
+    const now = Date.now();
+    const lag = now - lagLast - 500;
+    if (lag > 1000) console.warn(`[Lag] event loop blocked ~${lag} ms (fetching: ${aggregator.getStatus ? JSON.stringify(aggregator.getStatus().isRunning) : 'n/a'})`);
+    lagLast = now;
+  }, 500).unref();
 
   // 7. Start initial fetch after delay
   console.log('[Init] Starting initial feed fetch in 5 seconds...');
@@ -252,6 +309,37 @@ async function initialize() {
       aggregator.startScheduler(process.env.FETCH_CRON || '*/15 * * * *');
     }
   }, 5000);
+
+  // 8. Vulnerability priority intel (EPSS / CISA KEV / CVSS): shortly after start, then every 6 h
+  const vulnIntel = require('./src/vuln-intel');
+  const runVulnIntel = () => vulnIntel.refresh()
+    .then((r) => r && r.cves && console.log(`[VulnIntel] ${r.cves} CVEs: EPSS ${r.epss}, CVSS ${r.cvss}, KEV catalog ${r.kev}`))
+    .catch((e) => console.error('[VulnIntel] refresh error:', e.message));
+  setTimeout(runVulnIntel, 90 * 1000).unref();
+  setInterval(runVulnIntel, 6 * 3600 * 1000).unref();
+
+  // 9. PoC checker in the background (only with a GitHub token: 5,000 req/h).
+  //    Without one the 60 req/h budget is left for the admin's manual checks.
+  if (process.env.GITHUB_TOKEN) {
+    const pocCheck = require('./src/poc-check');
+    let pocBusy = false;
+    setInterval(async () => {
+      if (pocBusy) return;
+      pocBusy = true;
+      try {
+        for (const a of db.getUncheckedPocArticles(5)) {
+          const r = await pocCheck.checkArticle(a);
+          db.savePocCheck(a.id, r);
+          if (r.rateLimited) break;
+        }
+      } catch (e) {
+        console.error('[PoC] Background check error:', e.message);
+      } finally { pocBusy = false; }
+    }, 20 * 60 * 1000).unref();
+    console.log('[Init] PoC checker: background checks every 20 min ✓');
+  } else {
+    console.log('[Init] PoC checker: manual only (set GITHUB_TOKEN for background checks)');
+  }
 }
 
 // ============================================
@@ -278,4 +366,7 @@ process.on('SIGINT', () => {
 // ============================================
 // START
 // ============================================
-initialize();
+initialize().catch((error) => {
+  console.error('[Fatal] Startup failed:', error && error.stack ? error.stack : error);
+  process.exit(1);
+});

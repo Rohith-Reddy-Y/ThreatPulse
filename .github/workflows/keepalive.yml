@@ -1,0 +1,22 @@
+# Keeps the Render free instance awake (it sleeps after 15 min without traffic,
+# which also pauses the feed scheduler) and wakes it after a platform restart.
+# GitHub runs scheduled workflows only from the default branch.
+name: keep-alive
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+permissions: {}
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Ping /healthz
+        run: |
+          for i in 1 2 3; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 https://threatpulse-30w8.onrender.com/healthz) && echo "HTTP $code"
+            [ "$code" = "200" ] && exit 0
+            sleep 20
+          done
+          echo "Site did not answer 200 (it may still be waking up)"; exit 0
