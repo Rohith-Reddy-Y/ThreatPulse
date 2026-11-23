@@ -553,3 +553,25 @@ a.lp-col-name:hover { color: var(--text-accent); text-decoration: underline; }
 .vuln-pri-plan { color: var(--text-accent); border-color: var(--border-accent); }
 .vuln-pri-monitor { color: var(--text-muted); border-color: var(--border-light); }
 .vuln-kev { font-weight: 700; color: var(--red); }
+
+/* ── IOC export on cards ── */
+.ioc-more { font-size: 11px; color: var(--text-muted); align-self: center; }
+.ioc-export { display: inline-flex; gap: 3px; margin-left: auto; }
+.ioc-export button {
+  padding: 2px 7px; border-radius: 4px; border: 1px solid var(--border-light); background: none;
+  color: var(--text-secondary); font: 600 10.5px/1.4 var(--font-body); cursor: pointer;
+}
+.ioc-export button:hover, .ioc-export button:focus-visible { border-color: var(--border-accent); color: var(--text-primary); }
+.article-iocs { align-items: center; }
+
+/* ── Landscape trends (vs previous period) ── */
+.lp-trend { font: 700 10.5px/1 var(--font-mono); white-space: nowrap; }
+.lp-trend-up { color: var(--red); }
+.lp-trend-down { color: var(--green); }
+.lp-trend-new { color: #c4b5fd; font-family: var(--font-body); letter-spacing: 0.04em; }
+.lp-trend-flat { color: var(--text-muted); }
+.lp-cell .lp-trend { margin-left: auto; margin-right: 6px; }
+
+/* ── Detection links (Sigma / Elastic / Atomic Red Team) ── */
+.lp-det, .ap-det { display: flex; flex-wrap: wrap; gap: 6px; }
+.ap-det { margin-bottom: 4px; }

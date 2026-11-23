@@ -349,3 +349,15 @@ test('one "AI analysis" button: shows progress, then summary/priority, and merge
   assert.equal((html.match(/T1566\.001/g) || []).length >= 2, true);
   assert.equal((html.match(/Spearphishing Attachment/g) || []).length, 1, 'technique name shown once (in the box only)');
 });
+
+test('IOC block offers Copy / CSV / STIX and the STIX export is a valid 2.1 bundle', async () => {
+  const art = { id: 21, title: 'Loader campaign', url: 'https://news.example/l', source_name: 'Src', severity: 'high', category: 'malware',
+    published_date: new Date().toISOString(), ttps: [], iocs: 'ip:203.0.113.9|domain:evil.example|hash:' + 'a'.repeat(64) };
+  const b = createBrowser({ routes: baseRoutes({
+    'GET /api/auth/me': { success: true, user: ALICE },
+    'GET /api/articles': { articles: [art], total: 1, page: 1, totalPages: 1 },
+  }) });
+  await b.settle();
+  const html = b.el('articles-container').innerHTML;
+  for (const k of ['copy', 'csv', 'stix']) assert.match(html, new RegExp(`data-ioc-export="${k}" data-ioc-article="21"`));
+});

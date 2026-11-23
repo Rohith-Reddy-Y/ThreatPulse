@@ -1177,18 +1177,15 @@
 
     // IOCs — extracted indicators
     let iocHtml = '';
-    if (article.iocs) {
-      const parts = article.iocs.split('|');
-      const items = [];
-      parts.forEach(p => {
-        const [type, values] = p.split(':');
-        if (values) {
-          values.split(',').slice(0, 3).forEach(v => {
-            items.push(`<span class="ioc-tag ioc-${escapeHtml(type)}" title="${escapeHtml(type)}: ${escapeHtml(v)}">${escapeHtml(v.length > 30 ? v.substring(0,28)+'..' : v)}</span>`);
-          });
-        }
-      });
-      if (items.length) iocHtml = `<div class="article-iocs">${items.join('')}</div>`;
+    const iocList = parseIocs(article.iocs);
+    if (iocList.length) {
+      const shownIocs = iocList.slice(0, 6).map(i => `<span class="ioc-tag ioc-${escapeHtml(i.type)}" title="${escapeHtml(i.label)}: ${escapeHtml(i.value)}">${escapeHtml(i.value.length > 30 ? i.value.substring(0, 28) + '..' : i.value)}</span>`).join('');
+      iocHtml = `<div class="article-iocs">${shownIocs}${iocList.length > 6 ? `<span class="ioc-more">+${iocList.length - 6}</span>` : ''}` +
+        `<span class="ioc-export" role="group" aria-label="Export IOCs">` +
+        `<button type="button" data-ioc-export="copy" data-ioc-article="${article.id}" title="Copy all ${iocList.length} IOCs (one per line)">Copy</button>` +
+        `<button type="button" data-ioc-export="csv" data-ioc-article="${article.id}" title="Download IOCs as CSV">CSV</button>` +
+        `<button type="button" data-ioc-export="stix" data-ioc-article="${article.id}" title="Download a STIX 2.1 bundle (for MISP, OpenCTI, SIEMs)">STIX</button>` +
+        `</span></div>`;
     }
 
     const desc = article.description ? escapeHtml(article.description.substring(0, 300)) : '';
@@ -1300,6 +1297,75 @@
       const pri = VULN_PRI[v.priority] ? v.priority : 'monitor';
       return `<div class="vuln-row"><span class="vuln-pri vuln-pri-${pri}">${VULN_PRI[pri]}</span><code>${escapeHtml(v.cve)}</code>${bits.join('<i aria-hidden="true">·</i>')}</div>`;
     }).join('')}</div>`;
+  }
+
+  // ── IOCs (stored as "ip:a,b|domain:c|hash:d|email:e") ──
+  function parseIocs(raw) {
+    const out = [];
+    const seen = new Set();
+    for (const part of String(raw || '').split('|')) {
+      const i = part.indexOf(':');
+      if (i < 0) continue;
+      const kind = part.slice(0, i);
+      for (const v of part.slice(i + 1).split(',').map(x => x.trim()).filter(Boolean)) {
+        let type = kind, label = kind;
+        if (kind === 'ip') { type = v.includes(':') ? 'ipv6' : 'ipv4'; label = 'IP'; }
+        else if (kind === 'domain') label = 'Domain';
+        else if (kind === 'email') label = 'Email';
+        else if (kind === 'hash') { type = v.length === 32 ? 'md5' : v.length === 40 ? 'sha1' : 'sha256'; label = type.toUpperCase(); }
+        const k = type + ':' + v.toLowerCase();
+        if (seen.has(k)) continue;
+        seen.add(k);
+        out.push({ type, label, value: v });
+      }
+    }
+    return out;
+  }
+  function downloadBlob(name, text, mime) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([text], { type: mime }));
+    a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  }
+  function stixBundle(article, iocs) {
+    const now = new Date().toISOString();
+    const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16); }));
+    const q = (v) => String(v).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    const pattern = (i) => ({
+      ipv4: `[ipv4-addr:value = '${q(i.value)}']`, ipv6: `[ipv6-addr:value = '${q(i.value)}']`,
+      domain: `[domain-name:value = '${q(i.value)}']`, email: `[email-addr:value = '${q(i.value)}']`,
+      md5: `[file:hashes.MD5 = '${q(i.value)}']`, sha1: `[file:hashes.'SHA-1' = '${q(i.value)}']`, sha256: `[file:hashes.'SHA-256' = '${q(i.value)}']`,
+    }[i.type]);
+    const ref = /^https?:\/\//i.test(article.url || '') ? [{ source_name: article.source_name || 'source', url: article.url }] : [];
+    const indicators = iocs.filter(pattern).map(i => ({
+      type: 'indicator', spec_version: '2.1', id: `indicator--${uuid()}`, created: now, modified: now,
+      name: `${i.label} ${i.value}`, pattern: pattern(i), pattern_type: 'stix', valid_from: now,
+      indicator_types: ['malicious-activity'],
+      description: `Extracted automatically by ThreatPulse from: ${article.title}. Review before blocking.`,
+      external_references: ref,
+    }));
+    const report = {
+      type: 'report', spec_version: '2.1', id: `report--${uuid()}`, created: now, modified: now,
+      name: article.title, published: article.published_date ? new Date(article.published_date).toISOString() : now,
+      report_types: ['threat-report'], object_refs: indicators.map(x => x.id), external_references: ref,
+    };
+    return JSON.stringify({ type: 'bundle', id: `bundle--${uuid()}`, objects: [report, ...indicators] }, null, 2);
+  }
+  async function exportIocs(article, how) {
+    const iocs = parseIocs(article.iocs);
+    if (!iocs.length) return;
+    const base = `iocs-${article.id}`;
+    if (how === 'copy') {
+      try { await navigator.clipboard.writeText(iocs.map(i => i.value).join('\n')); showToast('IOCs copied', `${iocs.length} indicator${iocs.length === 1 ? '' : 's'} copied. Review before blocking.`, 'success'); }
+      catch { showToast('Copy failed', 'Your browser blocked clipboard access. Use CSV instead.', 'error'); }
+    } else if (how === 'csv') {
+      const cell = (v) => { const t = String(v ?? ''); const safe = /^[=+\-@]/.test(t) ? `'${t}` : t; return `"${safe.replace(/"/g, '""')}"`; };
+      const rows = [['type', 'value', 'article_title', 'article_url', 'published'], ...iocs.map(i => [i.type, i.value, article.title, article.url, article.published_date])];
+      downloadBlob(`${base}.csv`, rows.map(r => r.map(cell).join(',')).join('\r\n'), 'text/csv');
+    } else if (how === 'stix') {
+      downloadBlob(`${base}.stix.json`, stixBundle(article, iocs), 'application/json');
+    }
   }
 
   // Labels shared by feed cards and the admin PoC tracker
@@ -2462,6 +2528,15 @@
         const id = parseInt(pathBtn.dataset.attackPath, 10);
         const art = state.articles.find(a => a.id === id) || pocState.items.find(a => a.id === id);
         if (art && window.ThreatPulseAttackPath) window.ThreatPulseAttackPath.open(art, pathBtn);
+        return;
+      }
+
+      // IOC export (copy / CSV / STIX 2.1)
+      const iocBtn = e.target.closest('[data-ioc-export]');
+      if (iocBtn) {
+        const id = parseInt(iocBtn.dataset.iocArticle, 10);
+        const art = state.articles.find(a => a.id === id);
+        if (art) exportIocs(art, iocBtn.dataset.iocExport);
         return;
       }
 

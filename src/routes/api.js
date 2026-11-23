@@ -706,13 +706,23 @@ router.get('/landscape', auth.requireAuth, (req, res) => {
     const hit = landscapeCache.get(key);
     if (hit && Date.now() - hit.at < GEO_TTL_MS) return res.json(hit.data);
     const since = new Date(Date.now() - days * 86400000).toISOString();
+    const prevSince = new Date(Date.now() - 2 * days * 86400000).toISOString();
     // Include techniques already mapped with "Map with AI" (validated + cached per article)
-    const rows = db.getGeoArticles(scope, since, 10000).map((a) => {
+    const all = db.getGeoArticles(scope, prevSince, 10000).map((a) => {
       const raw = aiCache.get('ttps', String(a.id));
       if (!raw) return a;
       try { const m = JSON.parse(raw); return Array.isArray(m.ttps) ? { ...a, _aiTtps: m.ttps } : a; } catch { return a; }
     });
+    const rows = all.filter((a) => String(a.published_date || '') >= since);
+    const prevRows = all.filter((a) => String(a.published_date || '') < since);
     const data = landscape.buildLandscape(rows, days);
+    // Trend: the same counts over the previous period of equal length
+    const prev = landscape.buildLandscape(prevRows, days);
+    const prevTech = new Map(prev.attack.tactics.flatMap((t) => t.techniques).map((t) => [t.id, t.total]));
+    const prevActor = new Map((prev.actors || []).map((x) => [x.name, x.count]));
+    for (const ta of data.attack.tactics) for (const t of ta.techniques) t.prev = prevTech.get(t.id) || 0;
+    for (const x of data.actors || []) x.prev = prevActor.get(x.name) || 0;
+    data.prevArticles = prevRows.length;
     if (Array.isArray(data.cves)) {
       const intel = vulnIntel.lookup(data.cves.map((c) => c.id));
       data.cves = data.cves.map((c) => { const i = intel.get(c.id); return i ? { ...c, epss: i.epss, percentile: i.percentile, cvss: i.cvss, kev: c.kev || !!i.kev, priority: i.priority } : c; });

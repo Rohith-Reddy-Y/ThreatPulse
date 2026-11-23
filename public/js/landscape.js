@@ -157,11 +157,11 @@
     if (state.attackView === 'list') {
       const tacticName = Object.fromEntries(a.tactics.map((t) => [t.id, t.name]));
       const rows = [...all].sort((x, y) => y.total - x.total);
-      panel.append(table(['Technique', 'Tactic', 'Reports', 'Cited by ID', 'Inferred', 'Highest severity'], rows.map((t) => ({
-        cells: [el('span', null, el('code', { class: 'lp-code' }, t.id), ' ', t.name), tacticName[t.tactic] || '—', bar(t.total, max), fmt(t.explicit), fmt(t.inferred), sevChip(t.worst)],
+      panel.append(table(['Technique', 'Tactic', 'Reports', 'Trend', 'Cited by ID', 'Inferred', 'Highest severity'], rows.map((t) => ({
+        cells: [el('span', null, el('code', { class: 'lp-code' }, t.id), ' ', t.name), tacticName[t.tactic] || '—', bar(t.total, max), trend(t.total, t.prev) || el('span', { class: 'lp-muted' }, '—'), fmt(t.explicit), fmt(t.inferred), sevChip(t.worst)],
         onclick: () => select(t.id),
         label: `Inspect ${t.id} ${t.name}`,
-      })), [2, 3, 4]));
+      })), [2, 3, 4, 5]));
       renderInspector(panel);
       return;
     }
@@ -185,11 +185,13 @@
         el('span', { class: 'lp-cell-meta' },
           el('code', null, t.id),
           t.explicit ? el('b', { class: 'lp-id-mark', title: 'Cited by ID' }, 'ID') : null,
+          trend(t.total, t.prev, true),
           el('span', { class: 'lp-cell-n' }, fmt(t.total))));
         bindTip(cell, (tp) => {
           tp.append(el('div', { class: 'lp-tip-head' }, el('code', null, t.id), el('b', null, t.name)));
           tp.append(el('div', { class: 'lp-tip-row' }, `${fmt(t.total)} report${t.total === 1 ? '' : 's'} · ${fmt(t.explicit)} cite the ID · ${fmt(t.inferred)} inferred`));
           tp.append(el('div', { class: 'lp-tip-row' }, 'Highest severity: ', sevChip(t.worst)));
+          if (t.prev !== undefined) tp.append(el('div', { class: 'lp-tip-row' }, `Previous period: ${fmt(t.prev)} report${t.prev === 1 ? '' : 's'}`));
           for (const s of t.samples.slice(0, 2)) tp.append(el('div', { class: 'lp-tip-item' }, s.title));
           tp.append(el('div', { class: 'lp-tip-hint' }, 'Click for procedures, actors and the MITRE page'));
         });
@@ -256,6 +258,11 @@
       who.append(el('div', { class: 'lp-chips' }, ...t.actors.map((a) =>
         el('button', { type: 'button', class: 'lp-chip', onclick: () => filterFeed(actorTerm(a.name), a.name), title: `Filter the feed by ${a.name}` }, `${a.name} (${a.count})`))));
     } else who.append(el('p', { class: 'lp-muted' }, 'No named actor in these reports.'));
+    const det = window.ThreatPulseAttackPath && window.ThreatPulseAttackPath.detectionLinks ? window.ThreatPulseAttackPath.detectionLinks(t.id) : [];
+    if (det.length) {
+      who.append(el('h5', { style: { marginTop: '14px' } }, 'Detect & test'));
+      who.append(el('div', { class: 'lp-det' }, ...det.map((l) => ext(l.url, `${l.label} ${MITRE_ARROW}`, 'lp-btn', l.title))));
+    }
     who.append(el('p', { class: 'lp-note', style: { marginTop: '12px' } },
       'TTP = Tactic › Technique › Procedure. A procedure is the reported behaviour in the source’s own words.'));
     insp.append(el('div', { class: 'lp-insp-body' }, procs, who));
@@ -307,6 +314,17 @@
   function bar(n, max) {
     return el('span', { class: 'lp-bar' }, el('span', { class: 'lp-bar-track' }, el('span', { class: 'lp-bar-fill', style: { width: `${Math.max(4, (n / Math.max(1, max)) * 100)}%` } })), el('span', { class: 'lp-bar-n' }, fmt(n)));
   }
+  // Change vs the previous period of the same length (▲ rising, ▼ falling, NEW)
+  function trend(cur, prev, compact) {
+    if (prev === undefined || prev === null) return null;
+    const d = cur - prev;
+    const range = state.days === 1 ? 'previous 24h' : `previous ${state.days} days`;
+    if (prev === 0 && cur > 0) return el('span', { class: 'lp-trend lp-trend-new', title: `New: not seen in the ${range}` }, 'NEW');
+    if (d === 0) return compact ? null : el('span', { class: 'lp-trend lp-trend-flat', title: `Same as the ${range}` }, '=');
+    return el('span', { class: `lp-trend ${d > 0 ? 'lp-trend-up' : 'lp-trend-down'}`, title: `${d > 0 ? '+' : ''}${d} vs the ${range} (${prev})` },
+      `${d > 0 ? '▲' : '▼'}${compact ? '' : ' '}${Math.abs(d)}`);
+  }
+
   function table(headers, rows, numericCols = []) {
     const t = el('table', { class: 'lp-table' },
       el('thead', null, el('tr', null, ...headers.map((h, i) => el('th', { scope: 'col', class: numericCols.includes(i) ? 'num' : null }, h)))));
@@ -330,11 +348,11 @@
     if (!d || !d.actors.length) return empty(panel, 'No named threat actors in this period.');
     const max = Math.max(...d.actors.map((x) => x.count));
     panel.append(el('p', { class: 'lp-note' }, 'Attribution follows public vendor naming and is shown only where it is consistently reported.'));
-    panel.append(table(['Actor', 'Attributed to', 'Reports', 'Highest severity', 'Top techniques', 'Sectors', 'CVEs', 'Last seen'], d.actors.map((x) => ({
+    panel.append(table(['Actor', 'Attributed to', 'Reports', 'Trend', 'Highest severity', 'Top techniques', 'Sectors', 'CVEs', 'Last seen'], d.actors.map((x) => ({
       cells: [
         el('span', null, el('b', null, x.name), x.aliases && x.aliases.length ? el('span', { class: 'lp-aka' }, `aka ${x.aliases.join(', ')}`) : null),
         x.origin ? x.origin.name : el('span', { class: 'lp-muted' }, 'Unattributed'),
-        bar(x.count, max), sevChip(x.worst),
+        bar(x.count, max), trend(x.count, x.prev) || el('span', { class: 'lp-muted' }, '—'), sevChip(x.worst),
         x.techniques && x.techniques.length
           ? el('span', { class: 'lp-ttp-chips' }, ...x.techniques.slice(0, 4).map((t) => ext(t.url, t.id, 'lp-code-link', `${t.id} ${t.name} — ${t.count} report(s). Opens MITRE ATT&CK.`)))
           : el('span', { class: 'lp-muted' }, '—'),
@@ -344,7 +362,7 @@
       ],
       onclick: () => filterFeed(x.term || x.name, x.name),
       label: `Filter the feed by ${x.name}`,
-    })), [2]));
+    })), [2, 3]));
   }
 
   // ── Vulnerabilities ──

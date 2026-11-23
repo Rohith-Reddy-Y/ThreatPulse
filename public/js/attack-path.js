@@ -52,6 +52,18 @@
     const m = /^(T\d{4})(?:\.(\d{3}))?$/.exec(String(id || ''));
     return m ? `https://attack.mitre.org/techniques/${m[1]}/${m[2] ? m[2] + '/' : ''}` : null;
   };
+  // Where to find detections and safe test cases for a technique (all public)
+  function detectionLinks(id) {
+    const t = String(id || '').toUpperCase();
+    if (!/^T\d{4}(\.\d{3})?$/.test(t)) return [];
+    const q = (repo, term) => `https://github.com/search?q=${encodeURIComponent(`repo:${repo} ${term}`)}&type=code`;
+    return [
+      { label: 'Sigma rules', url: q('SigmaHQ/sigma', `attack.${t.toLowerCase()}`), title: `Community Sigma detection rules tagged ${t} (SigmaHQ)` },
+      { label: 'Elastic rules', url: q('elastic/detection-rules', `"${t}"`), title: `Elastic detection rules mapped to ${t}` },
+      { label: 'Atomic Red Team tests', url: q('redcanaryco/atomic-red-team', `path:atomics/${t}`), title: `Atomic Red Team tests that emulate ${t}, to check your detections fire` },
+    ];
+  }
+
   const reduceMotion = () => window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   // ── Model: ordered steps along the kill chain ──
@@ -207,6 +219,9 @@
         s.how === 'cited' ? 'Cited: the report names this technique ID.'
           : s.how === 'ai' ? 'AI-mapped from the sentence above (quoted from the report). Verify before relying on it.'
           : `Inferred: the report describes this behaviour${s.term ? ` (“${s.term}”)` : ''}. Verify before relying on it.`),
+      el('p', { class: 'ap-sub', text: 'Detect & test' }),
+      el('div', { class: 'ap-det' }, detectionLinks(shown).map((l) => el('a', { class: 'ap-btn', href: l.url, target: '_blank', rel: 'noopener', title: l.title }, `${l.label} ↗`))),
+      el('p', { class: 'ap-sub', text: 'More' }),
       el('div', { class: 'ap-actions' },
         url ? el('a', { class: 'ap-btn ap-btn-primary', href: url, target: '_blank', rel: 'noopener' }, `Open ${shown} on MITRE ATT&CK ↗`) : null,
         el('button', { type: 'button', class: 'ap-btn', onclick: () => findInFeed(s.how === 'cited' ? shown : (s.term || s.name), 'search') },
@@ -370,5 +385,5 @@
     opener = null; current = null;
   }
 
-  window.ThreatPulseAttackPath = { open, close, _buildModel: buildModel };
+  window.ThreatPulseAttackPath = { open, close, detectionLinks, _buildModel: buildModel };
 })();

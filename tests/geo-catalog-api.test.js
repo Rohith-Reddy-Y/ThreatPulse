@@ -126,3 +126,19 @@ test('articles carry patch priority from stored EPSS / CVSS and the CISA KEV cat
   assert.strictEqual(by['Foo CMS '][0].cvss, 7.5);
   vulnIntel._setKevForTests(new Map());
 });
+
+test('landscape trends: each technique and actor carries its count from the previous period', async () => {
+  const u = createUser('tr_user', PW);
+  const s = db.addSource({ name: 'TR feed', url: 'https://feeds.example/tr', user_id: u }).id;
+  const add = (title, daysAgo) => db.insertArticle({ url: `https://news.example/tr/${++n}`, title, description: 'Attackers used password spraying against VPN accounts.',
+    user_id: u, source_id: s, source_name: 'TR', published_date: new Date(Date.now() - daysAgo * 86400000).toISOString(), severity: 'high', threat_actors: 'APT28' });
+  add('APT28 password spraying wave one', 1); add('APT28 password spraying wave two', 2); add('APT28 password spraying wave three', 3);
+  add('APT28 password spraying last week', 9);
+  const jar = await h.login('tr_user', PW, ip());
+  const r = await request('GET', '/api/landscape?days=7', { cookies: jar });
+  const t = r.body.attack.tactics.flatMap(x => x.techniques).find(x => x.id === 'T1110');
+  assert.ok(t, 'brute force technique present');
+  assert.strictEqual(t.total, 3);
+  assert.strictEqual(t.prev, 1);
+  assert.strictEqual(r.body.actors.find(a => a.name === 'APT28').prev, 1);
+});
