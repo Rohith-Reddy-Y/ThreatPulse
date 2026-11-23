@@ -339,6 +339,7 @@ const ROUTES = {
   'POST /api/ai/triage': { policy: 'auth', allow: [503], body: (a) => ({ articleId: ownArticle(a) }) },
   'GET /api/landscape': { policy: 'auth', allow: [200] },
   'POST /api/ai/ttps': { policy: 'auth', allow: [503], body: (a) => ({ articleId: ownArticle(a) }) },
+  'POST /api/ai/analyze': { policy: 'auth', allow: [503], body: (a) => ({ articleId: ownArticle(a) }) },
   'POST /api/ai/ask': { policy: 'auth', allow: [503], body: () => ({ question: 'ransomware quokka', mode: 'rag' }) },
   'GET /api/ai/threads': { policy: 'auth', allow: [200] },
   'GET /api/ai/threads/:id': { policy: 'auth', allow: [200], params: ownThread },

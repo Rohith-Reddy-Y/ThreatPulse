@@ -11,6 +11,7 @@ const ai = require('../ai/client');
 const prompts = require('../ai/prompts');
 const cache = require('../ai/cache');
 const websearch = require('../ai/websearch');
+const attackKb = require('../attack-kb');
 const crypto = require('crypto');
 const { LIMITS } = require('../ai/prompts');
 
@@ -229,7 +230,6 @@ router.post('/summarize', auth.requireAuth, async (req, res) => {
 // ── AI ATT&CK MAPPING (per article) ──
 // Rule-based mapping only sees keywords; this asks the model for techniques and
 // keeps only those whose evidence is quoted verbatim from the article.
-const attackKb = require('../attack-kb');
 router.post('/ttps', auth.requireAuth, async (req, res) => {
   try {
     const articleId = parseId((req.body || {}).articleId);
@@ -254,6 +254,62 @@ router.post('/ttps', auth.requireAuth, async (req, res) => {
   } catch (e) {
     console.error('[AI] TTP mapping error:', e.message);
     res.status(500).json({ error: 'AI ATT&CK mapping failed' });
+  }
+});
+
+// ── AI ANALYSIS (one click on a card) ──
+// Summary + why it matters + priority + ATT&CK mapping in one request, one
+// quota unit. Each part is cached per article; only missing parts are generated.
+router.post('/analyze', auth.requireAuth, async (req, res) => {
+  try {
+    const articleId = parseId((req.body || {}).articleId);
+    if (!articleId) return res.status(400).json({ error: 'articleId required' });
+    const article = db.getArticleById(articleId);
+    if (!article || !canAccessArticle(req.user, article)) return res.status(404).json({ error: 'Article not found' });
+    const key = String(article.id);
+
+    let summary = cachedJson('summary', key, cleanSummary);
+    let triage = cachedJson('triage', key, cleanTriage);
+    let mapped = cachedJson('ttps', key, (d) => (d && Array.isArray(d.ttps) ? d : null));
+    const errors = {};
+
+    if (!summary || !triage || !mapped) {
+      if (!consumeAiQuota(req, res)) return;
+      const jobs = [
+        summary ? null : ai.generate(prompts.summaryPrompt(article)).then((r) => {
+          const d = r.ok ? cleanSummary(ai.parseJson(r.text)) : null;
+          if (d) { summary = d; cache.set('summary', key, JSON.stringify(d)); } else errors.summary = r.ok ? 'Empty summary' : r.error;
+        }),
+        triage ? null : ai.generate(prompts.triagePrompt(article)).then((r) => {
+          const d = r.ok ? cleanTriage(ai.parseJson(r.text)) : null;
+          if (d) { triage = d; cache.set('triage', key, JSON.stringify(d)); } else errors.triage = r.ok ? 'Empty triage' : r.error;
+        }),
+        mapped ? null : ai.generate(prompts.ttpPrompt(article)).then((r) => {
+          if (!r.ok) { errors.ttps = r.error; return; }
+          const d = ai.parseJson(r.text) || {};
+          mapped = { ttps: attackKb.validateAiTtps(article, d.techniques), actors: attackKb.validateAiActors(article, d.actors) };
+          cache.set('ttps', key, JSON.stringify(mapped));
+        }),
+      ].filter(Boolean);
+      await Promise.all(jobs);
+    }
+    if (!summary && !triage && !mapped) {
+      return res.status(503).json({ success: false, error: errors.summary || errors.ttps || 'AI is unavailable right now' });
+    }
+    const rule = attackKb.analyzeTtps(article);
+    const ruleIds = new Set(rule.map((t) => t.id));
+    const ttps = mapped ? attackKb.mergeTtps(rule, mapped.ttps) : rule;
+    res.json({
+      success: true,
+      summary, triage,
+      ttps, aiMapped: !!mapped,
+      addedTtps: mapped ? mapped.ttps.filter((t) => !ruleIds.has(t.id)).map((t) => t.subId || t.id) : [],
+      actors: mapped ? mapped.actors || [] : [],
+      errors,
+    });
+  } catch (e) {
+    console.error('[AI] Analyze error:', e.message);
+    res.status(500).json({ error: 'AI analysis failed' });
   }
 });
 

@@ -448,3 +448,26 @@ test('AI TTP mapping respects article access', async () => {
   const r = await call('POST', '/ttps', { user: other, ip: freshIp(), body: { articleId: Number(art) } });
   assert.equal(r.statusCode, 404);
 });
+
+test('AI analysis: one request returns summary, priority and ATT&CK, using one quota unit, then serves from cache', async () => {
+  const u = freshUser();
+  const art = Number(addArticle(u.id, { title: 'Clinic breach', description: 'The intruders abused stolen OAuth tokens to read staff mailboxes.' }));
+  const bodies = [];
+  axiosStub.post = async (url, body) => {
+    bodies.push(body);
+    const sys = body.messages[0].content;
+    if (/ATT&CK \(Enterprise\) mapping/.test(sys)) return groqReply(JSON.stringify({ techniques: [{ id: 'T1550.001', name: 'Application Access Token', tactic: 'Defense Evasion', evidence: 'abused stolen OAuth tokens to read staff mailboxes' }], actors: [] }));
+    if (/SOC triage/.test(sys)) return groqReply(JSON.stringify({ relevance: 80, confidence: 70, priority: 'high', reason: 'Active phishing.' }));
+    return groqReply(JSON.stringify({ summary: 'Staff were phished.', keyTakeaway: 'Block ISO attachments.', affectedTech: ['Windows'] }));
+  };
+  const r = await call('POST', '/analyze', { user: u, ip: freshIp(), body: { articleId: art } });
+  assert.equal(r.statusCode, 200, JSON.stringify(r.body));
+  assert.equal(bodies.length, 3);
+  assert.equal(r.body.summary.summary, 'Staff were phished.');
+  assert.equal(r.body.triage.priority, 'high');
+  assert.deepEqual(r.body.addedTtps, ['T1550.001']);
+  assert.ok(r.body.ttps.some(t => t.how === 'ai'));
+  const again = await call('POST', '/analyze', { user: u, ip: freshIp(), body: { articleId: art } });
+  assert.equal(again.statusCode, 200);
+  assert.equal(bodies.length, 3, 'fully cached: no model calls');
+});

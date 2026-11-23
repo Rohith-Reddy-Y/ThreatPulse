@@ -168,6 +168,11 @@ function createBrowser({ html = 'index.html', script = 'js/app.js', routes = {},
     routes,
     settle,
     registerAll(sel, list) { groups.set(sel, list); },
+    // Fire a delegated document-level event (e.g. clicks on buttons inside rendered HTML)
+    async fireDoc(type, target) {
+      const ev = { type, target, preventDefault() {}, stopPropagation() {} };
+      for (const fn of listeners[type] || []) await fn(ev);
+    },
     makeEl,
     toastTexts: () => toasts.map(t => t.innerHTML.replace(/&times;/g, '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()),
     visible: (id) => !getEl(id).classList.contains('hidden'),

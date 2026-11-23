@@ -324,3 +324,28 @@ test('cards show the threat actor and every MITRE ID linked to its TTP, with a 3
   assert.match(html, /2 TTPs · 2\/14 tactics/);
   assert.ok(!html.includes('<script>alert(1)'), 'procedure text is escaped');
 });
+
+test('one "AI analysis" button: shows progress, then summary/priority, and merges ATT&CK into the box (not listed twice)', async () => {
+  const art = { id: 9, title: 'Clinic breach', url: 'https://news.example/c', source_name: 'Src', severity: 'high', category: 'threat_intel',
+    published_date: new Date().toISOString(), ttps: [] };
+  const b = createBrowser({ routes: baseRoutes({
+    'GET /api/auth/me': { success: true, user: ALICE },
+    'GET /api/articles': { articles: [art], total: 1, page: 1, totalPages: 1 },
+    'POST /api/ai/analyze': { success: true, summary: { summary: 'Staff were phished.', keyTakeaway: 'Block ISO.', affectedTech: [] },
+      triage: { priority: 'high', relevance: 80, reason: 'Active.' }, aiMapped: true, addedTtps: ['T1566.001'], actors: [],
+      ttps: [{ id: 'T1566', subId: 'T1566.001', name: 'Spearphishing Attachment', tactic: 'TA0001', tacticName: 'Initial Access', how: 'ai', procedure: 'sent spearphishing emails' }] },
+  }) });
+  await b.settle();
+  let html = b.el('articles-container').innerHTML;
+  assert.ok(!html.includes('ti-panel'), 'no empty ATT&CK box');
+  assert.equal((html.match(/data-ai-analyze=/g) || []).length, 1, 'exactly one AI button');
+  assert.ok(!html.includes('data-ai-summarize') && !html.includes('data-ai-ttps'));
+  await b.fireDoc('click', { id: '', classList: { contains: () => false }, closest: (sel) => sel.includes('data-ai-analyze') ? { dataset: { aiAnalyze: '9' } } : null });
+  await b.settle();
+  html = b.el('articles-container').innerHTML;
+  assert.match(html, /Staff were phished\./);
+  assert.match(html, /ai-an-pri-high/);
+  assert.match(html, /class="ti-panel"/, 'ATT&CK box now present');
+  assert.equal((html.match(/T1566\.001/g) || []).length >= 2, true);
+  assert.equal((html.match(/Spearphishing Attachment/g) || []).length, 1, 'technique name shown once (in the box only)');
+});

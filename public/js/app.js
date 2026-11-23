@@ -9,7 +9,7 @@
   //  AUTH STATE (cookie-based httpOnly JWT — no localStorage)
   //
   let currentUser = null;
-  const aiResultCache = new Map(); // articleId -> { html, open }: AI card results kept across re-renders
+  const aiAnalysis = new Map(); // articleId -> { open, loading, error, data }: AI card analysis kept across re-renders
   let forcedChangeSecret = null; // sign-in password, held only until a forced change completes
   // Access token lifetime is 15 min; refresh proactively at 13 min
   const REFRESH_MARGIN = 13 * 60 * 1000; // refresh 2 min before expiry
@@ -171,7 +171,7 @@
 
   function setUser(user) {
     // Switching account (e.g. guest -> signed in): drop the previous user's AI chat
-    if (!currentUser || currentUser.id !== user.id) { resetAiPanel(); aiResultCache.clear(); }
+    if (!currentUser || currentUser.id !== user.id) { resetAiPanel(); aiAnalysis.clear(); }
     currentUser = user;
     updateUserMenu();
     scheduleAutoRefresh();
@@ -198,7 +198,7 @@
     renderSources();
     renderEscalatedSidebar([]);
     resetAiPanel();
-    aiResultCache.clear();
+    aiAnalysis.clear();
   }
 
   function logout() {
@@ -1122,8 +1122,21 @@
       const clsTag = cls ? `<span class="ta-class ta-class-${cls.toLowerCase()}">${cls}</span>` : '';
       return `<button type="button" class="ti-actor" data-filter-actor="${escapeHtml(name)}" title="${cls ? 'Class ' + cls + ' threat actor' : 'Threat actor'} — show all reports about ${escapeHtml(name)}">${clsTag}${escapeHtml(name)}</button>`;
     }).join('');
+    // Don't repeat text the card already shows: skip a quote that is just the
+    // title, and show each distinct sentence only once across the steps.
+    const normTxt = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    const titleNorm = normTxt(article.title);
+    const shownDescNorm = normTxt(String(article.description || '').substring(0, 300));   // what the card prints
+    const quoted = new Set();
+    const quoteFor = (p) => {
+      const n = normTxt(p);
+      if (!n || n === titleNorm || titleNorm.includes(n) || shownDescNorm.includes(n) || quoted.has(n)) return '';
+      quoted.add(n);
+      return p;
+    };
     const ttpItem = (t) => {
       const shown = t.subId || t.id;
+      const proc = quoteFor(t.procedure);
       const cited = t.how === 'cited';
       const how = cited ? 'cited' : t.how === 'ai' ? 'AI' : 'inferred';
       const howTip = cited ? 'Technique ID cited in the report' : t.how === 'ai' ? 'Mapped by AI from the quoted sentence — verify' : 'Inferred from the behaviour the report describes';
@@ -1132,21 +1145,16 @@
         `<a class="ti-id" href="${escapeHtml(mitreLink(shown))}" target="_blank" rel="noopener" title="Open ${escapeHtml(shown)} on attack.mitre.org">${escapeHtml(shown)}</a>` +
         `<span class="ti-tech">${escapeHtml(t.name)}</span>` +
         `<span class="ti-how" title="${howTip}">${how}</span>` +
-        (t.procedure ? `<q class="ti-proc">${escapeHtml(t.procedure)}</q>` : '') +
+        (proc ? `<q class="ti-proc">${escapeHtml(proc)}</q>` : '') +
         `</li>`;
     };
     const tacticCount = ttps ? new Set(ttps.map(t => t.tactic).filter(Boolean)).size : 0;
-    // AI mapping: on demand, for reports the keyword rules can't fully read
-    const aiBtn = !article.aiMapped
-      ? `<button type="button" class="ti-ai-btn" data-ai-ttps="${article.id}" title="Ask the AI to map this report to MITRE ATT&CK (each technique must quote the report)">${ttps && ttps.length ? 'Refine with AI' : 'Map with AI'}</button>`
-      : '';
-    const ttpHtml = ttps ? `<div class="ti-panel${ttps.length || actorNames.length ? '' : ' ti-empty'}" aria-label="Threat actor and MITRE ATT&CK TTPs">` +
+    const ttpHtml = ttps && (ttps.length || actorNames.length) ? `<div class="ti-panel" aria-label="Threat actor and MITRE ATT&CK TTPs">` +
       `<div class="ti-head"><span class="ti-title">MITRE ATT&amp;CK</span>` +
-      `<span class="ti-count">${ttps.length ? `${ttps.length} TTP${ttps.length === 1 ? '' : 's'} · ${tacticCount}/14 tactics` : (article.aiMapped ? 'no attacker techniques described' : 'none found by keyword rules')}</span>` +
-      `<span class="ti-head-actions">${aiBtn}` +
-      (ttps.length ? `<button type="button" class="ti-3d-btn" data-attack-path="${article.id}" title="See this attack step by step in 3D">3D attack path</button>` : '') +
-      `</span></div>` +
-      (ttps.length || actorNames.length ? `<div class="ti-actor-row"><span class="ti-label">Threat actor</span>${actorChips || '<span class="ti-none">Not attributed in this report</span>'}</div>` : '') +
+      (ttps.length ? `<span class="ti-count">${ttps.length} TTP${ttps.length === 1 ? '' : 's'} · ${tacticCount}/14 tactics</span>` : '') +
+      (ttps.length ? `<span class="ti-head-actions"><button type="button" class="ti-3d-btn" data-attack-path="${article.id}" title="See this attack step by step in 3D">3D attack path</button></span>` : '') +
+      `</div>` +
+      (actorNames.length ? `<div class="ti-actor-row"><span class="ti-label">Threat actor</span>${actorChips}</div>` : '') +
       (ttps.length ? `<ol class="ti-steps">${ttps.slice(0, 3).map(ttpItem).join('')}</ol>` +
         (ttps.length > 3 ? `<details class="ti-more"><summary>+${ttps.length - 3} more TTP${ttps.length - 3 === 1 ? '' : 's'}</summary><ol class="ti-steps" start="4">${ttps.slice(3).map(ttpItem).join('')}</ol></details>` : '')
         : '') +
@@ -1267,12 +1275,57 @@
           <button class="${reviewBtnCls} guest-hidden" data-review-article="${article.id}" title="Start reviewing"${reviewBtnDisabled}>${reviewBtnTxt}</button>
           <button class="btn-review-done guest-hidden" data-review-done="${article.id}" title="Mark as reviewed"${doneBtnDisabled}>Done</button>
           <button class="${escalateBtnCls} guest-hidden" data-escalate="${article.id}" title="Escalate"${escalateBtnDisabled}>${escalateBtnTxt}</button>
-          <button class="btn-ai" data-ai-summarize="${article.id}" title="AI summary + triage">AI</button>
+          ${aiAnalyzeButton(article)}
         </div>
-        ${(() => { const c = aiResultCache.get(article.id); return c && c.open
-          ? `<div class="ai-result" data-ai-result="${article.id}" data-loaded="1" style="display:block;">${c.html}</div>`
-          : `<div class="ai-result" data-ai-result="${article.id}" style="display:none;"></div>`; })()}
+        ${aiAnalysisHtml(article)}
       </article>`;
+  }
+
+  // ── AI analysis on a card: one button, one panel ──
+  // State lives in aiAnalysis (survives the 60 s auto-refresh re-render).
+  // Techniques it finds are merged into the card's ATT&CK box, not listed twice.
+  function aiAnalyzeButton(article) {
+    const st = aiAnalysis.get(article.id);
+    const label = !st ? 'AI analysis' : st.loading ? 'Analysing…' : st.open ? 'Hide AI analysis' : 'AI analysis';
+    return `<button type="button" class="btn-ai-analyze${st && st.open ? ' open' : ''}" data-ai-analyze="${article.id}"` +
+      ` aria-expanded="${st && st.open ? 'true' : 'false'}" aria-controls="ai-an-${article.id}"${st && st.loading ? ' disabled' : ''}` +
+      ` title="Summary, why it matters, priority and MITRE ATT&CK mapping">${label}</button>`;
+  }
+  function aiAnalysisHtml(article) {
+    const st = aiAnalysis.get(article.id);
+    if (!st || !st.open) return '';
+    const id = `ai-an-${article.id}`;
+    if (st.loading) {
+      return `<div class="ai-an" id="${id}" aria-busy="true"><div class="ai-an-head"><span class="ai-an-title">AI analysis</span></div>` +
+        ['Summarising the report', 'Scoring priority for a defender', 'Mapping behaviour to MITRE ATT&CK']
+          .map(t => `<div class="ai-an-loading"><span class="ai-an-spin" aria-hidden="true"></span>${t}…</div>`).join('') + `</div>`;
+    }
+    if (st.error) {
+      return `<div class="ai-an" id="${id}"><div class="ai-an-head"><span class="ai-an-title">AI analysis</span></div>` +
+        `<p class="ai-an-error">${escapeHtml(st.error)}</p><button type="button" class="ai-an-retry" data-ai-analyze-retry="${article.id}">Try again</button></div>`;
+    }
+    const d = st.data || {};
+    const tri = d.triage || null;
+    const PRI = ['immediate', 'high', 'routine', 'informational'];
+    const pri = tri && PRI.includes(tri.priority) ? tri.priority : null;
+    const rel = tri && Number.isFinite(tri.relevance) ? tri.relevance : null;
+    const sum = d.summary || null;
+    const added = Array.isArray(d.addedTtps) ? d.addedTtps : [];
+    const attackLine = !d.aiMapped ? (d.errors && d.errors.ttps ? `ATT&CK mapping failed: ${escapeHtml(d.errors.ttps)}` : '')
+      : added.length ? `Added ${added.length} technique${added.length === 1 ? '' : 's'} to the ATT&amp;CK box above: ${added.map(x => `<code>${escapeHtml(x)}</code>`).join(' ')}`
+      : (article.ttps && article.ttps.length ? 'No techniques beyond those already in the ATT&amp;CK box.' : 'The report doesn’t describe attacker techniques to map.');
+    return `<div class="ai-an" id="${id}">` +
+      `<div class="ai-an-head"><span class="ai-an-title">AI analysis</span>` +
+      (pri ? `<span class="ai-an-pri ai-an-pri-${pri}" title="Priority for a defender">${pri}</span>` : '') +
+      (rel !== null ? `<span class="ai-an-rel" title="Operational relevance"><span class="ai-an-bar"><i style="width:${rel}%"></i></span>${rel}/100</span>` : '') +
+      `</div>` +
+      (sum && sum.summary ? `<p class="ai-an-sum">${escapeHtml(sum.summary)}</p>` : (d.errors && d.errors.summary ? `<p class="ai-an-error">Summary unavailable: ${escapeHtml(d.errors.summary)}</p>` : '')) +
+      (sum && sum.keyTakeaway ? `<p class="ai-an-why"><span>Why it matters</span>${escapeHtml(sum.keyTakeaway)}</p>` : '') +
+      (tri && tri.reason ? `<p class="ai-an-why"><span>Priority reason</span>${escapeHtml(tri.reason)}</p>` : '') +
+      (sum && sum.affectedTech && sum.affectedTech.length ? `<div class="ai-an-tech"><span>Affected</span>${sum.affectedTech.slice(0, 8).map(t => `<span class="ai-an-chip">${escapeHtml(t)}</span>`).join('')}</div>` : '') +
+      (attackLine ? `<p class="ai-an-attack">${attackLine}</p>` : '') +
+      `<p class="ai-an-note">Generated by AI from this report only. Verify before acting.</p>` +
+      `</div>`;
   }
 
   // Unified source health status — same logic used by the admin panel
@@ -2251,24 +2304,6 @@
         return;
       }
 
-      // AI ATT&CK mapping for one article
-      const mapBtn = e.target.closest('[data-ai-ttps]');
-      if (mapBtn) {
-        const id = parseInt(mapBtn.dataset.aiTtps, 10);
-        const art = state.articles.find(a => a.id === id);
-        mapBtn.disabled = true; mapBtn.textContent = 'Mapping…';
-        api('POST', '/api/ai/ttps', { articleId: id }).then((r) => {
-          if (!r.success) throw new Error(r.error || 'AI mapping failed');
-          if (art) { art.ttps = r.ttps; art.aiMapped = true; art.aiActors = r.actors || []; }
-          renderArticles();
-          if (!r.aiTtps) showToast('ATT&CK mapping', 'The AI found no attacker techniques described in this report.', 'info');
-        }).catch((err) => {
-          mapBtn.disabled = false; mapBtn.textContent = 'Map with AI';
-          showToast('ATT&CK mapping', err.message || 'AI mapping failed', 'error');
-        });
-        return;
-      }
-
       // 3D attack path for one article
       const pathBtn = e.target.closest('[data-attack-path]');
       if (pathBtn) {
@@ -2278,57 +2313,29 @@
         return;
       }
 
-      // AI summary + triage button (per-article)
-      const aiBtn = e.target.closest('[data-ai-summarize]');
-      if (aiBtn) {
-        const articleId = parseInt(aiBtn.dataset.aiSummarize);
-        const resultEl = document.querySelector(`[data-ai-result="${articleId}"]`);
-        aiBtn.textContent = '...';
-        aiBtn.disabled = true;
-
-        if (resultEl && resultEl.style.display !== 'none' && resultEl.dataset.loaded) {
-          // Toggle off
-          resultEl.style.display = 'none';
-          const c = aiResultCache.get(articleId); if (c) c.open = false;
-          aiBtn.textContent = 'AI';
-          aiBtn.disabled = false;
+      // AI analysis (summary + why it matters + priority + ATT&CK) — one button per card
+      const anBtn = e.target.closest('[data-ai-analyze], [data-ai-analyze-retry]');
+      if (anBtn) {
+        const id = parseInt(anBtn.dataset.aiAnalyze || anBtn.dataset.aiAnalyzeRetry, 10);
+        const st = aiAnalysis.get(id);
+        if (st && st.data && !anBtn.dataset.aiAnalyzeRetry) {       // already loaded: just show / hide
+          st.open = !st.open;
+          renderArticles();
           return;
         }
-
-        const summaryUrl = d('L2FwaS9haS9zdW1tYXJpemU='); // /api/ai/summarize
-        const triageUrl = d('L2FwaS9haS90cmlhZ2U=');       // /api/ai/triage
-        Promise.allSettled([
-          api('POST', summaryUrl, { articleId }),
-          api('POST', triageUrl, { articleId })
-        ]).then(([sumRes, triRes]) => {
-          const sum = sumRes.status === 'fulfilled' ? sumRes.value : { success: false, error: (sumRes.reason && sumRes.reason.message) || 'Summary failed' };
-          const tri = triRes.status === 'fulfilled' ? triRes.value : { success: false, error: (triRes.reason && triRes.reason.message) || 'Triage failed' };
-          if (resultEl) {
-            // Triage fields are raw LLM output over untrusted article text
-            // (prompt injection) — whitelist the class, escape everything.
-            const PRIORITIES = ['immediate', 'high', 'routine', 'informational'];
-            const prio = String(tri.priority || '').toLowerCase();
-            const prioCls = PRIORITIES.includes(prio) ? prio : 'informational';
-            const relNum = parseFloat(tri.relevance);
-            const relevance = Number.isFinite(relNum) ? Math.round(relNum) : '?';
-            const triageBadge = tri.success && tri.priority
-              ? `<span class="ai-triage-badge ai-triage-${prioCls}">${escapeHtml(prio)} · ${relevance}/100</span>`
-              : (tri.error ? `<div class="ai-message ai-error">Triage: ${escapeHtml(tri.error)}</div>` : '');
-            const summaryText = sum.success && sum.summary
-              ? `<div class="ai-summary-box"><strong>AI Summary:</strong> ${escapeHtml(sum.summary)}${sum.keyTakeaway ? `<br><em>${escapeHtml(sum.keyTakeaway)}</em>` : ''}</div>`
-              : `<div class="ai-message ai-error">Summary: ${escapeHtml(sum.error || 'Summary failed')}</div>`;
-            resultEl.innerHTML = `${triageBadge}${summaryText}`;
-            resultEl.style.display = 'block';
-            resultEl.dataset.loaded = '1';
-            // Survives the 60 s auto-refresh re-render (HTML above is fully escaped)
-            if (sum.success) {
-              if (aiResultCache.size > 200) aiResultCache.delete(aiResultCache.keys().next().value);
-              aiResultCache.set(articleId, { html: resultEl.innerHTML, open: true });
-            }
-          }
-          aiBtn.textContent = 'AI';
-          aiBtn.disabled = false;
-        });
+        if (st && st.loading) return;
+        if (aiAnalysis.size > 200) aiAnalysis.delete(aiAnalysis.keys().next().value);
+        aiAnalysis.set(id, { open: true, loading: true });
+        renderArticles();
+        api('POST', '/api/ai/analyze', { articleId: id }).then((r) => {
+          if (!r.success) throw new Error(r.error || 'AI analysis failed');
+          const art = state.articles.find(a => a.id === id);
+          if (art) { art.ttps = r.ttps; art.aiMapped = r.aiMapped; art.aiActors = r.actors || []; }
+          aiAnalysis.set(id, { open: true, loading: false, data: r });
+        }).catch((err) => {
+          aiAnalysis.set(id, { open: true, loading: false, error: err.message || 'AI analysis failed' });
+        }).finally(() => renderArticles());
+        return;
       }
     });
 
