@@ -1513,6 +1513,7 @@ function deleteThread(threadId, userId) {
 }
 
 module.exports = {
+  getDbPath: () => DB_PATH,
   getWatchlist,
   addWatchTerm,
   removeWatchTerm,

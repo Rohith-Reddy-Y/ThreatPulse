@@ -221,10 +221,17 @@ async function initialize() {
   // 0. Validate production configuration
   validateConfig();
 
+  // 0. Restore the latest database snapshot (free hosting has no persistent disk)
+  const dbBackup = require('./src/db-backup');
+  await dbBackup.restore(db.getDbPath());
+
   // 1. Initialize database
   console.log('[Init] Initializing database...');
   db.getDb();
   console.log('[Init] Database ready ✓');
+
+  // 1b. Keep it: snapshots every few minutes (when changed) and on shutdown
+  dbBackup.schedule(db);
 
   // 2. Create default admin user + invite codes (first run only). Hashing is
   // async now, so wait for it: the admin must exist (and own the seeded
