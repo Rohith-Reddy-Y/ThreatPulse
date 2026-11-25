@@ -377,7 +377,7 @@ async function fetchMalwareBazaar(source) {
           severity: 'high',
           cve_id: null,
           is_patched: -1,
-          has_poc: 1, // The sample itself is the POC
+          has_poc: 0, // a malware sample is not a proof-of-concept exploit
           tags: `malware,${family.toLowerCase()},${(first.tags || []).join(',')}`
         });
       }

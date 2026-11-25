@@ -81,7 +81,62 @@ test('search hits that do not mention the CVE are dropped; no links means verdic
     'https://api.github.com/repos/random/scanner/readme': readme('A generic scanner'),
     'https://api.github.com/repos/random/scanner': repo({ description: 'generic' }),
   });
-  const r = await checkArticle(article());
+  const r = await checkArticle(article({ title: 'Acme VPN flaw CVE-2026-1111 patched', description: 'Update to 9.2.' }));
+  assert.equal(r.verdict, 'none');
+  assert.equal(r.links.length, 0);
+});
+
+test('article wording alone gives verdict "mentioned" with the quoted sentence', async () => {
+  reset();
+  web({
+    'https://news.example/acme': { data: '<html><nav>menu</nav><p>Researchers at Foo published a proof-of-concept exploit for the flaw on Tuesday.</p></html>' },
+    'https://api.github.com/search/repositories': { data: { items: [] } },
+  });
+  const r = await checkArticle(article({ title: 'Acme VPN flaw CVE-2026-1111', description: 'Patch now.' }));
+  assert.equal(r.verdict, 'mentioned');
+  assert.equal(r.mentionsPoc, true);
+  assert.match(r.wording[0], /published a proof-of-concept exploit/);
+});
+
+test('"no public PoC" is not counted as a PoC', async () => {
+  reset();
+  web({
+    'https://news.example/acme': { data: '<p>The vendor said it is not aware of any public exploit. There is no PoC yet.</p>' },
+    'https://api.github.com/search/repositories': { data: { items: [] } },
+  });
+  const r = await checkArticle(article({ title: 'Acme VPN flaw CVE-2026-1111', description: 'Patch now.' }));
+  assert.equal(r.verdict, 'none');
+  assert.equal(r.mentionsPoc, false);
+  assert.ok(r.notes.some((n) => /no public PoC/.test(n)));
+});
+
+test('exploit links stored from NVD references are checked', async () => {
+  reset();
+  web({
+    'https://nvd.nist.gov/vuln/detail/CVE-2026-1111': { data: 'nvd page' },
+    'https://api.github.com/search/repositories': { data: { items: [] } },
+    'https://api.github.com/repos/bob/acme-rce/contents': contents(['exploit.py']),
+    'https://api.github.com/repos/bob/acme-rce/readme': readme('Acme RCE'),
+    'https://api.github.com/repos/bob/acme-rce': repo({ description: 'Acme RCE' }),
+  });
+  const r = await checkArticle(article({ url: 'https://nvd.nist.gov/vuln/detail/CVE-2026-1111', title: 'CVE-2026-1111', description: 'RCE in Acme VPN.',
+    poc_refs: JSON.stringify(['https://github.com/bob/acme-rce', 'https://seclists.org/fulldisclosure/2026/Nov/1']) }));
+  assert.equal(r.verdict, 'verified');
+  const gh = r.links.find((l) => l.kind === 'github');
+  assert.equal(gh.source, 'nvd-reference');
+  assert.ok(r.links.some((l) => l.kind === 'reference' && /seclists/.test(l.url)));
+});
+
+test('an unrelated GitHub link in a blog footer is not a PoC', async () => {
+  reset();
+  web({
+    'https://news.example/acme': { data: `<p>Acme fixed a bug.</p>${'x'.repeat(3000)}<footer><a href="https://github.com/newsco/site">GitHub</a></footer>` },
+    'https://api.github.com/repos/newsco/site/contents': contents(['index.js']),
+    'https://api.github.com/repos/newsco/site/readme': readme('Our website'),
+    'https://api.github.com/repos/newsco/site': repo({ description: 'Website source' }),
+    'https://api.github.com/search/repositories': { data: { items: [] } },
+  });
+  const r = await checkArticle(article({ title: 'Acme update', description: 'Bug fixes.', cve_id: null }));
   assert.equal(r.verdict, 'none');
   assert.equal(r.links.length, 0);
 });

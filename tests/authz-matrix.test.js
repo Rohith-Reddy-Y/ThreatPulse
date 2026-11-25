@@ -337,6 +337,7 @@ const ROUTES = {
   'GET /api/admin/source-catalog': { policy: 'admin', allow: [200] },
   'GET /api/admin/poc-tracker': { policy: 'admin', allow: [200] },
   'POST /api/admin/poc-check': { policy: 'admin', allow: [400] }, // empty body -> validation
+  'POST /api/admin/poc-decision': { policy: 'admin', allow: [400] }, // empty body -> validation
   'POST /api/admin/email-test': { policy: 'admin', allow: [200, 400, 429, 502] },
   'GET /api/admin/ai-settings': { policy: 'admin', allow: [200] },
   'PUT /api/admin/ai-settings': { policy: 'admin', allow: [200] },

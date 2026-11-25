@@ -12,6 +12,8 @@ const crypto = require('crypto');
 const geo = require('../geo');
 const attackKb = require('../attack-kb');
 const aiCache = require('../ai/cache');
+const ai = require('../ai/client');
+const aiPrompts = require('../ai/prompts');
 const landscape = require('../landscape');
 const storyCluster = require('../story-cluster');
 const vulnIntel = require('../vuln-intel');
@@ -1341,6 +1343,7 @@ router.delete('/watchlist/:id', auth.requireAuth, denyGuest, (req, res) => {
 
 // ── PoC tracker (admin): articles with a PoC, the PoC links, and whether they're real ──
 const pocCheck = require('../poc-check');
+const jira = require('../jira');
 const pocInflight = new Set();
 const pocRate = new Map(); // adminId -> { count, resetAt }
 function pocSummary(articleId) {
@@ -1348,31 +1351,117 @@ function pocSummary(articleId) {
   if (!raw) return null;
   try { const d = JSON.parse(raw); return d && typeof d.summary === 'string' ? d.summary.slice(0, 600) : null; } catch { return null; }
 }
+// Same story for every user's copy: canonical URL
+function pocStoryKey(a) {
+  return String(a.url || '').toLowerCase().replace(/^https?:\/\/(www\.)?/, '').replace(/[?#].*$/, '').replace(/\/$/, '').slice(0, 500) || `id:${a.id}`;
+}
+const isCveFeed = (a) => /^(NVD|CISA Known Exploited)/i.test(a.source_name || '');
+function pocTrackerItem(a) {
+  let poc = null;
+  if (a.poc_result) { try { poc = JSON.parse(a.poc_result); } catch { poc = null; } }
+  let ttps = attackKb.analyzeTtps(a);
+  const rawTtps = aiCache.get('ttps', String(a.id));
+  if (rawTtps) { try { ttps = attackKb.mergeTtps(ttps, JSON.parse(rawTtps).ttps); } catch { /* ignore */ } }
+  let pocRefs = [];
+  try { pocRefs = JSON.parse(a.poc_refs || '[]'); } catch { pocRefs = []; }
+  pocRefs = Array.isArray(pocRefs) ? pocRefs.filter((u) => typeof u === 'string' && /^https?:\/\//i.test(u)).slice(0, 6) : [];
+  // PoC wording in the feed text, available before any check is run
+  const wording = poc && Array.isArray(poc.wording) ? poc.wording : pocCheck.findPocWording(`${a.title || ''}. ${a.description || ''}`, 2).quotes;
+  const { poc_result, poc_verdict, poc_refs, ...article } = a;
+  return { ...article, kind: isCveFeed(a) ? 'cve' : 'article', ttps, poc, pocRefs, wording, aiSummary: pocSummary(a.id) };
+}
 router.get('/admin/poc-tracker', auth.requireAuth, auth.requireAdmin, (req, res) => {
   try {
     const days = [7, 30, 90].includes(parseInt(req.query.days, 10)) ? parseInt(req.query.days, 10) : 30;
     const since = new Date(Date.now() - days * 86400000).toISOString();
-    const rows = db.getPocTrackerArticles(since, 400);
+    const rows = db.getPocTrackerArticles(since, 500);
     // The admin sees every user's copy of the same story: show each story once
     const seen = new Set();
-    const items = [];
+    const articles = [];
+    const cveFeed = [];
     for (const a of rows) {
-      const key = String(a.url || '').toLowerCase().replace(/^https?:\/\/(www\.)?/, '').replace(/[?#].*$/, '').replace(/\/$/, '') || `id:${a.id}`;
+      const key = pocStoryKey(a);
       if (seen.has(key)) continue;
       seen.add(key);
-      let poc = null;
-      if (a.poc_result) { try { poc = JSON.parse(a.poc_result); } catch { poc = null; } }
-      let ttps = attackKb.analyzeTtps(a);
-      const rawTtps = aiCache.get('ttps', String(a.id));
-      if (rawTtps) { try { ttps = attackKb.mergeTtps(ttps, JSON.parse(rawTtps).ttps); } catch { /* ignore */ } }
-      const { poc_result, poc_verdict, ...article } = a;
-      items.push({ ...article, ttps, poc, aiSummary: pocSummary(a.id) });
-      if (items.length >= 100) break;
+      (isCveFeed(a) ? cveFeed : articles).push({ a, key });
     }
-    res.json({ days, items: vulnIntel.attach(items), githubToken: !!process.env.GITHUB_TOKEN });
+    // CVE feeds (NVD/KEV) are numerous: they must not push articles and blogs out of the list
+    const picked = articles.slice(0, 90);
+    picked.push(...cveFeed.slice(0, Math.max(30, 130 - picked.length)));
+    picked.sort((x, y) => String(y.a.published_date || '').localeCompare(String(x.a.published_date || '')));
+    const decisions = db.getPocDecisions(picked.map((p) => p.key));
+    const items = picked.map(({ a, key }) => {
+      const d = decisions.get(key);
+      return { ...pocTrackerItem(a), decision: d ? { status: d.status, at: d.decided_at, jiraKey: d.jira_key, jiraUrl: d.jira_url } : null };
+    });
+    res.json({ days, items: vulnIntel.attach(items), githubToken: !!process.env.GITHUB_TOKEN, jira: jira.status() });
   } catch (error) {
     console.error('[API] PoC tracker error:', error.message);
     res.status(500).json({ error: 'Failed to load the PoC tracker' });
+  }
+});
+
+// Approve (→ Jira backlog issue) / decline / undo-decline a PoC tracker item
+const pocDecisionInflight = new Set();
+async function pocHypothesis(item) {
+  try {
+    if (!ai.isEnabled()) return null;
+    const r = await Promise.race([
+      ai.generate(aiPrompts.hypothesisPrompt(item, item.ttps || []), null, { temperature: 0.3 }),
+      new Promise((resolve) => setTimeout(() => resolve({ ok: false }), 25000)),
+    ]);
+    if (!r || !r.ok) return null;
+    const data = ai.parseJson(r.text);
+    const h = data && typeof data.hypothesis === 'string' ? data.hypothesis.replace(/\s+/g, ' ').trim() : '';
+    return h.length >= 40 ? h.slice(0, 1500) : null;
+  } catch {
+    return null;
+  }
+}
+router.post('/admin/poc-decision', auth.requireAuth, auth.requireAdmin, async (req, res) => {
+  const articleId = parseInt((req.body || {}).articleId, 10);
+  const action = String((req.body || {}).action || '');
+  if (!Number.isInteger(articleId) || articleId <= 0) return res.status(400).json({ error: 'articleId required' });
+  if (!['approve', 'decline', 'undo'].includes(action)) return res.status(400).json({ error: 'action must be approve, decline or undo' });
+  const article = db.getArticleById(articleId);
+  if (!article) return res.status(404).json({ error: 'Article not found' });
+  const key = pocStoryKey(article);
+  const current = db.getPocDecision(key);
+  const shape = (d) => (d ? { status: d.status, at: d.decided_at, jiraKey: d.jira_key, jiraUrl: d.jira_url } : null);
+
+  if (action === 'undo') {
+    db.clearPocDecision(key);
+    db.logAudit(req.user.id, 'poc_decision', `Article ${articleId}: undo decline`, req.ip);
+    return res.json({ success: true, decision: shape(db.getPocDecision(key)) });
+  }
+  if (current && current.status === 'approved' && current.jira_key) {
+    if (action === 'decline') return res.status(409).json({ error: `Already approved and sent to Jira as ${current.jira_key}` });
+    return res.json({ success: true, decision: shape(current), existing: true });
+  }
+  if (action === 'decline') {
+    const d = db.setPocDecision(key, { articleId, status: 'declined', userId: req.user.id });
+    db.logAudit(req.user.id, 'poc_decision', `Article ${articleId}: declined`, req.ip);
+    return res.json({ success: true, decision: shape(d) });
+  }
+
+  // approve → one Jira backlog issue per story
+  if (!jira.status().configured) return res.status(503).json({ error: jira.status().missing.length ? `Jira is not connected. Set ${jira.status().missing.join(', ')} in Render → Environment.` : 'Jira is not connected' });
+  if (pocDecisionInflight.has(key)) return res.status(409).json({ error: 'This item is already being sent to Jira' });
+  pocDecisionInflight.add(key);
+  try {
+    const row = db.getPocTrackerArticle(articleId) || article;
+    const [item] = vulnIntel.attach([pocTrackerItem(row)]);
+    const hypothesis = await pocHypothesis(item);
+    const r = await jira.createPocIssue(item, { hypothesis, storyKey: key, approvedBy: req.user.display_name || req.user.username });
+    if (!r.ok) return res.status(r.notConfigured ? 503 : 502).json({ error: r.error });
+    const d = db.setPocDecision(key, { articleId, status: 'approved', userId: req.user.id, jiraKey: r.key, jiraUrl: r.url });
+    db.logAudit(req.user.id, 'poc_decision', `Article ${articleId}: approved → Jira ${r.key}`, req.ip);
+    res.json({ success: true, decision: shape(d), existing: !!r.existing, aiHypothesis: !!hypothesis });
+  } catch (error) {
+    console.error('[API] PoC approve error:', error.message);
+    res.status(500).json({ error: 'Could not send this item to Jira' });
+  } finally {
+    pocDecisionInflight.delete(key);
   }
 });
 router.post('/admin/poc-check', auth.requireAuth, auth.requireAdmin, async (req, res) => {

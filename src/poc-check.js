@@ -29,7 +29,53 @@ const BINARY_EXT = /\.(exe|dll|scr|msi|com|pif|zip|rar|7z|tar|gz|tgz|bz2|xz|iso|
 const FILE_HOST_RE = /\b(mega\.nz|mega\.co\.nz|mediafire\.com|anonfiles|gofile\.io|dropbox\.com\/s|drive\.google\.com|1drv\.ms|sendspace|transfer\.sh|pixeldrain|file\.io|catbox\.moe|t\.me\/)/i;
 const PASSWORD_LURE_RE = /\b(password|pass|pwd)\s*[:=]\s*\S+|\bdownload (the )?(exploit|poc|tool)\b.*\b(here|link|release)\b/i;
 
-const MAX_CANDIDATES = 5;
+const MAX_CANDIDATES = 6;
+
+// ── PoC wording in the article / blog text ──
+// "no public PoC", "not aware of any exploit" etc. are removed before matching.
+const NEGATED_RE = /\b(no|not aware of any|no known|nor any|not yet|without (a |any )?|lack of|absence of|there is no|there are no)\s+(publicly[- ]available |public(ly)? |known |working |functional |released )*(proof[- ]of[- ]concept|PoCs?|exploits?( code)?)\b/gi;
+const POC_WORD_RE = /\bproof[- ]of[- ]concepts?\b|\bPoCs?\b|\bexploit[- ]code\b|\b(public(ly[- ]available)?|working|functional|released|published) exploits?\b|\bexploits? (is |are |has been |have been |was |were )?(now )?(publicly )?(available|released|published|public|on github)\b|\bweaponi[sz]ed\b|\bexploit-db\b|\bmetasploit module\b|\bnuclei template\b/i;
+const LINK_HINT_RE = /proof[- ]of[- ]concept|\bpoc\b|exploit|\bcve-\d{4}/i;
+
+function htmlToText(html) {
+  return String(html || '').slice(0, 2_000_000)
+    .replace(/<(script|style|noscript|svg|nav|footer|header)\b[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<br\s*\/?>|<\/(p|div|li|h\d|tr|blockquote|pre)>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#0?39;|&rsquo;|&lsquo;/g, "'")
+    .replace(/[ \t\r\f\v]+/g, ' ');
+}
+
+/** Sentences that say a PoC / exploit exists. Returns { quotes: [...], denied: [...] } */
+function findPocWording(text, max = 3) {
+  const quotes = [];
+  const denied = [];
+  const seen = new Set();
+  const sentences = String(text || '').split(/(?<=[.!?])\s+|\n+/);
+  for (const raw of sentences) {
+    const s = raw.replace(/\s+/g, ' ').trim();
+    if (s.length < 12 || s.length > 1200) continue;
+    const stripped = s.replace(NEGATED_RE, ' ');
+    const m = POC_WORD_RE.exec(stripped);
+    const negated = stripped !== s;
+    let quote = null;
+    if (m) {
+      // Keep at most ~240 chars around the match
+      if (s.length <= 240) quote = s;
+      else {
+        const at = Math.max(0, s.toLowerCase().indexOf(m[0].toLowerCase()));
+        const start = Math.max(0, at - 110);
+        quote = (start > 0 ? '…' : '') + s.slice(start, start + 230).trim() + (start + 230 < s.length ? '…' : '');
+      }
+      const k = quote.toLowerCase();
+      if (!seen.has(k) && quotes.length < max) { seen.add(k); quotes.push(quote); }
+    } else if (negated && denied.length < 2) {
+      denied.push(s.length <= 240 ? s : s.slice(0, 230) + '…');
+    }
+  }
+  return { quotes, denied };
+}
 
 function ghHeaders() {
   const h = { Accept: 'application/vnd.github+json', 'User-Agent': 'ThreatPulse-PoC-Checker', 'X-GitHub-Api-Version': '2022-11-28' };
@@ -45,12 +91,13 @@ function cvesOf(article) {
 
 function extractLinks(html) {
   const out = [];
+  const near = (idx) => LINK_HINT_RE.test(htmlToText(text.slice(Math.max(0, idx - 700), idx + 300)));
   const seen = new Set();
   const add = (kind, url, key, extra = {}) => {
     const k = `${kind}:${key.toLowerCase()}`;
     if (seen.has(k)) return;
     seen.add(k);
-    out.push({ kind, url, key, ...extra });
+    out.push({ kind, url, key, near: near(m.index), ...extra });
   };
   const text = String(html || '').slice(0, 2_000_000);
   const urlRe = /https?:\/\/[^\s"'<>()\\]+/gi;
@@ -149,11 +196,15 @@ async function validateGithub(c, cves, ctx) {
     res.status = 'suspicious';
     res.reasons.unshift('Possible fake PoC / malware lure: do not run');
   } else if (source.length || dirs) {
-    if (matched.length || c.source === 'article') {
+    const exploity = LINK_HINT_RE.test(`${c.repo} ${d.description || ''} ${c.deep || ''}`) || LINK_HINT_RE.test(readme.slice(0, 4000));
+    if (matched.length || c.source === 'nvd-reference' || (c.source === 'article' && (c.near || exploity))) {
       res.status = 'verified';
       res.reasons.unshift(source.length ? `Source code present (${source.slice(0, 3).join(', ')}${source.length > 3 ? '…' : ''})` : 'Code folders present');
       if (matched.length) res.reasons.push(`Mentions ${matched.join(', ')}`);
       if (c.source === 'article') res.reasons.push('Linked from the article');
+      if (c.source === 'nvd-reference') res.reasons.push('Listed as an exploit reference in NVD');
+    } else if (c.source === 'article') {
+      res.reasons.unshift('Linked from the article, but nothing ties it to an exploit');
     } else {
       res.reasons.unshift('Has code, but no mention of this article\'s CVE');
     }
@@ -174,7 +225,7 @@ async function validateGist(c, cves, ctx) {
   const code = files.filter((n) => CODE_EXT.test(n));
   const hay = `${g.data.description || ''} ${files.join(' ')}`.toUpperCase();
   res.cveMatch = cves.filter((cv) => hay.includes(cv));
-  if (code.length && (res.cveMatch.length || c.source === 'article')) {
+  if (code.length && (res.cveMatch.length || c.source === 'nvd-reference' || (c.source === 'article' && c.near))) {
     res.status = 'verified';
     res.reasons.push(`Code present (${code.slice(0, 3).join(', ')})`);
   } else res.reasons.push(code.length ? 'Has code, but no mention of this article\'s CVE' : 'No code files');
@@ -217,6 +268,21 @@ async function checkArticle(article) {
   const cves = cvesOf(article);
   const notes = [];
   let candidates = extractLinks(`${article.title || ''} ${article.description || ''}`).map((c) => ({ ...c, source: 'article' }));
+  let wordingText = `${article.title || ''}. ${article.description || ''}`;
+
+  // Exploit links the source itself listed (NVD references tagged "Exploit")
+  let refs = [];
+  try { refs = JSON.parse(article.poc_refs || '[]'); } catch { refs = []; }
+  if (Array.isArray(refs) && refs.length) {
+    const urls = refs.filter((u) => typeof u === 'string' && /^https?:\/\//i.test(u)).slice(0, 10);
+    const parsed = extractLinks(urls.join(' '));
+    for (const c of parsed) candidates.push({ ...c, source: 'nvd-reference' });
+    for (const u of urls) {
+      if (!parsed.some((c) => u.toLowerCase().includes(String(c.key).split('#')[0].toLowerCase()))) {
+        candidates.push({ kind: 'reference', url: u, key: u, source: 'nvd-reference' });
+      }
+    }
+  }
 
   // Links on the article page itself
   if (/^https?:\/\//i.test(article.url || '')) {
@@ -225,6 +291,7 @@ async function checkArticle(article) {
         maxContentLength: 3 * 1024 * 1024, headers: { 'User-Agent': 'Mozilla/5.0 (ThreatPulse PoC checker)' } });
       if (page.status >= 200 && page.status < 300) {
         const host = (() => { try { return new URL(article.url).hostname.replace(/^www\./, ''); } catch { return ''; } })();
+        wordingText += '\n' + htmlToText(page.data).slice(0, 300000);
         for (const c of extractLinks(page.data)) {
           if (host === 'github.com' && article.url.toLowerCase().includes(c.key.toLowerCase())) continue;
           candidates.push({ ...c, source: 'article' });
@@ -241,13 +308,14 @@ async function checkArticle(article) {
   } else notes.push('No CVE ID in the article, so GitHub was not searched');
 
   // De-duplicate (article links win over search hits), cap the work
+  const srcRank = (c) => (c.source === 'article' ? (c.near ? 0 : 2) : c.source === 'nvd-reference' ? 1 : 3);
   const byKey = new Map();
   for (const c of candidates) {
     const k = `${c.kind}:${String(c.key).toLowerCase().split('#')[0]}`;
     if (!byKey.has(k)) byKey.set(k, c);
   }
   const picked = [...byKey.values()]
-    .sort((a, b) => (a.source === 'article' ? 0 : 1) - (b.source === 'article' ? 0 : 1))
+    .sort((a, b) => srcRank(a) - srcRank(b))
     .slice(0, MAX_CANDIDATES);
 
   const links = [];
@@ -257,17 +325,22 @@ async function checkArticle(article) {
     else if (c.kind === 'gist') links.push(await validateGist(c, cves, ctx));
     else if (c.kind === 'exploitdb') links.push(await validatePage(c, 'Exploit-DB'));
     else if (c.kind === 'packetstorm') links.push(await validatePage(c, 'Packet Storm'));
+    else if (c.kind === 'reference') links.push({ ...c, status: 'unverified', reasons: ['Tagged as an exploit reference in NVD; open it to review'] });
     else links.push({ ...c, status: 'unverified', reasons: ['Link found; not validated automatically'] });
   }
 
   // Search hits that turned out irrelevant are noise: keep only useful ones
-  const shown = links.filter((l) => l.source === 'article' || l.status === 'verified' || l.status === 'suspicious');
+  const shown = links.filter((l) => l.status === 'verified' || l.status === 'suspicious'
+    || ((l.status === 'unverified' || l.status === 'dead') && (l.source === 'nvd-reference' || (l.source === 'article' && l.near))));
+  const wording = findPocWording(wordingText);
   const rank = { verified: 0, suspicious: 1, unverified: 2, dead: 3 };
   shown.sort((a, b) => (rank[a.status] - rank[b.status]) || ((b.stars || 0) - (a.stars || 0)));
 
   const verdict = shown.some((l) => l.status === 'verified') ? 'verified'
     : shown.some((l) => l.status === 'suspicious') ? 'suspicious'
-      : shown.some((l) => l.status === 'unverified') ? 'unverified' : 'none';
+      : wording.quotes.length || shown.some((l) => l.source === 'nvd-reference') ? 'mentioned'
+        : shown.some((l) => l.status === 'unverified') ? 'unverified' : 'none';
+  if (!wording.quotes.length && wording.denied.length) notes.push('The article says there is no public PoC');
   if (ctx.rateLimited) notes.push(process.env.GITHUB_TOKEN ? 'GitHub rate limit reached; re-check later' : 'GitHub rate limit reached (60/hour without a token). Add GITHUB_TOKEN in Render for 5,000/hour');
 
   return {
@@ -278,11 +351,13 @@ async function checkArticle(article) {
       cveMatch: l.cveMatch || [], files: (l.files || []).slice(0, 8),
     })),
     cves,
-    mentionsPoc: !!article.has_poc,
+    mentionsPoc: wording.quotes.length > 0,
+    wording: wording.quotes,
+    denied: wording.quotes.length ? [] : wording.denied,
     notes,
     rateLimited: ctx.rateLimited,
     checkedAt: new Date().toISOString(),
   };
 }
 
-module.exports = { checkArticle, extractLinks, cvesOf };
+module.exports = { checkArticle, extractLinks, cvesOf, findPocWording, htmlToText };

@@ -1409,15 +1409,17 @@
   // ── Admin: PoC tracker (sidebar) ──
   // Articles that have (or claim) a proof of concept, with the PoC link(s) the
   // checker found and whether each is real: verified / suspicious / unverified.
-  const pocState = { items: [], days: 30, filter: 'all', loading: false, error: '', token: false, busy: new Set(), seq: 0 };
+  const pocState = { items: [], days: 30, filter: 'all', review: 'todo', kind: 'all', loading: false, error: '', token: false, jira: null, busy: new Set(), deciding: new Set(), seq: 0 };
   const POC_VERDICT = {
     verified: ['Verified PoC', 'Real exploit code found'],
     suspicious: ['Suspicious PoC', 'Looks like a fake PoC / malware lure: do not run'],
+    mentioned: ['PoC mentioned', 'The article says a PoC exists; no working exploit link confirmed yet'],
     unverified: ['Unverified', 'Links found but code could not be confirmed'],
-    none: ['No PoC found', 'The article mentions a PoC but no exploit link was found'],
+    none: ['No PoC found', 'No PoC wording and no exploit link found'],
     unchecked: ['Not checked', 'Run the PoC check'],
   };
   const pocVerdictOf = (it) => (it.poc && it.poc.verdict) || 'unchecked';
+  const pocReviewOf = (it) => (it.decision && it.decision.status) || 'todo';
   function isAdminUser() { return !!(currentUser && currentUser.role === 'admin'); }
 
   async function loadPocTracker() {
@@ -1433,6 +1435,7 @@
       if (seq !== pocState.seq) return;
       pocState.items = Array.isArray(r.items) ? r.items : [];
       pocState.token = !!r.githubToken;
+      pocState.jira = r.jira || null;
     } catch (err) {
       if (seq !== pocState.seq) return;
       pocState.error = err.message || 'Could not load the PoC tracker';
@@ -1442,12 +1445,13 @@
   }
 
   function pocLinkHtml(l) {
-    const kind = { github: 'GitHub', gist: 'Gist', exploitdb: 'Exploit-DB', packetstorm: 'Packet Storm', gitlab: 'GitLab' }[l.kind] || 'Link';
+    const kind = { github: 'GitHub', gist: 'Gist', exploitdb: 'Exploit-DB', packetstorm: 'Packet Storm', gitlab: 'GitLab', reference: 'Reference' }[l.kind] || 'Link';
     let label = l.url;
     try { const u = new URL(l.url); label = (u.hostname.replace(/^www\./, '') + u.pathname).replace(/\/$/, ''); label = label.replace(/^github\.com\//, ''); } catch { /* keep */ }
     const meta = [kind];
     if (l.stars !== null && l.stars !== undefined) meta.push(`★ ${l.stars}`);
     if (l.source === 'cve-search') meta.push(`found by ${escapeHtml(l.via || 'CVE')} search`);
+    else if (l.source === 'nvd-reference') meta.push('NVD exploit reference');
     else meta.push('linked in article');
     return `<li class="poc-link poc-${escapeHtml(l.status)}">` +
       `<span class="poc-dot" aria-hidden="true"></span>` +
@@ -1466,7 +1470,17 @@
     const sumRaw = it.aiSummary || String(it.description || '').replace(/\s+/g, ' ').trim();
     const sum = sumRaw && sumRaw.toLowerCase() !== String(it.title || '').toLowerCase() ? sumRaw.slice(0, 260) + (sumRaw.length > 260 ? '…' : '') : '';
     const busy = pocState.busy.has(it.id);
-    const links = it.poc && Array.isArray(it.poc.links) ? it.poc.links : [];
+    const links = it.poc && Array.isArray(it.poc.links) ? it.poc.links
+      : (it.pocRefs || []).map((u) => ({ url: u, kind: /github\.com/i.test(u) ? 'github' : /exploit-db/i.test(u) ? 'exploitdb' : 'reference', source: 'nvd-reference', status: 'unverified', reasons: ['Not checked yet'] }));
+    const wording = (it.poc && Array.isArray(it.poc.wording) ? it.poc.wording : it.wording) || [];
+    const deciding = pocState.deciding.has(it.id);
+    const d = it.decision;
+    const review = d && d.status === 'approved'
+      ? `<div class="poc-decision poc-approved">Approved${d.jiraKey ? ` · in Jira backlog: <a href="${escapeHtml(safeUrl(d.jiraUrl || ''))}" target="_blank" rel="noopener">${escapeHtml(d.jiraKey)}</a>` : ''}</div>`
+      : d && d.status === 'declined'
+        ? `<div class="poc-decision poc-declined">Declined <button type="button" class="poc-undo" data-poc-decide="undo" data-id="${it.id}"${deciding ? ' disabled' : ''}>Undo</button></div>`
+        : `<div class="poc-decide"><button type="button" class="poc-approve" data-poc-decide="approve" data-id="${it.id}"${deciding ? ' disabled' : ''} title="Create a Jira backlog item: ideation, references, hypothesis, summary, outcome">${deciding ? 'Sending to Jira…' : 'Approve → Jira'}</button>` +
+          `<button type="button" class="poc-decline" data-poc-decide="decline" data-id="${it.id}"${deciding ? ' disabled' : ''}>Decline</button></div>`;
     return `<li class="poc-item poc-v-${v}" data-poc-id="${it.id}">` +
       `<div class="poc-labels">${categoryBadge(it)}${severityBadge(it)}${patchLabel(it)}` +
       `<span class="poc-verdict poc-verdict-${v}" title="${escapeHtml(vTip)}">${escapeHtml(vLabel)}</span></div>` +
@@ -1479,6 +1493,7 @@
         links.map(pocLinkHtml).join('') +
         (!it.poc ? `<li class="poc-hint">PoC link not checked yet</li>` : (!links.length ? `<li class="poc-hint">No exploit link found${it.poc.cves && it.poc.cves.length ? '' : ' (no CVE ID to search)'}</li>` : '')) +
       `</ul>` +
+      (wording.length ? `<div class="poc-sub">The article says</div>` + wording.slice(0, 2).map((q) => `<blockquote class="poc-quote">${escapeHtml(q)}</blockquote>`).join('') : '') +
       (sum ? `<div class="poc-sub">${it.aiSummary ? 'AI summary' : 'Summary'}</div><p class="poc-sum">${escapeHtml(sum)}</p>` : '') +
       (ttps.length ? `<div class="poc-sub">Attack technique${ttps.length > 1 ? 's' : ''}</div><div class="poc-ttps">` +
         ttps.slice(0, 4).map(t => `<a class="poc-ttp" href="${escapeHtml(mitreLink(t.subId || t.id))}" target="_blank" rel="noopener" title="${escapeHtml(t.tacticName || '')}"><code>${escapeHtml(t.subId || t.id)}</code>${escapeHtml(t.name)}</a>`).join('') +
@@ -1488,26 +1503,57 @@
       `<div class="poc-actions"><button type="button" class="poc-check-btn" data-poc-check="${it.id}"${busy ? ' disabled' : ''}>` +
         `${busy ? 'Checking…' : it.poc ? 'Re-check PoC' : 'Check PoC'}</button>` +
         (it.poc && it.poc.checkedAt ? `<span class="poc-checked">checked ${relativeTime(it.poc.checkedAt)}</span>` : '') + `</div>` +
+      review +
       `</li>`;
   }
 
   function renderPocTracker() {
     const list = $('#poc-tracker-list');
     if (!list) return;
-    const counts = { all: pocState.items.length, verified: 0, suspicious: 0, unchecked: 0 };
-    for (const it of pocState.items) { const v = pocVerdictOf(it); if (counts[v] !== undefined) counts[v]++; }
+    const byKind = pocState.items.filter((it) => pocState.kind === 'all' || (it.kind || 'article') === pocState.kind);
+    const rCounts = { todo: 0, approved: 0, declined: 0 };
+    for (const it of byKind) rCounts[pocReviewOf(it)]++;
+    const inReview = byKind.filter((it) => pocReviewOf(it) === pocState.review);
+    const counts = { all: inReview.length, verified: 0, mentioned: 0, suspicious: 0, unchecked: 0 };
+    for (const it of inReview) { const v = pocVerdictOf(it); if (counts[v] !== undefined) counts[v]++; }
     $$('#poc-tracker-card [data-poc-filter]').forEach((b) => {
       const f = b.dataset.pocFilter;
       b.setAttribute('aria-pressed', String(f === pocState.filter));
       const n = b.querySelector('.poc-n'); if (n) n.textContent = counts[f] ?? '';
     });
-    const countEl = $('#poc-tracker-count'); if (countEl) countEl.textContent = pocState.items.length ? String(pocState.items.length) : '';
+    $$('#poc-tracker-card [data-poc-review]').forEach((b) => {
+      const f = b.dataset.pocReview;
+      b.setAttribute('aria-pressed', String(f === pocState.review));
+      const n = b.querySelector('.poc-n'); if (n) n.textContent = rCounts[f] ?? '';
+    });
+    const countEl = $('#poc-tracker-count'); if (countEl) countEl.textContent = rCounts.todo ? String(rCounts.todo) : '';
     const tokenNote = $('#poc-token-note'); if (tokenNote) tokenNote.classList.toggle('hidden', pocState.token || !pocState.items.length);
+    const jiraNote = $('#poc-jira-note'); if (jiraNote) jiraNote.classList.toggle('hidden', !pocState.jira || !!pocState.jira.configured);
     if (pocState.loading && !pocState.items.length) { list.innerHTML = '<li class="poc-empty">Loading…</li>'; return; }
     if (pocState.error) { list.innerHTML = `<li class="poc-empty poc-err">${escapeHtml(pocState.error)}</li>`; return; }
-    const shown = pocState.items.filter((it) => pocState.filter === 'all' || pocVerdictOf(it) === pocState.filter);
+    const shown = inReview.filter((it) => pocState.filter === 'all' || pocVerdictOf(it) === pocState.filter);
     list.innerHTML = shown.length ? shown.map(pocItemHtml).join('')
       : `<li class="poc-empty">${pocState.items.length ? 'Nothing in this filter.' : `No PoC articles in the last ${pocState.days} days.`}</li>`;
+  }
+
+  async function decidePoc(id, action) {
+    if (pocState.deciding.has(id)) return;
+    pocState.deciding.add(id);
+    renderPocTracker();
+    try {
+      const r = await api('POST', '/api/admin/poc-decision', { articleId: id, action });
+      if (!r.success) throw new Error(r.error || 'Could not save the decision');
+      const it = pocState.items.find((x) => x.id === id);
+      if (it) it.decision = r.decision;
+      if (action === 'approve' && r.decision && r.decision.jiraKey) {
+        showToast('Sent to Jira', `${r.decision.jiraKey} ${r.existing ? 'already exists' : 'is in the backlog'}${r.aiHypothesis === false && !r.existing ? ' (template hypothesis: AI unavailable)' : ''}`, 'success');
+      }
+    } catch (err) {
+      showToast(action === 'approve' ? 'Jira' : 'PoC tracker', err.message || 'Something went wrong', 'error');
+    } finally {
+      pocState.deciding.delete(id);
+      renderPocTracker();
+    }
   }
 
   async function runPocCheck(id) {
@@ -2580,9 +2626,13 @@
       if (pocBtn) { runPocCheck(parseInt(pocBtn.dataset.pocCheck, 10)); return; }
       const pocFilter = e.target.closest('[data-poc-filter]');
       if (pocFilter) { pocState.filter = pocFilter.dataset.pocFilter; renderPocTracker(); return; }
+      const pocReview = e.target.closest('[data-poc-review]');
+      if (pocReview) { pocState.review = pocReview.dataset.pocReview; renderPocTracker(); return; }
+      const pocDecide = e.target.closest('[data-poc-decide]');
+      if (pocDecide) { decidePoc(parseInt(pocDecide.dataset.id, 10), pocDecide.dataset.pocDecide); return; }
       const pocNext = e.target.closest('#poc-check-next');
       if (pocNext) {
-        const todo = pocState.items.filter((it) => !it.poc).slice(0, 5);
+        const todo = pocState.items.filter((it) => !it.poc && pocReviewOf(it) === 'todo' && (pocState.kind === 'all' || (it.kind || 'article') === pocState.kind)).slice(0, 5);
         if (!todo.length) { showToast('PoC check', 'Everything here has been checked.', 'info'); return; }
         pocNext.disabled = true;
         (async () => { for (const it of todo) await runPocCheck(it.id); pocNext.disabled = false; })();
@@ -2638,6 +2688,7 @@
 
     // Admin PoC tracker: time range + periodic refresh (picks up background checks)
     $('#poc-days')?.addEventListener('change', (e) => { pocState.days = parseInt(e.target.value, 10) || 30; loadPocTracker(); });
+    $('#poc-kind')?.addEventListener('change', (e) => { pocState.kind = ['article', 'cve'].includes(e.target.value) ? e.target.value : 'all'; renderPocTracker(); });
     setInterval(() => { if (isAdminUser() && !document.hidden && !pocState.busy.size) loadPocTracker(); }, 180000);
 
     // Stat cards clickable — filter feed on click

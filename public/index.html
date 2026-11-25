@@ -576,13 +576,24 @@
           PoC tracker <span class="poc-count" id="poc-tracker-count"></span><span class="poc-admin-tag">Admin</span>
         </h3>
         <div class="poc-controls">
+          <div class="poc-filters poc-review" role="group" aria-label="Filter by review decision">
+            <button type="button" data-poc-review="todo" aria-pressed="true">To review <span class="poc-n"></span></button>
+            <button type="button" data-poc-review="approved" aria-pressed="false">Approved <span class="poc-n"></span></button>
+            <button type="button" data-poc-review="declined" aria-pressed="false">Declined <span class="poc-n"></span></button>
+          </div>
           <div class="poc-filters" role="group" aria-label="Filter by PoC status">
             <button type="button" data-poc-filter="all" aria-pressed="true">All <span class="poc-n"></span></button>
             <button type="button" data-poc-filter="verified" aria-pressed="false">Verified <span class="poc-n"></span></button>
+            <button type="button" data-poc-filter="mentioned" aria-pressed="false" title="The article says a PoC exists; no working link confirmed yet">Mentioned <span class="poc-n"></span></button>
             <button type="button" data-poc-filter="suspicious" aria-pressed="false">Suspicious <span class="poc-n"></span></button>
             <button type="button" data-poc-filter="unchecked" aria-pressed="false">Not checked <span class="poc-n"></span></button>
           </div>
           <div class="poc-controls-row">
+            <select id="poc-kind" aria-label="Source type">
+              <option value="all">All sources</option>
+              <option value="article">Articles &amp; blogs</option>
+              <option value="cve">CVE feeds (NVD, KEV)</option>
+            </select>
             <select id="poc-days" aria-label="Time range">
               <option value="7">Last 7 days</option>
               <option value="30" selected>Last 30 days</option>
@@ -590,6 +601,7 @@
             </select>
             <button type="button" class="poc-check-btn" id="poc-check-next" title="Check the next 5 unchecked articles">Check next 5</button>
           </div>
+          <p class="poc-token-note hidden" id="poc-jira-note">Approve sends an item to the Jira backlog. Connect Jira first: add <code>JIRA_BASE_URL</code>, <code>JIRA_EMAIL</code>, <code>JIRA_API_TOKEN</code> and <code>JIRA_PROJECT_KEY</code> in Render.</p>
           <p class="poc-token-note hidden" id="poc-token-note">Checks use GitHub's public API (60 requests/hour). Add a <code>GITHUB_TOKEN</code> in Render for automatic background checks.</p>
         </div>
         <ul class="poc-list" id="poc-tracker-list"></ul>

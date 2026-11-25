@@ -171,6 +171,18 @@ function initializeSchema() {
       checked_at TEXT DEFAULT (datetime('now'))
     );
 
+    -- Admin review of PoC tracker items: approved (sent to Jira) or declined.
+    -- Keyed by the story's canonical URL so every user's copy shares one decision.
+    CREATE TABLE IF NOT EXISTS poc_decisions (
+      story_key TEXT PRIMARY KEY,
+      article_id INTEGER,
+      status TEXT NOT NULL,
+      decided_by INTEGER,
+      decided_at TEXT DEFAULT (datetime('now')),
+      jira_key TEXT,
+      jira_url TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS ai_cache (
       cache_key TEXT PRIMARY KEY,
       response TEXT,
@@ -299,6 +311,10 @@ function initializeSchema() {
   try { d.prepare('ALTER TABLE users ADD COLUMN must_change_password INTEGER DEFAULT 0').run(); } catch(e) { /* already exists */ }
   // Forced password changes were removed (they looped on ephemeral hosting); clear legacy flags.
   try { d.prepare('UPDATE users SET must_change_password = 0 WHERE must_change_password != 0').run(); } catch(e) { /* ignore */ }
+  // Exploit / PoC links supplied by the source (e.g. NVD references tagged "Exploit")
+  try { d.prepare('ALTER TABLE articles ADD COLUMN poc_refs TEXT').run(); } catch(e) { /* already exists */ }
+  // Malware-sample uploads were wrongly flagged as PoCs
+  try { d.prepare("UPDATE articles SET has_poc = 0 WHERE has_poc = 1 AND source_name LIKE 'MalwareBazaar%'").run(); } catch(e) { /* ignore */ }
   // When the password last changed (unix seconds): access tokens issued earlier are rejected.
   try { d.prepare('ALTER TABLE users ADD COLUMN password_changed_at INTEGER DEFAULT 0').run(); } catch(e) { /* already exists */ }
 
@@ -882,8 +898,8 @@ function insertArticle(article) {
   enrichArticle(article);
   try {
     const result = getDb().prepare(`
-      INSERT INTO articles (url_hash, title, description, url, source_name, source_type, source_id, user_id, author, published_date, category, severity, cve_id, is_patched, has_poc, tags, mitre_ids, iocs, sector, threat_actors, title_key)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO articles (url_hash, title, description, url, source_name, source_type, source_id, user_id, author, published_date, category, severity, cve_id, is_patched, has_poc, tags, mitre_ids, iocs, sector, threat_actors, title_key, poc_refs)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       urlHash,
       article.title || 'Untitled',
@@ -905,7 +921,8 @@ function insertArticle(article) {
       article.iocs || null,
       article.sector || null,
       article.threat_actors || null,
-      key || null
+      key || null,
+      article.poc_refs || null
     );
     return { id: result.lastInsertRowid, success: true, isNew: true };
   } catch (err) {
@@ -987,18 +1004,57 @@ function getPocCheck(articleId) {
 function getPocTrackerArticles(sinceIso, limit = 60) {
   return getDb().prepare(
     `SELECT a.id, a.title, a.url, substr(a.description, 1, 1500) AS description, a.severity, a.category, a.threat_actors,
-            a.mitre_ids, a.cve_id, a.has_poc, a.is_patched, a.sector, a.published_date, a.source_name, a.source_type,
+            a.mitre_ids, a.cve_id, a.has_poc, a.is_patched, a.sector, a.published_date, a.source_name, a.source_type, a.poc_refs,
             p.verdict AS poc_verdict, p.result AS poc_result
        FROM articles a LEFT JOIN poc_checks p ON p.article_id = a.id
-      WHERE a.published_date >= ? AND (a.has_poc = 1 OR p.verdict IN ('verified', 'suspicious'))
+      WHERE a.published_date >= ?
+        AND a.source_name NOT LIKE 'MalwareBazaar%'
+        AND (a.has_poc = 1 OR a.poc_refs IS NOT NULL OR p.verdict IN ('verified', 'suspicious', 'mentioned'))
       ORDER BY a.published_date DESC LIMIT ?`
   ).all(sinceIso, Math.max(1, Math.min(500, limit | 0)));
+}
+
+function getPocDecisions(keys) {
+  const out = new Map();
+  const list = [...new Set(keys)].filter(Boolean);
+  for (let i = 0; i < list.length; i += 400) {
+    const chunk = list.slice(i, i + 400);
+    const rows = getDb().prepare(`SELECT * FROM poc_decisions WHERE story_key IN (${chunk.map(() => '?').join(',')})`).all(...chunk);
+    for (const r of rows) out.set(r.story_key, r);
+  }
+  return out;
+}
+function getPocDecision(key) {
+  return getDb().prepare('SELECT * FROM poc_decisions WHERE story_key = ?').get(key) || null;
+}
+function setPocDecision(key, { articleId, status, userId, jiraKey = null, jiraUrl = null }) {
+  getDb().prepare(
+    `INSERT INTO poc_decisions (story_key, article_id, status, decided_by, decided_at, jira_key, jira_url)
+     VALUES (?, ?, ?, ?, datetime('now'), ?, ?)
+     ON CONFLICT(story_key) DO UPDATE SET article_id = excluded.article_id, status = excluded.status, decided_by = excluded.decided_by,
+       decided_at = excluded.decided_at, jira_key = COALESCE(excluded.jira_key, poc_decisions.jira_key), jira_url = COALESCE(excluded.jira_url, poc_decisions.jira_url)`
+  ).run(key, articleId || null, status, userId || null, jiraKey, jiraUrl);
+  return getPocDecision(key);
+}
+function clearPocDecision(key) {
+  // An item already sent to Jira keeps its link; only "declined" can be undone.
+  return getDb().prepare("DELETE FROM poc_decisions WHERE story_key = ? AND status = 'declined'").run(key).changes > 0;
+}
+
+function getPocTrackerArticle(id) {
+  return getDb().prepare(
+    `SELECT a.id, a.title, a.url, substr(a.description, 1, 3000) AS description, a.severity, a.category, a.threat_actors,
+            a.mitre_ids, a.cve_id, a.has_poc, a.is_patched, a.sector, a.published_date, a.source_name, a.source_type, a.poc_refs,
+            p.verdict AS poc_verdict, p.result AS poc_result
+       FROM articles a LEFT JOIN poc_checks p ON p.article_id = a.id WHERE a.id = ?`
+  ).get(id) || null;
 }
 
 function getUncheckedPocArticles(limit = 5) {
   return getDb().prepare(
     `SELECT a.* FROM articles a LEFT JOIN poc_checks p ON p.article_id = a.id
-      WHERE a.has_poc = 1 AND p.article_id IS NULL AND a.published_date >= datetime('now', '-30 days')
+      WHERE (a.has_poc = 1 OR a.poc_refs IS NOT NULL) AND p.article_id IS NULL AND a.published_date >= datetime('now', '-30 days')
+        AND a.source_name NOT LIKE 'MalwareBazaar%'
       ORDER BY a.published_date DESC LIMIT ?`
   ).all(Math.max(1, Math.min(50, limit | 0)));
 }
@@ -1521,6 +1577,11 @@ module.exports = {
   getPocCheck,
   getPocTrackerArticles,
   getUncheckedPocArticles,
+  getPocTrackerArticle,
+  getPocDecisions,
+  getPocDecision,
+  setPocDecision,
+  clearPocDecision,
   getGeoArticles,
   getDb,
   initializeSchema,

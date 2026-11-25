@@ -83,6 +83,27 @@ Return JSON exactly in this shape:
   };
 }
 
+// Detection-engineering hypothesis for a PoC lab experiment (Jira "Hypothesis" section)
+function hypothesisPrompt(article, techniques = []) {
+  const ttpLine = techniques.length ? techniques.map((t) => `${t.subId || t.id} ${t.name}`).join('; ') : 'none mapped';
+  const a = { ...article, description: `${String(article.description || '').slice(0, LIMITS.description - 500)}\n\nATT&CK mapped: ${ttpLine.slice(0, 400)}` };
+  return {
+    system: `${INJECTION_GUARD}
+You are a detection engineer planning a home-lab experiment. The <article> block describes a vulnerability or attack with a public proof-of-concept (PoC).
+Write a testable hypothesis for reproducing the PoC in an isolated lab and detecting it.
+Rules:
+- 2-4 sentences, in the form "If <attacker action using the PoC>, then we expect <observable evidence> in <named telemetry source>, so <detection outcome>."
+- Name concrete telemetry (e.g. Sysmon Event ID 1 process creation, Windows Security 4688, web server access logs, Zeek conn/http logs, EDR alerts, auditd).
+- Only use ATT&CK technique IDs from the "ATT&CK mapped" line at the end of the description, if any. Do not invent product versions, CVEs or facts not in the article.
+- Plain text, no markdown.
+
+Return JSON exactly in this shape:
+{"hypothesis": "<the hypothesis>"}
+`,
+    user: articleBlock(a, LIMITS.description, [['Source', 'source_name', 'Unknown'], ['CVE', 'cve_id', 'none']])
+  };
+}
+
 function ttpPrompt(article) {
   return {
     system: `${INJECTION_GUARD}
@@ -185,4 +206,4 @@ Return JSON exactly in this shape:
   };
 }
 
-module.exports = { summaryPrompt, ttpPrompt, triagePrompt, iocPrompt, ragPrompt, webQaPrompt, briefingPrompt, LIMITS };
+module.exports = { summaryPrompt, hypothesisPrompt, ttpPrompt, triagePrompt, iocPrompt, ragPrompt, webQaPrompt, briefingPrompt, LIMITS };
