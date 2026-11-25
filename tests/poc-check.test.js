@@ -3,7 +3,7 @@
 const { state, calls, reset } = require('./helpers/stubs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { checkArticle, extractLinks } = require('../src/poc-check');
+const { checkArticle, extractLinks, scanPage, findPocWording } = require('../src/poc-check');
 
 const b64 = (s) => Buffer.from(s).toString('base64');
 const now = new Date().toISOString();
@@ -175,4 +175,25 @@ test('the checker only talks to public URLs (private article URL is not fetched)
   const r = await checkArticle(article({ url: 'http://127.0.0.1/admin', cve_id: null, title: 'x', description: 'y' }));
   assert.ok(!calls.axiosGet.some((c) => c.url.startsWith('http://127.0.0.1')));
   assert.equal(r.verdict, 'none');
+});
+
+test('page scan finds technique research with no CVE: tool released on GitHub', async () => {
+  reset();
+  web({
+    'https://blog.example/edr-bypass': { data: `<article><p>We found a new way to blind EDR by abusing kernel callbacks.</p>
+      <p>We released the tool on GitHub so defenders can test the technique: <a href="https://github.com/labs/callback-blind">callback-blind</a>.</p></article>
+      ${'x'.repeat(3000)}<footer><a href="https://github.com/bloglabs">GitHub</a></footer>` },
+  });
+  const r = await scanPage({ url: 'https://blog.example/edr-bypass', title: 'Blinding EDR with kernel callbacks', description: 'New research.' });
+  assert.equal(r.fetched, true);
+  assert.match(r.quotes[0], /released the tool on GitHub/);
+  assert.deepEqual(r.links.map((l) => l.key), ['labs/callback-blind']);
+  assert.equal(calls.axiosGet.filter((c) => c.url.includes('api.github.com')).length, 0, 'no GitHub API use');
+});
+
+test('wording: negations and tool-release phrasing', () => {
+  assert.equal(findPocWording('Microsoft has not released a PoC.').quotes.length, 0);
+  assert.equal(findPocWording('Follow us on GitHub for updates.').quotes.length, 0);
+  assert.equal(findPocWording('The code is now available on GitHub.').quotes.length, 1);
+  assert.equal(findPocWording('We published a GitHub repository with the bypass tool.').quotes.length, 1);
 });

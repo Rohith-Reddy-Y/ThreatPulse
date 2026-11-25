@@ -1368,7 +1368,8 @@ function pocTrackerItem(a) {
   // PoC wording in the feed text, available before any check is run
   const wording = poc && Array.isArray(poc.wording) ? poc.wording : pocCheck.findPocWording(`${a.title || ''}. ${a.description || ''}`, 2).quotes;
   const { poc_result, poc_verdict, poc_refs, ...article } = a;
-  return { ...article, kind: isCveFeed(a) ? 'cve' : 'article', ttps, poc, pocRefs, wording, aiSummary: pocSummary(a.id) };
+  const noCve = !isCveFeed(a) && !/\bCVE-\d{4}-\d{4,7}\b/i.test(`${a.cve_id || ''} ${a.title || ''} ${a.description || ''}`);
+  return { ...article, kind: isCveFeed(a) ? 'cve' : 'article', noCve, ttps, poc, pocRefs, wording, aiSummary: pocSummary(a.id) };
 }
 router.get('/admin/poc-tracker', auth.requireAuth, auth.requireAdmin, (req, res) => {
   try {

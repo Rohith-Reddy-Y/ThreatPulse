@@ -34,8 +34,20 @@ const MAX_CANDIDATES = 6;
 // ── PoC wording in the article / blog text ──
 // "no public PoC", "not aware of any exploit" etc. are removed before matching.
 const NEGATED_RE = /\b(no|not aware of any|no known|nor any|not yet|without (a |any )?|lack of|absence of|there is no|there are no)\s+(publicly[- ]available |public(ly)? |known |working |functional |released )*(proof[- ]of[- ]concept|PoCs?|exploits?( code)?)\b/gi;
-const POC_WORD_RE = /\bproof[- ]of[- ]concepts?\b|\bPoCs?\b|\bexploit[- ]code\b|\b(public(ly[- ]available)?|working|functional|released|published) exploits?\b|\bexploits? (is |are |has been |have been |was |were )?(now )?(publicly )?(available|released|published|public|on github)\b|\bweaponi[sz]ed\b|\bexploit-db\b|\bmetasploit module\b|\bnuclei template\b/i;
-const LINK_HINT_RE = /proof[- ]of[- ]concept|\bpoc\b|exploit|\bcve-\d{4}/i;
+// "has not released a PoC", "no exploit code is available" ...
+const NEG_NEAR_RE = /\b(no|not|n't|never|without|nor|lack of|absence of)\b[^.;]{0,40}?\b(proof[- ]of[- ]concepts?|PoCs?|exploits?( code)?)\b/gi;
+const POC_WORD_RE = new RegExp([
+  String.raw`\bproof[- ]of[- ]concepts?\b`, String.raw`\bPoCs?\b`, String.raw`\bexploit[- ]code\b`,
+  String.raw`\b(public(ly[- ]available)?|working|functional|released|published) exploits?\b`,
+  String.raw`\bexploits? (is |are |has been |have been |was |were )?(now )?(publicly )?(available|released|published|public|on github)\b`,
+  String.raw`\bweaponi[sz]ed\b`, String.raw`\bexploit-db\b`, String.raw`\bmetasploit module\b`, String.raw`\bnuclei template\b`,
+  // technique research without a CVE: code / tool released for the technique
+  String.raw`\b(released|published|open[- ]sourced|shared|posted|pushed|uploaded|made available)\b[^.]{0,80}\b(on|to|via) (github|gitlab)\b`,
+  String.raw`\b(code|tool|tooling|script|implementation|demo|sample|research)\b[^.]{0,50}\b(is |are )?(now )?(available|hosted) (on|at|via) (github|gitlab)\b`,
+  String.raw`\b(github|gitlab) (repo|repository)\b[^.]{0,60}\b(tool|code|technique|demo|attack|bypass|exploit)\b`,
+  String.raw`\b(tool|code|technique|demo|attack|bypass)\b[^.]{0,60}\b(github|gitlab) (repo|repository)\b`,
+].join('|'), 'i');
+const LINK_HINT_RE = /proof[- ]of[- ]concept|\bpoc\b|exploit|\bcve-\d{4}|\btool(s|ing|kit)?\b|source code|\breleased?\b|open[- ]sourced?|\brepository\b|\bdemo\b|\btechniques?\b|\bbypass/i;
 
 function htmlToText(html) {
   return String(html || '').slice(0, 2_000_000)
@@ -56,7 +68,7 @@ function findPocWording(text, max = 3) {
   for (const raw of sentences) {
     const s = raw.replace(/\s+/g, ' ').trim();
     if (s.length < 12 || s.length > 1200) continue;
-    const stripped = s.replace(NEGATED_RE, ' ');
+    const stripped = s.replace(NEGATED_RE, ' ').replace(NEG_NEAR_RE, ' ');
     const m = POC_WORD_RE.exec(stripped);
     const negated = stripped !== s;
     let quote = null;
@@ -360,4 +372,38 @@ async function checkArticle(article) {
   };
 }
 
-module.exports = { checkArticle, extractLinks, cvesOf, findPocWording, htmlToText };
+/**
+ * Cheap scan of one article page (no GitHub API calls): PoC / tool-release wording
+ * and code links that sit next to it. Used in the background for every new
+ * article and blog, so technique research without a CVE is found too.
+ */
+async function scanPage(article) {
+  let text = `${article.title || ''}. ${article.description || ''}`;
+  let links = extractLinks(`${article.title || ''} ${article.description || ''}`);
+  let fetched = false;
+  const url = String(article.url || '');
+  if (/^https?:\/\//i.test(url) && !/^https?:\/\/news\.google\.com\//i.test(url)) {
+    try {
+      const page = await safeGet(url, { timeout: 15000, responseType: 'text', validateStatus: () => true,
+        maxContentLength: 3 * 1024 * 1024, headers: { 'User-Agent': 'Mozilla/5.0 (ThreatPulse PoC scanner)' } });
+      if (page.status >= 200 && page.status < 300 && typeof page.data === 'string') {
+        fetched = true;
+        text += '\n' + htmlToText(page.data).slice(0, 300000);
+        links = links.concat(extractLinks(page.data));
+      }
+    } catch { /* feed text only */ }
+  }
+  const wording = findPocWording(text);
+  const own = url.toLowerCase();
+  const seen = new Set();
+  const codeLinks = links.filter((l) => {
+    if (!l.near || !['github', 'gist', 'gitlab', 'exploitdb', 'packetstorm'].includes(l.kind)) return false;
+    const k = `${l.kind}:${String(l.key).toLowerCase().split('#')[0]}`;
+    if (seen.has(k) || own.includes(String(l.key).toLowerCase().split('#')[0])) return false;
+    seen.add(k);
+    return true;
+  }).slice(0, 5);
+  return { quotes: wording.quotes, denied: wording.denied, links: codeLinks, fetched };
+}
+
+module.exports = { checkArticle, scanPage, extractLinks, cvesOf, findPocWording, htmlToText };

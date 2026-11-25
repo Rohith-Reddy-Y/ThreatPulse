@@ -91,6 +91,19 @@ function templateHypothesis(item) {
     'and our current detections either alert on it or show a gap we can close with a new rule.';
 }
 
+// The article title alone: no "[CISA KEV]"-style tags, no " | Site name" / " - Site name" suffix
+function cleanTitle(item) {
+  let t = String(item.title || '').replace(/\s+/g, ' ').trim();
+  t = t.replace(/^(\[[^\]]{1,40}\]\s*)+/, '');
+  const m = t.match(/^(.{20,}?)\s+[|–—-]\s+([^|–—-]{2,50})$/);
+  if (m) {
+    const site = m[2].toLowerCase().replace(/[^a-z0-9]/g, '');
+    const src = String(item.source_name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (site && (src.includes(site) || site.includes(src.slice(0, 6)) || / \|/.test(t))) t = m[1];
+  }
+  return t || 'Untitled';
+}
+
 /** Build the Jira issue fields for an approved PoC tracker item. */
 function buildIssue(item, { hypothesis, storyKey, approvedBy, project, issueType }) {
   const articleUrl = safeHref(item.url);
@@ -158,7 +171,7 @@ function buildIssue(item, { hypothesis, storyKey, approvedBy, project, issueType
     fields: {
       project: { key: project },
       issuetype: { name: issueType },
-      summary: clip(`Research - ${item.title || 'Untitled'}`, 250),
+      summary: clip(`Research - ${cleanTitle(item)}`, 250),
       labels: ['threatpulse', 'poc-research', storyLabel(storyKey)],
       description: { type: 'doc', version: 1, content },
     },
@@ -210,4 +223,4 @@ async function createPocIssue(item, { hypothesis, storyKey, approvedBy } = {}) {
   }
 }
 
-module.exports = { config, status, buildIssue, createPocIssue, templateHypothesis, storyLabel };
+module.exports = { config, status, cleanTitle, buildIssue, createPocIssue, templateHypothesis, storyLabel };

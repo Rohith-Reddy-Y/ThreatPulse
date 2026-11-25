@@ -171,6 +171,13 @@ function initializeSchema() {
       checked_at TEXT DEFAULT (datetime('now'))
     );
 
+    -- Background page scan for PoC / tool-release wording (one row per URL)
+    CREATE TABLE IF NOT EXISTS poc_scans (
+      url TEXT PRIMARY KEY,
+      found INTEGER DEFAULT 0,
+      scanned_at TEXT DEFAULT (datetime('now'))
+    );
+
     -- Admin review of PoC tracker items: approved (sent to Jira) or declined.
     -- Keyed by the story's canonical URL so every user's copy shares one decision.
     CREATE TABLE IF NOT EXISTS poc_decisions (
@@ -1041,6 +1048,42 @@ function clearPocDecision(key) {
   return getDb().prepare("DELETE FROM poc_decisions WHERE story_key = ? AND status = 'declined'").run(key).changes > 0;
 }
 
+// Recent articles/blogs whose page hasn't been scanned for PoC wording yet (one per URL)
+function getArticlesToScanForPoc(limit = 30) {
+  return getDb().prepare(
+    `SELECT MIN(a.id) AS id, a.url, MAX(a.title) AS title, MAX(substr(a.description, 1, 3000)) AS description
+       FROM articles a LEFT JOIN poc_scans s ON s.url = a.url
+      WHERE s.url IS NULL AND a.fetched_date >= datetime('now', '-3 days')
+        AND a.url LIKE 'http%'
+        AND a.source_name NOT LIKE 'MalwareBazaar%' AND a.source_name NOT LIKE 'NVD%' AND a.source_name NOT LIKE 'CISA Known%'
+      GROUP BY a.url ORDER BY MAX(a.published_date) DESC LIMIT ?`
+  ).all(Math.max(1, Math.min(200, limit | 0)));
+}
+// Record a page scan; when PoC evidence was found, flag every copy of the article
+// and store the evidence as an (unvalidated) PoC check unless one already exists.
+function savePocScan(url, scan) {
+  const d = getDb();
+  const found = scan.quotes.length > 0 || scan.links.length > 0;
+  d.prepare(`INSERT INTO poc_scans (url, found, scanned_at) VALUES (?, ?, datetime('now'))
+    ON CONFLICT(url) DO UPDATE SET found = excluded.found, scanned_at = excluded.scanned_at`).run(url, found ? 1 : 0);
+  if (!found) return 0;
+  const ids = d.prepare('SELECT id FROM articles WHERE url = ?').all(url).map((r) => r.id);
+  const result = JSON.stringify({
+    verdict: 'mentioned', auto: true,
+    links: scan.links.map((l) => ({ url: l.deep || l.url, kind: l.kind, source: 'article', via: null, status: 'unverified',
+      reasons: ['Linked next to PoC / tool wording in the article; not validated yet'], stars: null, updated: null, cveMatch: [], files: [] })),
+    cves: [], mentionsPoc: scan.quotes.length > 0, wording: scan.quotes, denied: [],
+    notes: ['Found by the automatic page scan. Click "Check PoC" to validate the links.'], rateLimited: false, checkedAt: new Date().toISOString(),
+  });
+  const ins = d.prepare(`INSERT INTO poc_checks (article_id, verdict, result, checked_at) VALUES (?, 'mentioned', ?, datetime('now'))
+    ON CONFLICT(article_id) DO NOTHING`);
+  for (const id of ids) {
+    d.prepare('UPDATE articles SET has_poc = 1 WHERE id = ?').run(id);
+    ins.run(id, result);
+  }
+  return ids.length;
+}
+
 function getPocTrackerArticle(id) {
   return getDb().prepare(
     `SELECT a.id, a.title, a.url, substr(a.description, 1, 3000) AS description, a.severity, a.category, a.threat_actors,
@@ -1053,7 +1096,8 @@ function getPocTrackerArticle(id) {
 function getUncheckedPocArticles(limit = 5) {
   return getDb().prepare(
     `SELECT a.* FROM articles a LEFT JOIN poc_checks p ON p.article_id = a.id
-      WHERE (a.has_poc = 1 OR a.poc_refs IS NOT NULL) AND p.article_id IS NULL AND a.published_date >= datetime('now', '-30 days')
+      WHERE (a.has_poc = 1 OR a.poc_refs IS NOT NULL) AND (p.article_id IS NULL OR p.result LIKE '%"auto":true%')
+        AND a.published_date >= datetime('now', '-30 days')
         AND a.source_name NOT LIKE 'MalwareBazaar%'
       ORDER BY a.published_date DESC LIMIT ?`
   ).all(Math.max(1, Math.min(50, limit | 0)));
@@ -1578,6 +1622,8 @@ module.exports = {
   getPocTrackerArticles,
   getUncheckedPocArticles,
   getPocTrackerArticle,
+  getArticlesToScanForPoc,
+  savePocScan,
   getPocDecisions,
   getPocDecision,
   setPocDecision,

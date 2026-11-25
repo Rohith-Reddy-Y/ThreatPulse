@@ -318,6 +318,34 @@ async function initialize() {
   setTimeout(runVulnIntel, 90 * 1000).unref();
   setInterval(runVulnIntel, 6 * 3600 * 1000).unref();
 
+  // 8b. PoC page scan: every new article/blog page is read for PoC / tool-release
+  //     wording and code links (no GitHub API use), so niche technique research
+  //     without a CVE shows up in the admin PoC tracker too.
+  {
+    const pocCheck = require('./src/poc-check');
+    let scanBusy = false;
+    const scanBatch = async () => {
+      if (scanBusy) return;
+      scanBusy = true;
+      let found = 0;
+      try {
+        const todo = db.getArticlesToScanForPoc(30);
+        for (let i = 0; i < todo.length; i += 3) {
+          const results = await Promise.all(todo.slice(i, i + 3).map(async (a) => {
+            try { return [a, await pocCheck.scanPage(a)]; } catch { return [a, { quotes: [], denied: [], links: [], fetched: false }]; }
+          }));
+          for (const [a, r] of results) if (db.savePocScan(a.url, r)) found++;
+        }
+        if (todo.length) console.log(`[PoC] Page scan: ${todo.length} article(s), ${found} with PoC evidence`);
+      } catch (e) {
+        console.error('[PoC] Page scan error:', e.message);
+      } finally { scanBusy = false; }
+    };
+    setTimeout(scanBatch, 3 * 60 * 1000).unref();
+    setInterval(scanBatch, 5 * 60 * 1000).unref();
+    console.log('[Init] PoC page scan: every 5 min (wording + code links, all sources) ✓');
+  }
+
   // 9. PoC checker in the background (only with a GitHub token: 5,000 req/h).
   //    Without one the 60 req/h budget is left for the admin's manual checks.
   if (process.env.GITHUB_TOKEN) {

@@ -2,6 +2,7 @@
  * ThreatPulse — RSS Feed Fetcher
  * Fetches and parses RSS/Atom feeds from cybersecurity sources
  */
+const { findPocWording } = require('../poc-check');
 
 const RSSParser = require('rss-parser');
 const { safeGet } = require('../net-guard');
@@ -180,8 +181,9 @@ function extractCVE(text) {
 const NEGATED_POC_RE = /\b(no|not aware of any|no known|nor any|without (a |any )?|lack of|absence of)\s+(publicly[- ]available |public |known |working |functional )*(proof[- ]of[- ]concept|PoC|exploit(s| code)?)\b/gi;
 
 function detectPOC(title, description) {
-  const text = `${title || ''} ${description || ''}`.replace(NEGATED_POC_RE, ' ');
-  return /\bproof[- ]of[- ]concept\b|\bPoC\b|\bexploit[- ]code\b|\b(public|working|functional) exploits?\b|\bexploits? (is |are |has been |have been )?(now )?(available|released|published)\b|\bweaponi[sz]ed\b|\bexploit-db\b|\bmetasploit\b|github\.com\/\S*exploit/i.test(text) ? 1 : 0;
+  // Same wording rules as the PoC checker: PoC / exploit released / tool or code
+  // published on GitHub (technique research without a CVE), negations ignored.
+  return findPocWording(`${title || ''}. ${description || ''}`, 1).quotes.length ? 1 : 0;
 }
 
 /**

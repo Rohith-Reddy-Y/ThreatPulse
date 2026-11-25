@@ -1420,6 +1420,7 @@
   };
   const pocVerdictOf = (it) => (it.poc && it.poc.verdict) || 'unchecked';
   const pocReviewOf = (it) => (it.decision && it.decision.status) || 'todo';
+  const pocKindMatch = (it) => pocState.kind === 'all' || (pocState.kind === 'technique' ? !!it.noCve : (it.kind || 'article') === pocState.kind);
   function isAdminUser() { return !!(currentUser && currentUser.role === 'admin'); }
 
   async function loadPocTracker() {
@@ -1501,8 +1502,8 @@
         `<button type="button" class="ti-3d-btn" data-attack-path="${it.id}">3D attack path</button></div>` : '') +
       (it.poc && it.poc.notes && it.poc.notes.length ? `<p class="poc-note">${escapeHtml(it.poc.notes[it.poc.notes.length - 1])}</p>` : '') +
       `<div class="poc-actions"><button type="button" class="poc-check-btn" data-poc-check="${it.id}"${busy ? ' disabled' : ''}>` +
-        `${busy ? 'Checking…' : it.poc ? 'Re-check PoC' : 'Check PoC'}</button>` +
-        (it.poc && it.poc.checkedAt ? `<span class="poc-checked">checked ${relativeTime(it.poc.checkedAt)}</span>` : '') + `</div>` +
+        `${busy ? 'Checking…' : it.poc && !it.poc.auto ? 'Re-check PoC' : 'Check PoC'}</button>` +
+        (it.poc && it.poc.checkedAt ? `<span class="poc-checked">${it.poc.auto ? 'page scanned' : 'checked'} ${relativeTime(it.poc.checkedAt)}</span>` : '') + `</div>` +
       review +
       `</li>`;
   }
@@ -1510,7 +1511,7 @@
   function renderPocTracker() {
     const list = $('#poc-tracker-list');
     if (!list) return;
-    const byKind = pocState.items.filter((it) => pocState.kind === 'all' || (it.kind || 'article') === pocState.kind);
+    const byKind = pocState.items.filter(pocKindMatch);
     const rCounts = { todo: 0, approved: 0, declined: 0 };
     for (const it of byKind) rCounts[pocReviewOf(it)]++;
     const inReview = byKind.filter((it) => pocReviewOf(it) === pocState.review);
@@ -2632,7 +2633,7 @@
       if (pocDecide) { decidePoc(parseInt(pocDecide.dataset.id, 10), pocDecide.dataset.pocDecide); return; }
       const pocNext = e.target.closest('#poc-check-next');
       if (pocNext) {
-        const todo = pocState.items.filter((it) => !it.poc && pocReviewOf(it) === 'todo' && (pocState.kind === 'all' || (it.kind || 'article') === pocState.kind)).slice(0, 5);
+        const todo = pocState.items.filter((it) => (!it.poc || it.poc.auto) && pocReviewOf(it) === 'todo' && pocKindMatch(it)).slice(0, 5);
         if (!todo.length) { showToast('PoC check', 'Everything here has been checked.', 'info'); return; }
         pocNext.disabled = true;
         (async () => { for (const it of todo) await runPocCheck(it.id); pocNext.disabled = false; })();
@@ -2688,7 +2689,7 @@
 
     // Admin PoC tracker: time range + periodic refresh (picks up background checks)
     $('#poc-days')?.addEventListener('change', (e) => { pocState.days = parseInt(e.target.value, 10) || 30; loadPocTracker(); });
-    $('#poc-kind')?.addEventListener('change', (e) => { pocState.kind = ['article', 'cve'].includes(e.target.value) ? e.target.value : 'all'; renderPocTracker(); });
+    $('#poc-kind')?.addEventListener('change', (e) => { pocState.kind = ['article', 'technique', 'cve'].includes(e.target.value) ? e.target.value : 'all'; renderPocTracker(); });
     setInterval(() => { if (isAdminUser() && !document.hidden && !pocState.busy.size) loadPocTracker(); }, 180000);
 
     // Stat cards clickable — filter feed on click

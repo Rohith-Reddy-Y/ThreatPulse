@@ -155,3 +155,40 @@ test('existing MalwareBazaar rows lose their PoC flag on startup', () => {
   const again = load(env.dbPath);
   assert.strictEqual(again.db.getDb().prepare('SELECT has_poc FROM articles WHERE id = ?').get(id).has_poc, 0);
 });
+
+test('background page scan: flags technique posts, keeps manual checks, shows them as no-CVE research', async () => {
+  const env = load();
+  withJira(false);
+  const admin = makeUser(env.db, { role: 'admin' });
+  const url = 'https://research.example/new-injection-technique';
+  const a1 = env.db.insertArticle(art({ title: 'A new process injection technique', description: 'Research.', url, has_poc: 0 })).id;
+  const todo = env.db.getArticlesToScanForPoc(50);
+  assert.ok(todo.some((t) => t.url === url));
+  env.db.savePocScan(url, { quotes: ['We released the tool on GitHub.'], denied: [], links: [{ url: 'https://github.com/r/inject', kind: 'github', key: 'r/inject' }] });
+  assert.ok(!env.db.getArticlesToScanForPoc(50).some((t) => t.url === url), 'scanned once');
+  const t = await call(env, 'GET', '/admin/poc-tracker', { user: admin, query: { days: '30' } });
+  const item = t.body.items.find((x) => x.id === a1);
+  assert.ok(item, 'technique post is in the tracker');
+  assert.strictEqual(item.noCve, true);
+  assert.strictEqual(item.poc.verdict, 'mentioned');
+  assert.strictEqual(item.poc.auto, true);
+  assert.strictEqual(item.poc.links[0].url, 'https://github.com/r/inject');
+  assert.deepStrictEqual(item.wording, ['We released the tool on GitHub.']);
+
+  // A scan never overwrites a real (manual) check
+  const url2 = 'https://research.example/other';
+  const a2 = env.db.insertArticle(art({ title: 'Other research', url: url2 })).id;
+  env.db.savePocCheck(a2, { verdict: 'verified', links: [], wording: [] });
+  env.db.savePocScan(url2, { quotes: ['PoC is out.'], denied: [], links: [] });
+  assert.strictEqual(env.db.getPocCheck(a2).verdict, 'verified');
+});
+
+test('Jira title is only "Research - <article title>"', () => {
+  require('./data-helpers');
+  const { cleanTitle, buildIssue } = require('../src/jira');
+  assert.strictEqual(cleanTitle({ title: 'Ruby2Shell (CVE-2026-1): Detection, Hunting, and Fixes | Corelight', source_name: 'Corelight Blog' }), 'Ruby2Shell (CVE-2026-1): Detection, Hunting, and Fixes');
+  assert.strictEqual(cleanTitle({ title: '[CISA KEV] CVE-2026-1 — Acme RCE' }), 'CVE-2026-1 — Acme RCE');
+  const f = buildIssue({ title: 'New EDR bypass technique - The Hacker News', source_name: 'The Hacker News', url: 'https://x.example/a' },
+    { storyKey: 'k', project: 'SCRUM', issueType: 'Task' }).fields;
+  assert.strictEqual(f.summary, 'Research - New EDR bypass technique');
+});
