@@ -52,7 +52,7 @@ test('approve creates one Jira backlog issue in the agreed format', async () => 
   const f = created[0].fields;
   assert.strictEqual(f.project.key, 'SCRUM');
   assert.strictEqual(f.issuetype.name, 'Task');
-  assert.match(f.summary, /^\[PoC\] Researchers release/);
+  assert.strictEqual(f.summary, 'Research - Researchers release proof-of-concept for CVE-2026-4242 in Acme Gateway');
   assert.ok(f.labels.includes('threatpulse') && f.labels.some((l) => /^tp-poc-[0-9a-f]{12}$/.test(l)));
   assert.deepStrictEqual(headings(f.description), ['Ideation', 'References', 'Hypothesis', 'Summary', 'Outcome']);
   const all = docText(f.description);

@@ -158,7 +158,7 @@ function buildIssue(item, { hypothesis, storyKey, approvedBy, project, issueType
     fields: {
       project: { key: project },
       issuetype: { name: issueType },
-      summary: clip(`[PoC] ${item.title || 'Untitled'}`, 250),
+      summary: clip(`Research - ${item.title || 'Untitled'}`, 250),
       labels: ['threatpulse', 'poc-research', storyLabel(storyKey)],
       description: { type: 'doc', version: 1, content },
     },
