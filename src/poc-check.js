@@ -47,7 +47,9 @@ const POC_WORD_RE = new RegExp([
   String.raw`\b(github|gitlab) (repo|repository)\b[^.]{0,60}\b(tool|code|technique|demo|attack|bypass|exploit)\b`,
   String.raw`\b(tool|code|technique|demo|attack|bypass)\b[^.]{0,60}\b(github|gitlab) (repo|repository)\b`,
 ].join('|'), 'i');
-const LINK_HINT_RE = /proof[- ]of[- ]concept|\bpoc\b|exploit|\bcve-\d{4}|\btool(s|ing|kit)?\b|source code|\breleased?\b|open[- ]sourced?|\brepository\b|\bdemo\b|\btechniques?\b|\bbypass/i;
+// A code link counts as a PoC only next to PoC words, or next to "we released the tool/code".
+// Plain mentions of other people's tools ("we used ScoutSuite and CloudMapper") don't count.
+const LINK_HINT_RE = /proof[- ]of[- ]concept|\bpoc\b|exploit|\bcve-\d{4}|weaponi[sz]|\b(released?|releasing|open[- ]sourc(ed|ing)|publish(ed|ing)?)\b[^.]{0,50}\b(tool|code|poc|exploit|source|implementation)/i;
 
 function htmlToText(html) {
   return String(html || '').slice(0, 2_000_000)
@@ -57,6 +59,15 @@ function htmlToText(html) {
     .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"').replace(/&#0?39;|&rsquo;|&lsquo;/g, "'")
     .replace(/[ \t\r\f\v]+/g, ' ');
+}
+
+// The article itself: <article>/<main> when the page has one, minus nav/sidebars/related posts/footer
+function mainContent(html) {
+  let h = String(html || '').slice(0, 3_000_000)
+    .replace(/<(script|style|noscript|svg|nav|header|footer|aside|form)\b[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<(div|section|ul)\b[^>]*(class|id)="[^"]*\b(related|sidebar|widget|share|social|comments?|recent-posts|more-posts|newsletter|menu)\b[^"]*"[\s\S]*?<\/\1>/gi, ' ');
+  const art = h.match(/<article\b[\s\S]*<\/article>/i) || h.match(/<main\b[\s\S]*<\/main>/i);
+  return art ? art[0] : h;
 }
 
 /** Sentences that say a PoC / exploit exists. Returns { quotes: [...], denied: [...] } */
@@ -103,7 +114,7 @@ function cvesOf(article) {
 
 function extractLinks(html) {
   const out = [];
-  const near = (idx) => LINK_HINT_RE.test(htmlToText(text.slice(Math.max(0, idx - 700), idx + 300)));
+  const near = (idx) => LINK_HINT_RE.test(htmlToText(text.slice(Math.max(0, idx - 400), idx + 250)));
   const seen = new Set();
   const add = (kind, url, key, extra = {}) => {
     const k = `${kind}:${key.toLowerCase()}`;
@@ -382,14 +393,16 @@ async function scanPage(article) {
   let links = extractLinks(`${article.title || ''} ${article.description || ''}`);
   let fetched = false;
   const url = String(article.url || '');
-  if (/^https?:\/\//i.test(url) && !/^https?:\/\/news\.google\.com\//i.test(url)) {
+  // A URL with a #fragment points into a list page (whole blog index): only the feed text is about this post
+  if (/^https?:\/\//i.test(url) && !/^https?:\/\/news\.google\.com\//i.test(url) && !url.includes('#')) {
     try {
       const page = await safeGet(url, { timeout: 15000, responseType: 'text', validateStatus: () => true,
         maxContentLength: 3 * 1024 * 1024, headers: { 'User-Agent': 'Mozilla/5.0 (ThreatPulse PoC scanner)' } });
       if (page.status >= 200 && page.status < 300 && typeof page.data === 'string') {
         fetched = true;
-        text += '\n' + htmlToText(page.data).slice(0, 300000);
-        links = links.concat(extractLinks(page.data));
+        const body = mainContent(page.data);
+        text += '\n' + htmlToText(body).slice(0, 300000);
+        links = links.concat(extractLinks(body));
       }
     } catch { /* feed text only */ }
   }
@@ -406,4 +419,4 @@ async function scanPage(article) {
   return { quotes: wording.quotes, denied: wording.denied, links: codeLinks, fetched };
 }
 
-module.exports = { checkArticle, scanPage, extractLinks, cvesOf, findPocWording, htmlToText };
+module.exports = { checkArticle, scanPage, mainContent, extractLinks, cvesOf, findPocWording, htmlToText };

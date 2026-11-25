@@ -1084,6 +1084,28 @@ function savePocScan(url, scan) {
   return ids.length;
 }
 
+// When the scan rules change: drop the automatic (page-scan) results, recompute the
+// feed-wording PoC flag, and let the scanner look at recent pages again.
+const POC_SCAN_VERSION = '2';
+function resetAutoPocScans(detectWording) {
+  const d = getDb();
+  if (getSetting('poc_scan_version') === POC_SCAN_VERSION) return 0;
+  const rows = d.prepare(`SELECT a.id, a.title, a.description, a.source_name, a.poc_refs FROM poc_checks p JOIN articles a ON a.id = p.article_id
+                           WHERE p.result LIKE '%"auto":true%'`).all();
+  const upd = d.prepare('UPDATE articles SET has_poc = ? WHERE id = ?');
+  const del = d.prepare('DELETE FROM poc_checks WHERE article_id = ?');
+  d.transaction(() => {
+    for (const a of rows) {
+      del.run(a.id);
+      const keep = a.poc_refs || /^(NVD|CISA Known)/i.test(a.source_name || '') || detectWording(a.title, a.description);
+      upd.run(keep ? 1 : 0, a.id);
+    }
+    d.prepare('DELETE FROM poc_scans').run();
+  })();
+  setSetting('poc_scan_version', POC_SCAN_VERSION);
+  return rows.length;
+}
+
 function getPocTrackerArticle(id) {
   return getDb().prepare(
     `SELECT a.id, a.title, a.url, substr(a.description, 1, 3000) AS description, a.severity, a.category, a.threat_actors,
@@ -1623,6 +1645,7 @@ module.exports = {
   getUncheckedPocArticles,
   getPocTrackerArticle,
   getArticlesToScanForPoc,
+  resetAutoPocScans,
   savePocScan,
   getPocDecisions,
   getPocDecision,

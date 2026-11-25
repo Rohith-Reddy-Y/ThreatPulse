@@ -323,6 +323,10 @@ async function initialize() {
   //     without a CVE shows up in the admin PoC tracker too.
   {
     const pocCheck = require('./src/poc-check');
+    try {
+      const n = db.resetAutoPocScans((t, d) => pocCheck.findPocWording(`${t || ''}. ${d || ''}`, 1).quotes.length > 0);
+      if (n) console.log(`[PoC] Scan rules updated: re-checking ${n} automatically flagged article(s)`);
+    } catch (e) { console.error('[PoC] Scan reset failed:', e.message); }
     let scanBusy = false;
     const scanBatch = async () => {
       if (scanBusy) return;

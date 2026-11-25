@@ -192,3 +192,21 @@ test('Jira title is only "Research - <article title>"', () => {
     { storyKey: 'k', project: 'SCRUM', issueType: 'Task' }).fields;
   assert.strictEqual(f.summary, 'Research - New EDR bypass technique');
 });
+
+test('scan-rule update: automatic flags are cleared and recomputed once', () => {
+  const env = load();
+  const url = 'https://blog.example/aws-forensics';
+  const a = env.db.insertArticle(art({ title: 'AWS forensics guide', description: 'Tools we used.', url })).id;
+  const b = env.db.insertArticle(art({ title: 'PoC released for Foo', description: 'A proof-of-concept was released.', url: 'https://blog.example/foo' })).id;
+  env.db.savePocScan(url, { quotes: [], denied: [], links: [{ url: 'https://github.com/x/y', kind: 'github', key: 'x/y' }] });
+  env.db.savePocScan('https://blog.example/foo', { quotes: ['A proof-of-concept was released.'], denied: [], links: [] });
+  env.db.getDb().prepare("DELETE FROM app_settings WHERE key = 'poc_scan_version'").run();
+  const detect = (t, d) => /proof-of-concept|PoC/i.test(`${t} ${d}`);
+  assert.strictEqual(env.db.resetAutoPocScans(detect), 2);
+  const flag = (id) => env.db.getDb().prepare('SELECT has_poc FROM articles WHERE id = ?').get(id).has_poc;
+  assert.strictEqual(flag(a), 0, 'false positive cleared');
+  assert.strictEqual(flag(b), 1, 'real PoC wording kept');
+  assert.strictEqual(env.db.getPocCheck(a), null);
+  assert.ok(env.db.getArticlesToScanForPoc(50).some((r) => r.url === url), 'rescanned with the new rules');
+  assert.strictEqual(env.db.resetAutoPocScans(detect), 0, 'runs once');
+});

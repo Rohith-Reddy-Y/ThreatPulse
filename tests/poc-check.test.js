@@ -197,3 +197,21 @@ test('wording: negations and tool-release phrasing', () => {
   assert.equal(findPocWording('The code is now available on GitHub.').quotes.length, 1);
   assert.equal(findPocWording('We published a GitHub repository with the bypass tool.').quotes.length, 1);
 });
+
+test('page scan: listing other people\'s tools, sidebars and blog-index URLs are not PoCs', async () => {
+  reset();
+  web({
+    'https://www.synacktiv.example/aws-forensics': { data: `<nav><a href="https://github.com/Synacktiv">Github</a></nav>
+      <article><p>Several tools help with enumeration. The Stratus-red-team tool covers attack techniques:
+      <a href="https://github.com/DataDog/stratus-red-team">stratus</a>. We also used <a href="https://github.com/nccgroup/scoutsuite">ScoutSuite</a>.</p></article>
+      <aside class="related"><p>Rikugan: free, open-source, 678 stars on GitHub. A PoC is available.</p></aside>` },
+  });
+  const r = await scanPage({ url: 'https://www.synacktiv.example/aws-forensics', title: 'AWS Forensics: what you need to know', description: 'Cloud forensics.' });
+  assert.equal(r.fetched, true);
+  assert.deepEqual(r.quotes, []);
+  assert.deepEqual(r.links, []);
+  reset();
+  const f = await scanPage({ url: 'https://objective-see.example/blog.html#blogEntry9', title: 'Monitoring process creation', description: 'Kernel.' });
+  assert.equal(f.fetched, false, 'list page with #fragment: feed text only');
+  assert.equal(calls.axiosGet.length, 0);
+});
