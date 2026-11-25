@@ -2689,6 +2689,13 @@
 
     // Admin PoC tracker: time range + periodic refresh (picks up background checks)
     $('#poc-days')?.addEventListener('change', (e) => { pocState.days = parseInt(e.target.value, 10) || 30; loadPocTracker(); });
+    // Presentation: refresh an expired session first, so the new tab doesn't land on a 401
+    $('#presentation-link')?.addEventListener('click', async (e) => {
+      e.preventDefault();
+      const win = window.open('about:blank', '_blank');
+      try { await api('GET', '/api/auth/me'); } catch { /* the page below shows the login state */ }
+      if (win) { win.opener = null; win.location.href = '/presentation'; } else { window.location.href = '/presentation'; }
+    });
     $('#poc-kind')?.addEventListener('change', (e) => { pocState.kind = ['article', 'technique', 'cve'].includes(e.target.value) ? e.target.value : 'all'; renderPocTracker(); });
     setInterval(() => { if (isAdminUser() && !document.hidden && !pocState.busy.size) loadPocTracker(); }, 180000);
 

@@ -155,6 +155,25 @@ app.get('/healthz', (req, res) => {
   res.json({ status: 'ok', uptime: process.uptime(), timestamp: new Date().toISOString() });
 });
 
+// Project presentation (signed-in users only): a PDF bundled at
+// docs/ThreatPulse-presentation.pdf if present, otherwise the deck's link
+// (PRESENTATION_URL, https only). The PDF is outside public/ so it is never
+// served without a login.
+const PRESENTATION_PDF = path.join(__dirname, 'docs', 'ThreatPulse-presentation.pdf');
+const PRESENTATION_URL = /^https:\/\/[^\s]+$/i.test(process.env.PRESENTATION_URL || '')
+  ? process.env.PRESENTATION_URL
+  : 'https://claude.ai/artifact/LbDUnbpGo3gW6zVuFFyCvw';
+app.get('/presentation', auth.requireAuth, (req, res) => {
+  if (require('fs').existsSync(PRESENTATION_PDF)) {
+    res.setHeader('Content-Disposition', 'inline; filename="ThreatPulse-presentation.pdf"');
+    res.setHeader('Cache-Control', 'private, no-cache');
+    return res.sendFile(PRESENTATION_PDF);
+  }
+  res.statusCode = 302;
+  res.setHeader('Location', PRESENTATION_URL);
+  res.end();
+});
+
 // Serve static files. HTML/JS/CSS use "no-cache" so browsers always revalidate
 // (via ETag) — this guarantees a redeploy reaches users immediately instead of
 // serving a stale cached bundle.
