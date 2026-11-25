@@ -210,3 +210,19 @@ test('scan-rule update: automatic flags are cleared and recomputed once', () => 
   assert.ok(env.db.getArticlesToScanForPoc(50).some((r) => r.url === url), 'rescanned with the new rules');
   assert.strictEqual(env.db.resetAutoPocScans(detect), 0, 'runs once');
 });
+
+test('retention: old articles are deleted, reviewed / PoC-decided ones are kept', () => {
+  const env = load();
+  const u = makeUser(env.db);
+  const old = new Date(Date.now() - 200 * 86400000).toISOString();
+  const mk = (t) => env.db.insertArticle(art({ title: t, published_date: old })).id;
+  const plain = mk('Old plain story'), reviewed = mk('Old reviewed story'), decided = mk('Old approved PoC story');
+  const fresh = env.db.insertArticle(art({ title: 'Fresh story' })).id;
+  env.db.getDb().prepare("UPDATE articles SET fetched_date = datetime('now', '-200 days') WHERE id IN (?, ?, ?)").run(plain, reviewed, decided);
+  env.db.getDb().prepare('INSERT INTO article_reviews (article_id, user_id) VALUES (?, ?)').run(reviewed, u.id);
+  env.db.setPocDecision('k-decided', { articleId: decided, status: 'approved', userId: u.id, jiraKey: 'SCRUM-1', jiraUrl: 'https://x/browse/SCRUM-1' });
+  assert.strictEqual(env.db.pruneOldArticles(90), 1);
+  const left = env.db.getDb().prepare('SELECT id FROM articles').all().map((r) => r.id);
+  assert.deepStrictEqual(left.sort(), [reviewed, decided, fresh].sort());
+  assert.strictEqual(env.db.pruneOldArticles(3), 0, 'values under 7 days are ignored');
+});

@@ -318,6 +318,21 @@ async function initialize() {
   setTimeout(runVulnIntel, 90 * 1000).unref();
   setInterval(runVulnIntel, 6 * 3600 * 1000).unref();
 
+  // 8a. Retention: articles older than ARTICLE_RETENTION_DAYS (default 90; 0 = keep all)
+  //     are deleted daily, except ones people reviewed/escalated or decided in the PoC tracker.
+  {
+    const days = process.env.ARTICLE_RETENTION_DAYS === undefined ? 90 : parseInt(process.env.ARTICLE_RETENTION_DAYS, 10);
+    if (days > 0) {
+      const prune = () => {
+        try { const n = db.pruneOldArticles(days); if (n) console.log(`[Retention] Deleted ${n} article(s) older than ${days} days`); }
+        catch (e) { console.error('[Retention] Cleanup failed:', e.message); }
+      };
+      setTimeout(prune, 10 * 60 * 1000).unref();
+      setInterval(prune, 24 * 3600 * 1000).unref();
+      console.log(`[Init] Retention: articles older than ${Math.max(7, days)} days are cleaned up daily ✓`);
+    }
+  }
+
   // 8b. PoC page scan: every new article/blog page is read for PoC / tool-release
   //     wording and code links (no GitHub API use), so niche technique research
   //     without a CVE shows up in the admin PoC tracker too.

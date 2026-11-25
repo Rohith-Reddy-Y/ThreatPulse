@@ -1106,6 +1106,28 @@ function resetAutoPocScans(detectWording) {
   return rows.length;
 }
 
+// Keep the database small on the free plan (512 MB RAM, backups load the whole file):
+// drop articles older than `days`, except ones a person worked on (reviewed, escalated,
+// approved/declined in the PoC tracker). Returns the number deleted.
+function pruneOldArticles(days) {
+  const n = parseInt(days, 10);
+  if (!Number.isInteger(n) || n < 7) return 0;
+  const d = getDb();
+  const cutoff = `-${n} days`;
+  let deleted = 0;
+  d.transaction(() => {
+    deleted = d.prepare(`
+      DELETE FROM articles
+       WHERE fetched_date < datetime('now', ?)
+         AND (published_date IS NULL OR published_date < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?))
+         AND id NOT IN (SELECT article_id FROM article_reviews)
+         AND id NOT IN (SELECT article_id FROM poc_decisions WHERE article_id IS NOT NULL)`).run(cutoff, cutoff).changes;
+    d.prepare('DELETE FROM poc_checks WHERE article_id NOT IN (SELECT id FROM articles)').run();
+    d.prepare("DELETE FROM poc_scans WHERE scanned_at < datetime('now', ?)").run(cutoff);
+  })();
+  return deleted;
+}
+
 function getPocTrackerArticle(id) {
   return getDb().prepare(
     `SELECT a.id, a.title, a.url, substr(a.description, 1, 3000) AS description, a.severity, a.category, a.threat_actors,
@@ -1646,6 +1668,7 @@ module.exports = {
   getPocTrackerArticle,
   getArticlesToScanForPoc,
   resetAutoPocScans,
+  pruneOldArticles,
   savePocScan,
   getPocDecisions,
   getPocDecision,

@@ -24,6 +24,8 @@ services:
         generateValue: true          # see it under Environment in the dashboard
       - key: DB_PATH
         value: /tmp/threatpulse.db
+      - key: ARTICLE_RETENTION_DAYS   # delete articles older than this (reviewed / PoC-decided ones are kept); 0 = keep all
+        value: "90"
       - key: FETCH_CRON
         value: "*/15 * * * *"
       # Set these after the first deploy, once you know your URL:
