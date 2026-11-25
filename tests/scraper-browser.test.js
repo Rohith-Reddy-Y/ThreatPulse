@@ -34,6 +34,35 @@ test('scraper: relative and protocol-relative links resolve correctly; category 
   ]);
   assert.deepEqual(res.articles.map(a => a.category), ['vulnerability', 'malware', 'news']);
   assert.equal(res.articles[0].severity, 'critical');
+  assert.equal(res.articles[0].published_date, '2026-11-01T12:00:00.000Z', 'date taken from the /2026/11/ URL');
+});
+
+test('scraper: post date read from the card on an index page (old posts are not "today")', async () => {
+  reset();
+  // fake cheerio with a parent chain: link -> card (with a <time>) -> list
+  const mk = (el, parentEl) => ({
+    attr: (k) => el[k], text: () => el.text, first: () => mk(el, parentEl), length: 1, 0: { tagName: el.tag || 'a' },
+    parent: () => (parentEl ? mk(parentEl, parentEl.parent) : { length: 0 }),
+    find: (sel) => ({ first: () => ({ attr: (k) => (sel === 'time[datetime]' && el.time ? el.time : undefined) }) }),
+  });
+  const list = { tag: 'ul', text: 'x'.repeat(2000) };
+  const cardA = { tag: 'li', text: 'Mac Malware of 2016 — January 2, 2017', parent: list };
+  const cardB = { tag: 'li', text: 'New post', time: '2026-11-20T09:00:00Z', parent: list };
+  const links = [{ href: '/blog/0x16.html', text: 'Mac Malware of 2016', parent: cardA }, { href: '/blog/0x99.html', text: 'A brand new macOS backdoor', parent: cardB }];
+  FAKES.cheerio.load = () => {
+    const $ = (sel) => {
+      if (typeof sel === 'object') return mk(sel, sel.parent);
+      const els = sel === 'h2 a[href]' ? links : [];
+      return { each: (fn) => els.forEach((el, i) => fn(i, el)), attr: () => undefined, text: () => '', first: () => ({ text: () => '' }) };
+    };
+    return $;
+  };
+  state.axiosGet = async () => ({ data: '<html></html>' });
+  const { scrapeSource } = require('../src/feeds/web-scraper');
+  const res = await scrapeSource({ id: 9, name: 'Mac blog', url: 'https://mac.example/blog.html', category: 'research' });
+  const byUrl = Object.fromEntries(res.articles.map((a) => [a.url.split('/').pop(), a.published_date]));
+  assert.equal(byUrl['0x16.html'].slice(0, 10), '2017-01-02');
+  assert.equal(byUrl['0x99.html'], '2026-11-20T09:00:00.000Z');
 });
 
 test('scraper: an explicit non-news source category still wins', async () => {

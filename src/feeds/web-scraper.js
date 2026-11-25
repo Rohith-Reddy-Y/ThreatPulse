@@ -67,6 +67,40 @@ function extractMetadata($, url) {
 /**
  * Try to find article links on a page (for blog/news sites)
  */
+// Publication date of a post on an index page: from the URL (/2024/05/31/) or a
+// <time>/date text inside the post's card. Without one, scraped posts used to be
+// dated "now", so a 2016 post showed up as today's news.
+const MONTHS = 'jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?';
+const DATE_TEXT_RE = new RegExp(`\\b(\\d{4}-\\d{2}-\\d{2})\\b|\\b((?:${MONTHS})\\.? \\d{1,2},? \\d{4})\\b|\\b(\\d{1,2} (?:${MONTHS})\\.?,? \\d{4})\\b`, 'i');
+function validDate(d) {
+  const t = Date.parse(d);
+  if (Number.isNaN(t)) return null;
+  if (t > Date.now() + 2 * 86400000 || t < Date.UTC(1995, 0, 1)) return null;
+  return new Date(t).toISOString();
+}
+function dateFromUrl(href) {
+  const m = /\/((?:19|20)\d{2})[\/-](0?[1-9]|1[0-2])(?:[\/-](0?[1-9]|[12]\d|3[01]))?(?=[\/-])/.exec(String(href).replace(/^https?:\/\/[^/]+/, ''));
+  if (!m) return null;
+  return validDate(`${m[1]}-${m[2].padStart(2, '0')}-${(m[3] || '01').padStart(2, '0')}T12:00:00Z`);
+}
+function dateNear($, el) {
+  try { return dateNearUnsafe($, el); } catch { return null; }
+}
+function dateNearUnsafe($, el) {
+  let node = $(el);
+  for (let i = 0; i < 4 && node.length; i++) {
+    node = node.parent();
+    if (!node.length || /^(body|html|main)$/i.test(node[0].tagName || '')) break;
+    const t = node.find('time[datetime]').first().attr('datetime');
+    if (t && validDate(t)) return validDate(t);
+    const text = node.text().replace(/\s+/g, ' ');
+    if (text.length > 1500) break;                       // reached a container of many posts
+    const m = DATE_TEXT_RE.exec(text);
+    if (m) { const d = validDate(m[1] ? m[1] + 'T12:00:00Z' : `${(m[2] || m[3]).replace(/\./g, '').replace(',', '')} 12:00 UTC`); if (d) return d; }
+  }
+  return null;
+}
+
 function extractArticleLinks($, baseUrl) {
   const links = [];
   const seen = new Set();
@@ -102,7 +136,7 @@ function extractArticleLinks($, baseUrl) {
 
       // Keep every anchor (cleanLinks picks the best title per URL), but cap the work
       seen.add(href);
-      if (links.length < 400) links.push({ url: href, title: $(el).text().trim() || null });
+      if (links.length < 400) links.push({ url: href, title: $(el).text().trim() || null, date: dateFromUrl(href) || dateNear($, el) });
     });
   }
 
@@ -183,11 +217,14 @@ function cleanLinks(links) {
     const text = (l.title || '').replace(/\s+/g, ' ').trim();
     const good = text && text.length >= 12 && !GENERIC_LINK_TEXT.test(text) ? text : '';
     const prev = byUrl.get(l.url);
-    if (!prev) byUrl.set(l.url, { url: l.url, title: good });
-    else if (!prev.title && good) prev.title = good;
+    if (!prev) byUrl.set(l.url, { url: l.url, title: good, date: l.date || null });
+    else {
+      if (!prev.title && good) prev.title = good;
+      if (!prev.date && l.date) prev.date = l.date;
+    }
   }
   return [...byUrl.values()]
-    .map(l => ({ url: l.url, title: l.title || titleFromSlug(l.url) }))
+    .map(l => ({ url: l.url, title: l.title || titleFromSlug(l.url), date: l.date || null }))
     .filter(l => l.title);
 }
 
@@ -215,7 +252,7 @@ async function scrapeSource(source) {
           source_id: source.id,
           user_id: source.user_id || null,
           author: null,
-          published_date: new Date().toISOString(),
+          published_date: link.date || new Date().toISOString(),
           category: articleCategory(source, category),
           severity: detectSeverity(title, '', category),
           cve_id: extractCVE(title),
