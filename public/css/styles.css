@@ -3953,8 +3953,6 @@ body,
 .clock-icon, .source-icon { display: inline-flex; align-items: center; line-height: 0; }
 .clock-icon svg, .source-icon svg { width: 14px; height: 14px; }
 .theme-toggle svg { width: 18px; height: 18px; }
-a.theme-toggle { text-decoration: none; }
-.header-link { margin-right: 8px; }
 .empty-icon { display: flex; justify-content: center; }
 .empty-icon svg { width: 52px; height: 52px; opacity: 0.45; }
 .eye-toggle { display: inline-flex; align-items: center; justify-content: center; }

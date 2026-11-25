@@ -282,7 +282,6 @@ const throwawayUser = () => createUser(`victim_${uniq()}`, PW);
 const ROUTES = {
   // server.js
   'GET /healthz': { policy: 'public', allow: [200] },
-  'GET /presentation': { policy: 'auth', allow: [302] }, // signed-in only; redirects to the deck (no PDF bundled in tests)
   'GET /admin': { policy: 'public', allow: [200] }, // static HTML shell; all data is behind /api/admin/*
   // auth (pre-auth)
   'GET /api/auth/config': { policy: 'public', allow: [200] },
