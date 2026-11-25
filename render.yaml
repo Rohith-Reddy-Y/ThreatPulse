@@ -47,9 +47,12 @@ services:
       # Optional API keys
       - key: NVD_API_KEY
         sync: false
-      - key: GITHUB_TOKEN   # optional: PoC checker (5,000 GitHub API req/h instead of 60)
+      - key: GITHUB_TOKEN   # PoC checker (5,000 GitHub API req/h) and, with BACKUP_GITHUB_REPO, the DB backup
         sync: false
-      # Keep the database across restarts: S3-compatible bucket (Backblaze B2 free tier)
+      # Keep the database across restarts, option 1: a PRIVATE GitHub repo (owner/repo)
+      - key: BACKUP_GITHUB_REPO
+        sync: false
+      # Option 2: S3-compatible bucket (Backblaze B2, Cloudflare R2)
       - key: BACKUP_S3_ENDPOINT   # e.g. https://s3.us-east-005.backblazeb2.com
         sync: false
       - key: BACKUP_S3_BUCKET

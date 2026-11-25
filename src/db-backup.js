@@ -8,10 +8,15 @@
  *   - uploads a new snapshot every BACKUP_INTERVAL_MIN minutes when data changed
  *   - uploads a final snapshot on SIGTERM (Render sends it before stopping)
  *
- * Env: BACKUP_S3_ENDPOINT (e.g. https://s3.us-east-005.backblazeb2.com),
+ * Two places to keep it (no extra packages either way):
+ *  - a PRIVATE GitHub repo (free, no card): the snapshot is a release asset.
+ *      Env: BACKUP_GITHUB_REPO (owner/repo), token from BACKUP_GITHUB_TOKEN or GITHUB_TOKEN
+ *      (fine-grained token, that repo only, Contents: Read and write).
+ *  - any S3-compatible bucket (Backblaze B2, Cloudflare R2, ...), signed with AWS SigV4 here.
+ *      Env: BACKUP_S3_ENDPOINT (e.g. https://s3.us-east-005.backblazeb2.com),
  *      BACKUP_S3_REGION (e.g. us-east-005), BACKUP_S3_BUCKET,
- *      BACKUP_S3_KEY_ID, BACKUP_S3_SECRET, optional BACKUP_S3_PREFIX, BACKUP_INTERVAL_MIN.
- * No extra packages: requests are signed with AWS Signature V4 here.
+ *      BACKUP_S3_KEY_ID, BACKUP_S3_SECRET, optional BACKUP_S3_PREFIX.
+ * Optional: BACKUP_INTERVAL_MIN (default 10).
  */
 const crypto = require('crypto');
 const fs = require('fs');
@@ -33,7 +38,17 @@ function config() {
     intervalMin: Math.max(2, parseInt(process.env.BACKUP_INTERVAL_MIN, 10) || 10),
   };
   if (!c.region) { const m = /s3\.([a-z0-9-]+)\./.exec(c.endpoint); if (m) c.region = m[1]; }
-  c.enabled = !!(/^https:\/\//.test(c.endpoint) && c.bucket && c.keyId && c.secret && c.region);
+  const repo = String(process.env.BACKUP_GITHUB_REPO || '').trim().replace(/^https:\/\/github\.com\//i, '').replace(/\.git$/, '').replace(/\/+$/, '');
+  const ghToken = String(process.env.BACKUP_GITHUB_TOKEN || process.env.GITHUB_TOKEN || '').trim();
+  if (/^[A-Za-z0-9-]{1,39}\/[\w.-]{1,100}$/.test(repo) && ghToken) {
+    c.store = 'github';
+    c.repo = repo;
+    c.ghToken = ghToken;
+    c.enabled = true;
+  } else {
+    c.store = 's3';
+    c.enabled = !!(/^https:\/\//.test(c.endpoint) && c.bucket && c.keyId && c.secret && c.region);
+  }
   return c;
 }
 
@@ -85,20 +100,124 @@ function request(c, method, key, body) {
 
 const objectKey = (c) => `${c.prefix}/threatpulse.sqlite.gz`;
 
+// ── GitHub backend: snapshots are assets of one release in a private repo ──
+const GH_TAG = 'threatpulse-db-backup';
+const GH_ASSET_RE = /^threatpulse-\d{8}T\d{6}Z\.sqlite\.gz$/;
+const KEEP_ASSETS = 3;
+
+// https request with JSON / buffer bodies; follows redirects (dropping auth on another host)
+function ghFetch(c, method, url, { body = null, headers = {}, raw = false, redirects = 3 } = {}) {
+  const u = new URL(url);
+  const sameHost = /(^|\.)github\.com$/i.test(u.hostname);
+  const h = { 'User-Agent': 'ThreatPulse-Backup', 'X-GitHub-Api-Version': '2022-11-28', Accept: 'application/vnd.github+json', ...headers };
+  if (sameHost) h.Authorization = `Bearer ${c.ghToken}`;
+  let payload = null;
+  if (body !== null) {
+    payload = Buffer.isBuffer(body) ? body : Buffer.from(JSON.stringify(body));
+    if (!Buffer.isBuffer(body)) h['Content-Type'] = 'application/json';
+    h['Content-Length'] = String(payload.length);
+  }
+  return new Promise((resolve, reject) => {
+    const req = https.request({ method, hostname: u.hostname, port: u.port || 443, path: u.pathname + u.search, headers: h, timeout: 120000 }, (res) => {
+      if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location && redirects > 0) {
+        res.resume();
+        const next = new URL(res.headers.location, url).href;
+        resolve(ghFetch(c, 'GET', next, { headers: { Accept: headers.Accept || 'application/octet-stream' }, raw, redirects: redirects - 1 }));
+        return;
+      }
+      const chunks = [];
+      res.on('data', (d) => chunks.push(d));
+      res.on('end', () => {
+        const buf = Buffer.concat(chunks);
+        let json = null;
+        if (!raw) { try { json = JSON.parse(buf.toString('utf8') || 'null'); } catch { json = null; } }
+        resolve({ status: res.statusCode, body: buf, json });
+      });
+    });
+    req.on('timeout', () => req.destroy(new Error('backup request timed out')));
+    req.on('error', reject);
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+const ghApi = (c, p) => `https://api.github.com/repos/${c.repo}${p}`;
+const ghErr = (r, what) => {
+  const msg = (r.json && r.json.message) || r.body.toString('utf8').slice(0, 160);
+  if (r.status === 401) return `${what}: GitHub rejected the token (check BACKUP_GITHUB_TOKEN / GITHUB_TOKEN)`;
+  if (r.status === 403 || r.status === 404) return `${what}: no access to the backup repo (the token needs Contents: Read and write on it) [${r.status} ${msg}]`;
+  return `${what}: HTTP ${r.status} ${msg}`;
+};
+
+async function ghRelease(c, create) {
+  const r = await ghFetch(c, 'GET', ghApi(c, `/releases/tags/${GH_TAG}`));
+  if (r.status === 200 && r.json) return r.json;
+  if (r.status !== 404) throw new Error(ghErr(r, 'Read backup release'));
+  const repo = await ghFetch(c, 'GET', ghApi(c, ''));
+  if (repo.status !== 200) throw new Error(ghErr(repo, 'Open repo'));
+  if (repo.json && repo.json.private === false) throw new Error(`${c.repo} is public: use a PRIVATE repo for database backups`);
+  if (!create) return null;
+  const cr = await ghFetch(c, 'POST', ghApi(c, '/releases'), { body: {
+    tag_name: GH_TAG, name: 'ThreatPulse database backup', draft: false, prerelease: true,
+    body: 'Automatic SQLite snapshots from ThreatPulse. Do not delete this release.' } });
+  if (cr.status === 201 && cr.json) return cr.json;
+  if (cr.status === 422) throw new Error('Could not create the backup release: the repo needs at least one commit (create it with "Add a README")');
+  throw new Error(ghErr(cr, 'Create backup release'));
+}
+
+async function getBlob(c) {
+  if (c.store !== 'github') {
+    const r = await request(c, 'GET', objectKey(c));
+    if (r.status === 404) return null;
+    if (r.status !== 200) throw new Error(`HTTP ${r.status} ${r.body.toString('utf8').slice(0, 200)}`);
+    return r.body;
+  }
+  const rel = await ghRelease(c, false);
+  if (!rel) return null;
+  const assets = (rel.assets || []).filter((a) => GH_ASSET_RE.test(a.name)).sort((a, b) => b.name.localeCompare(a.name));
+  for (const a of assets) {                         // newest first; fall back to an older one if a download fails
+    const r = await ghFetch(c, 'GET', ghApi(c, `/releases/assets/${a.id}`), { headers: { Accept: 'application/octet-stream' }, raw: true });
+    if (r.status === 200 && r.body.length) return r.body;
+    console.error(`[Backup] Could not download ${a.name}: HTTP ${r.status}`);
+  }
+  return null;
+}
+
+async function putBlob(c, gz) {
+  if (c.store !== 'github') {
+    const r = await request(c, 'PUT', objectKey(c), gz);
+    if (r.status !== 200) throw new Error(`HTTP ${r.status} ${r.body.toString('utf8').slice(0, 200)}`);
+    return;
+  }
+  const rel = await ghRelease(c, true);
+  const name = `threatpulse-${new Date().toISOString().replace(/[:-]|\.\d{3}/g, '')}.sqlite.gz`;
+  const up = await ghFetch(c, 'POST', `https://uploads.github.com/repos/${c.repo}/releases/${rel.id}/assets?name=${encodeURIComponent(name)}`,
+    { body: gz, headers: { 'Content-Type': 'application/gzip' } });
+  if (up.status !== 201) throw new Error(ghErr(up, 'Upload snapshot'));
+  // keep the newest few snapshots, delete the rest
+  const old = (rel.assets || []).filter((a) => GH_ASSET_RE.test(a.name) && a.name !== name).sort((a, b) => b.name.localeCompare(a.name)).slice(KEEP_ASSETS - 1);
+  for (const a of old) {
+    try { await ghFetch(c, 'DELETE', ghApi(c, `/releases/assets/${a.id}`)); } catch { /* next time */ }
+  }
+}
+
+// Uploads are allowed once we know we won't overwrite a good snapshot with an
+// empty database (i.e. the restore worked, or the store really has no snapshot).
+let safeToUpload = false;
+
 /** Restore the latest snapshot into dbPath (call before the database is opened). */
 async function restore(dbPath) {
   const c = config();
-  if (!c.enabled) { console.log('[Backup] Not configured: database starts empty on every restart (set BACKUP_S3_* to keep data)'); return { restored: false }; }
+  if (!c.enabled) { console.log('[Backup] Not configured: database starts empty on every restart (set BACKUP_GITHUB_REPO or BACKUP_S3_* to keep data)'); return { restored: false }; }
   if (dbPath === ':memory:') return { restored: false };
   try {
-    const r = await request(c, 'GET', objectKey(c));
-    if (r.status === 404) { console.log('[Backup] No snapshot yet: starting a new database'); return { restored: false }; }
-    if (r.status !== 200) { console.error(`[Backup] Restore failed: HTTP ${r.status} ${r.body.toString('utf8').slice(0, 200)}`); return { restored: false, error: r.status }; }
-    const raw = zlib.gunzipSync(r.body);
+    const blob = await getBlob(c);
+    if (!blob) { safeToUpload = true; console.log(`[Backup] No snapshot yet in ${c.store === 'github' ? c.repo : c.bucket}: starting a new database`); return { restored: false }; }
+    const raw = zlib.gunzipSync(blob);
     if (raw.subarray(0, 16).toString('latin1') !== 'SQLite format 3\u0000') throw new Error('snapshot is not an SQLite file');
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
     for (const ext of ['', '-wal', '-shm']) { try { fs.unlinkSync(dbPath + ext); } catch { /* none */ } }
     fs.writeFileSync(dbPath, raw);
+    safeToUpload = true;
     console.log(`[Backup] Restored database snapshot (${(raw.length / 1048576).toFixed(1)} MB) ✓`);
     return { restored: true, bytes: raw.length };
   } catch (e) {
@@ -120,11 +239,20 @@ async function snapshot(db, { force = false } = {}) {
     const d = db.getDb();
     const changes = d.prepare('SELECT total_changes() AS n').get().n;
     if (!force && changes === lastChanges) return { uploaded: false, unchanged: true };
+    if (!safeToUpload) {
+      // The restore failed (network, bad token...). Only upload if the store is really empty.
+      let existing = null;
+      try { existing = await getBlob(c); } catch (e) { return { uploaded: false, error: `store not reachable: ${e.message}` }; }
+      if (existing) {
+        console.error('[Backup] A snapshot exists but was not restored at startup; not overwriting it. Restart the service to restore it.');
+        return { uploaded: false, blocked: true };
+      }
+      safeToUpload = true;
+    }
     try { fs.unlinkSync(tmp); } catch { /* none */ }
     d.exec(`VACUUM INTO '${tmp.replace(/'/g, "''")}'`);              // consistent copy, no lock held for long
     const gz = zlib.gzipSync(fs.readFileSync(tmp), { level: 6 });
-    const r = await request(c, 'PUT', objectKey(c), gz);
-    if (r.status !== 200) throw new Error(`HTTP ${r.status} ${r.body.toString('utf8').slice(0, 200)}`);
+    await putBlob(c, gz);
     lastChanges = changes;
     return { uploaded: true, bytes: gz.length };
   } catch (e) {
@@ -152,8 +280,8 @@ function schedule(db) {
     clearTimeout(t);
     process.exit(0);
   });
-  console.log(`[Backup] Snapshots every ${c.intervalMin} min (when data changed) and on shutdown ✓`);
+  console.log(`[Backup] Snapshots to ${c.store === 'github' ? `GitHub repo ${c.repo}` : `bucket ${c.bucket}`} every ${c.intervalMin} min (when data changed) and on shutdown ✓`);
   return true;
 }
 
-module.exports = { restore, snapshot, schedule, sign, config, _encodeKey: encodeKey };
+module.exports = { restore, snapshot, schedule, sign, config, _encodeKey: encodeKey, _reset() { safeToUpload = false; lastChanges = -1; } };
